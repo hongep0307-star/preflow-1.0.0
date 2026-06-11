@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pre-Flow Viewer</title>
+    <meta name="description" content="Pre-Flow read-only shared viewer" />
+
+    <!-- Pretendard Variable — 한/영 통합. CDN 미접속 환경(완전 오프라인 공유)
+         에서는 자동으로 system-ui 폴백으로 떨어지므로 무방하다. -->
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css"
+    />
+  </head>
+  <body>
+    <div id="viewer-root"></div>
+    <!-- 런타임 데이터 placeholder. electron/htmlExport.ts 의 빌더가
+         export 시점에 이 자리에 실제 데이터 <script> 를 주입한다.
+         placeholder 자체는 dev/preview 시 빈 객체로 동작 — 그리드가
+         "No items" 안내만 보여줘 정상 폴백. -->
+    <script>
+      window.__PREFLOW_VIEWER_DATA__ = window.__PREFLOW_VIEWER_DATA__ || {
+        title: "Pre-Flow Viewer (preview)",
+        generated_at: "",
+        item_count: 0,
+        items: [],
+      };
+    </script>
+    <script type="module" src="/src/viewer/main.tsx"></script>
+  </body>
+</html>

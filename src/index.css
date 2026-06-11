@@ -1,0 +1,453 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* ── 배경 / 전경 ── */
+    --background: 0 0% 4%; /* #0a0a0a */
+    --foreground: 0 0% 94%; /* #f0f0f0 */
+
+    /* ── 카드 ── */
+    --card: 0 0% 8%; /* #141414 */
+    --card-foreground: 0 0% 94%;
+    --popover: 0 0% 8%;
+    --popover-foreground: 0 0% 94%;
+
+    /* ── Primary → KR Red ── */
+    --primary: 2 95% 60%; /* #f9423a */
+    --primary-foreground: 0 0% 100%;
+    --brand: 2 95% 60%;
+
+    /* ── Secondary / Muted ──
+       muted-foreground was #5a5a5a (~3.0:1 on #0a0a0a) which fails WCAG AA
+       for body text. Bumped to ~#777 (~5.0:1) — still calm but legible. */
+    --secondary: 0 0% 11%; /* #1c1c1c */
+    --secondary-foreground: 0 0% 65%;
+    --muted: 0 0% 11%;
+    --muted-foreground: 0 0% 47%; /* #777 */
+
+    /* ── Accent ── */
+    --accent: 0 0% 11%;
+    --accent-foreground: 0 0% 94%;
+
+    /* ── Destructive ── */
+    --destructive: 0 84% 45%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* ── Border / Input / Ring ──
+       --ring 은 키보드 focus-visible 표시 전용. 과거엔 --primary 와 동일한
+       빨강(#f9423a) 이었는데, ESC 로 popover/dropdown 이 닫히면서 trigger
+       버튼에 focus 가 복원될 때마다 강한 빨간 박스가 떠 시각 소음이 컸다.
+       무채색 light gray 로 분리해 차분한 키보드 인디케이터로 유지하면서
+       primary 의 브랜드 의미와 헷갈리지 않게 한다. */
+    --border: 0 0% 100% / 0.07;
+    --border-subtle: 0 0% 100% / 0.08;
+    --input: 0 0% 11%; /* #1c1c1c */
+    --ring: 0 0% 75%;
+
+    /* ── Radius ── */
+    --radius: 0px;
+
+    /* ── Sidebar ── */
+    --sidebar-background: 0 0% 5%;
+    --sidebar-foreground: 0 0% 60%;
+    --sidebar-primary: 2 95% 60%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 0 0% 11%;
+    --sidebar-accent-foreground: 0 0% 94%;
+    --sidebar-border: 0 0% 100% / 0.07;
+    --sidebar-ring: 0 0% 75%;
+
+    /* ── Elevated surface ── */
+    --surface-elevated: 0 0% 11%; /* #1c1c1c */
+    --surface-nav: 0 0% 5%;
+    --surface-sidebar: 0 0% 4%;
+    --surface-panel: 0 0% 7%;
+    --surface-footer: 0 0% 2%;
+
+    /* ── Text secondary ── */
+    --text-secondary: 0 0% 60%; /* #999 */
+    --text-tertiary: 0 0% 35%;
+
+    /* ── Semantic state ── */
+    --success: 160 84% 39%;
+    --warning: 38 92% 50%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    /* Pretendard Variable: 한/영 통합, 가변 폰트로 모든 weight 커버 */
+    font-family:
+      "Pretendard Variable",
+      Pretendard,
+      -apple-system,
+      BlinkMacSystemFont,
+      system-ui,
+      sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-wrap: pretty;
+  }
+
+  /* 스크롤바 — thin dark */
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--foreground) / 0.12);
+    border-radius: 2px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--foreground) / 0.2);
+  }
+
+  /* Focus ring — keyboard-only (mouse clicks don't trigger).
+     얇은 무채색 outline 만 — 과거의 4px primary-red halo (box-shadow) 는
+     ESC 로 popover/dropdown 이 닫히면서 trigger 에 focus 가 복원될 때
+     화면 곳곳에 빨간 박스가 떠 시각 소음이 컸다. halo 제거 + --ring 무채색
+     화로 차분하지만 인식 가능한 키보드 인디케이터로 유지. */
+  *:focus-visible {
+    outline: 1.5px solid hsl(var(--ring));
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  /* Radix interactive items 는 자체 data-highlighted / focus:bg-accent 으로
+     키보드 highlight 가 이미 충분히 보인다. 글로벌 outline 까지 겹치면
+     dropdown 첫 항목 자동 focus / ESC 후 trigger focus 복원 시 두 겹 표시가
+     돼 거슬리므로 outline 면제. bg-accent 만으로 무엇이 키보드 포커스인지
+     명확히 보인다. */
+  [role="menuitem"]:focus-visible,
+  [role="menuitemcheckbox"]:focus-visible,
+  [role="menuitemradio"]:focus-visible,
+  [role="option"]:focus-visible,
+  [data-radix-collection-item]:focus-visible {
+    outline: none;
+  }
+}
+
+@layer components {
+  /* ── 카드 ── */
+  .surface-card {
+    @apply bg-card rounded-lg;
+    border: 1px solid hsl(var(--foreground) / 0.07);
+    transition:
+      border-color 200ms ease,
+      background-color 200ms ease;
+  }
+  .surface-card:hover {
+    border-color: rgba(249, 66, 58, 0.25);
+    background-color: hsl(var(--surface-elevated));
+  }
+
+  /* ── 탭 ── */
+  .tab-item {
+    @apply relative flex items-center gap-2 px-4 py-3 text-sm transition-all duration-150 cursor-pointer;
+    @apply text-muted-foreground hover:text-foreground;
+    border-bottom: 2px solid transparent;
+  }
+  .tab-item.active {
+    @apply text-foreground font-semibold;
+    border-bottom-color: hsl(var(--primary));
+  }
+
+  /* ── Elevated surface ── */
+  .surface-elevated {
+    background: hsl(var(--surface-elevated));
+  }
+
+  .surface-panel {
+    background: hsl(var(--surface-panel));
+    border: 1px solid hsl(var(--border-subtle));
+  }
+
+  .app-topbar {
+    /* 64 → 76 → 81px. 브랜드 로고(마크+PRE-FLOW+서브타이틀 2 줄) 가 들어오면서
+       64px 는 답답해 보였고, 81px 정도면 마크 40px 가 위·아래 약 20px 여백으로
+       균등하게 떨어진다. WindowControls 의 32×32 호버박스는 `items-center`
+       로 부모 중앙에 붙으므로 (위·아래 약 24px 씩) 그대로 Eagle 풍 외관 유지. */
+    @apply h-[81px] border-b flex items-center shrink-0;
+    background: hsl(var(--surface-nav));
+    border-color: hsl(var(--border-subtle));
+    /* OS 타이틀바를 숨겼으므로 이 영역 자체가 윈도우 드래그 핸들이다.
+       (electron/main.ts: titleBarStyle="hidden").
+       ─ □ × 버튼은 React 의 <WindowControls/> 가 직접 그리므로 OS overlay
+       회피용 padding-right 는 더 이상 필요 없다(컴포넌트 자체가 우측에
+       배치돼 자연스럽게 자리 차지). */
+    -webkit-app-region: drag;
+  }
+  /* 드래그 영역 안에서도 인터랙티브 요소는 클릭 가능해야 한다. */
+  .app-topbar a,
+  .app-topbar button,
+  .app-topbar input,
+  .app-topbar textarea,
+  .app-topbar select,
+  .app-topbar [role="button"],
+  .app-topbar [role="tab"],
+  .app-topbar [role="combobox"],
+  .app-topbar [role="menuitem"],
+  .app-topbar [data-no-drag] {
+    -webkit-app-region: no-drag;
+  }
+  /* macOS 는 BrowserWindow `titleBarStyle: "default"` 로 OS 표준 타이틀바가
+     별도 영역에 그려지므로 traffic light 와 BrandLogo 가 겹치지 않는다.
+     과거 `hiddenInset` 시절에 필요했던 `.platform-mac .app-topbar
+     { padding-left: 72px }` 좌측 여백 회피 규칙은 더 이상 필요 없어 제거. */
+
+  /* ── Top-center 토스트 viewport 의 drag region 회피 ─────────────────────
+   *
+   *  .app-topbar 의 세로 정중앙(top-[22px]) 에 떠 있는 navbar-inline 토스트
+   *  는 drag region 위에 시각적으로 겹친다. portal 로 body 직속에 그려져
+   *  `.app-topbar button { no-drag }` 규칙이 적용되지 않으므로, 별도 selector
+   *  로 viewport 와 그 *모든 자식* 을 명시적으로 no-drag 처리한다.
+   *
+   *  ⚠️  -webkit-app-region 은 *상속되지 않는다* (Electron 공식 문서). 따라서
+   *  viewport(<ol>) 에만 inline 으로 박아도 자식 <li>/<button> 은 기본 상태로
+   *  남아 drag region 에 흡수된다. 자식 전부에 적용하려면 universal selector
+   *  로 명시 — 작은 토스트 서브트리(최대 4-5 노드) 라 perf 영향 없음. */
+  [data-position="top-center"],
+  [data-position="top-center"] * {
+    -webkit-app-region: no-drag;
+  }
+
+  /* ContiStudio / 풀스크린 오버레이용 타이틀바 변형.
+     `.app-topbar` 와 동일한 drag/no-drag 규칙. ContiStudio 는
+     `fixed inset-0` 로 화면 끝까지 덮이므로 자체 헤더에 이 클래스를 입혀
+     사용자가 헤더 빈 곳을 잡고 윈도우를 드래그할 수 있게 한다.
+     우측의 ─ □ × 는 React 의 <WindowControls/> 가 직접 그리므로 OS
+     overlay 회피용 padding 은 불필요. */
+  .studio-titlebar {
+    -webkit-app-region: drag;
+  }
+  .studio-titlebar a,
+  .studio-titlebar button,
+  .studio-titlebar input,
+  .studio-titlebar textarea,
+  .studio-titlebar select,
+  .studio-titlebar [role="button"],
+  .studio-titlebar [role="tab"],
+  .studio-titlebar [role="combobox"],
+  .studio-titlebar [role="menuitem"],
+  .studio-titlebar [data-no-drag] {
+    -webkit-app-region: no-drag;
+  }
+  /* macOS 는 OS 표준 타이틀바가 별도 영역에 그려져 traffic light 가 콘텐츠
+     위에 오버레이되지 않는다. 과거 `hiddenInset` 시절의
+     `.platform-mac .studio-titlebar { padding-left: 72px }` 회피 규칙은
+     `.app-topbar` 와 같은 이유로 제거. */
+
+  /* ── 커스텀 윈도우 컨트롤(─ □ ×) ────────────────────────────
+     Windows / Linux 에서만 렌더됨(macOS 는 native traffic light).
+     `.app-topbar` / `.studio-titlebar` 우측 끝에 붙어 다음과 같이 동작:
+       · 컨테이너(.window-controls)  = 가로 138px, 세로 부모 전체(드래그 비활성)
+       · 각 버튼(.window-ctrl)       = 가로 46px, 세로 부모 전체
+       · 호버 박스(.window-ctrl-box) = 32×38 직각 사각형, 부모 중앙 정렬
+     네비바 높이가 81px 일 때 38px 박스 위·아래로 약 21.5px 여유가 균등하게
+     떨어져 Eagle 풍 외관이 나옴. 닫기 버튼만 호버 시 Windows 관행대로
+     #E81123 으로 변함. */
+  .window-controls {
+    @apply flex items-stretch h-full shrink-0;
+    /* 좌 10px : 우측 nav 메타 영역(Settings 등) 과 시각적으로 구분되도록
+       명시적 패딩 추가. 너무 멀어지지 않게 10px 만.
+       우 14px : X 호버박스가 윈도우 우측 모서리에 너무 붙어 답답해 보이지
+       않도록 여유. 6 → 14px 로 확대. */
+    padding-left: 10px;
+    padding-right: 14px;
+    -webkit-app-region: no-drag;
+  }
+  .window-ctrl {
+    @apply flex items-center justify-center;
+    /* 폭 36px = 호버박스(32px) + 좌우 2px 여백씩. 인접 박스 사이 간격은
+       4px 가 되어 Eagle 풍의 컴팩트한 클러스터가 나옴. */
+    width: 36px;
+    height: 100%;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    color: hsl(var(--muted-foreground));
+    -webkit-app-region: no-drag;
+  }
+  .window-ctrl-box {
+    @apply flex items-center justify-center;
+    /* 32×38 직각 사각형. 호버시 모서리 라운드 없음(VSCode/Eagle 류 룩).
+       세로를 가로보다 길게 잡아 네비바 높이를 더 잘 채우는 느낌. */
+    width: 32px;
+    height: 38px;
+    border-radius: 0;
+    background-color: transparent;
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+  .window-ctrl:hover .window-ctrl-box {
+    background-color: hsl(var(--foreground) / 0.08);
+    color: hsl(var(--foreground));
+  }
+  .window-ctrl:active .window-ctrl-box {
+    background-color: hsl(var(--foreground) / 0.04);
+  }
+  .window-ctrl-close:hover .window-ctrl-box {
+    background-color: #e81123;
+    color: #ffffff;
+  }
+  .window-ctrl-close:active .window-ctrl-box {
+    background-color: #c10f1f;
+    color: #ffffff;
+  }
+  /* focus-visible 도 hover 와 동일한 모양으로 — 키보드 사용자에게도
+     박스 위치/크기를 명확히 알린다. */
+  .window-ctrl:focus-visible {
+    outline: none;
+  }
+  .window-ctrl:focus-visible .window-ctrl-box {
+    background-color: hsl(var(--foreground) / 0.08);
+    color: hsl(var(--foreground));
+  }
+  .window-ctrl-close:focus-visible .window-ctrl-box {
+    background-color: #e81123;
+    color: #ffffff;
+  }
+
+  .app-footer {
+    @apply h-7 border-t flex items-center shrink-0;
+    background: hsl(var(--surface-footer));
+    border-color: hsl(var(--border-subtle));
+  }
+
+  .meta-pill {
+    @apply inline-flex h-[26px] items-center border px-2.5 font-mono text-2xs font-medium tracking-wide transition-colors duration-100 rounded-none select-none;
+    border-color: hsl(var(--border-subtle));
+    background: hsl(var(--surface-panel) / 0.7);
+    color: hsl(var(--muted-foreground));
+  }
+  .meta-pill:hover {
+    border-color: hsl(var(--primary) / 0.3);
+    color: hsl(var(--foreground));
+  }
+  .meta-pill-active {
+    border-color: hsl(var(--primary) / 0.4);
+    background: hsl(var(--primary) / 0.1);
+    color: hsl(var(--primary));
+  }
+
+  /* ── 메타데이터 라벨 ── */
+  /* Space Grotesk 제거 → Pretendard Variable 통일 */
+  .label-meta {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    color: hsl(var(--muted-foreground));
+  }
+
+  /* ── 기술값 모노스페이스 ── */
+  /* 버전 번호, 타임스탬프, 해상도(16:9) 등 기술적 수치에만 사용.
+     폴백 체인은 tailwind.config.ts 의 fontFamily.mono 와 의도적으로 동일 —
+     Consolas 를 generic monospace 앞에 둬 Windows 환경에서 Courier New 로
+     떨어지는 사고를 막는다. */
+  .mono {
+    font-family:
+      "SF Mono",
+      "Cascadia Mono",
+      "Cascadia Code",
+      "Consolas",
+      "Liberation Mono",
+      monospace;
+    font-size: 11px;
+    letter-spacing: 0.02em;
+  }
+
+  /* ── 로딩 스켈레톤 시머 애니메이션 ── */
+  @keyframes shimmer {
+    0% {
+      background-position: -200% 0;
+    }
+    100% {
+      background-position: 200% 0;
+    }
+  }
+  .skeleton-shimmer {
+    background: linear-gradient(90deg, hsl(var(--muted)) 25%, hsl(0 0% 16%) 50%, hsl(var(--muted)) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.8s ease-in-out infinite;
+  }
+
+  /* ── 페이드 인 애니메이션 ── */
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease-out forwards;
+  }
+
+  /* ── 이미지 로딩 트랜지션 ── */
+  .img-lazy {
+    opacity: 0;
+    transition: opacity 0.3s ease-in;
+  }
+  .img-lazy.loaded {
+    opacity: 1;
+  }
+
+  /* ── 구분선 ── */
+  .divider {
+    border-top: 1px solid hsl(var(--foreground) / 0.06);
+  }
+}
+
+/* ── 오로라 배경 키프레임 ── */
+@keyframes auroraTop {
+  0%,
+  100% {
+    transform: translateY(0) scaleX(1);
+  }
+  50% {
+    transform: translateY(3%) scaleX(1.03);
+  }
+}
+
+@keyframes auroraBottom {
+  0%,
+  100% {
+    transform: translateY(0) scaleX(1);
+  }
+  50% {
+    transform: translateY(-3%) scaleX(1.04);
+  }
+}
+
+@keyframes auroraMid {
+  0%,
+  100% {
+    transform: translateY(0) scaleX(1);
+    opacity: 1;
+  }
+  50% {
+    transform: translateY(-2%) scaleX(1.06);
+    opacity: 0.7;
+  }
+}
+
+@keyframes shimmerSweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}

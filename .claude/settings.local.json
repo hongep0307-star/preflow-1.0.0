@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(Get-Content *)",
+      "Bash(npx tsc *)",
+      "PowerShell(npx tsc --noEmit 2>&1 | Select-Object -First 120)",
+      "PowerShell(if \\(Test-Path tsc-log.txt\\) { Get-Content tsc-log.txt | Select-Object -First 200 } else { \"no log file\" }; Write-Output \"size:\"; \\(Get-Item tsc-log.txt -ErrorAction SilentlyContinue\\).Length)",
+      "PowerShell($ErrorActionPreference = 'Continue'; & node node_modules\\\\typescript\\\\bin\\\\tsc --noEmit; \"EXITCODE=$LASTEXITCODE\")",
+      "PowerShell(Out-File *)",
+      "PowerShell(Get-Process *)",
+      "PowerShell(Remove-Item *)",
+      "PowerShell(npm run *)",
+      "Bash(npm run *)",
+      "Bash(grep -n \"#[0-9a-fA-F]\\\\{3,6\\\\}\" src/components/library/LibraryCanvas.tsx)",
+      "Bash(Get-ChildItem -Path C:\\\\Users\\\\307ep\\\\preflow-app-beta-2.0.0\\\\src -Recurse -Include *.tsx)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(sed -i 's|rgba\\(255,255,255,\\\\\\([0-9.]*\\\\\\)\\)|hsl\\(var\\(--foreground\\) / \\\\1\\)|g' src/components/conti/RelightModal.tsx)",
+      "Bash(sed -i 's|rgba\\(255, 255, 255, \\\\\\([0-9.]*\\\\\\)\\)|hsl\\(var\\(--foreground\\) / \\\\1\\)|g' src/components/conti/RelightModal.tsx)",
+      "Bash(sed -i 's|rgba\\(249,66,58,\\\\\\([0-9.]*\\\\\\)\\)|hsl\\(var\\(--primary\\) / \\\\1\\)|g' src/components/conti/RelightModal.tsx)",
+      "Bash(sed -i 's|rgba\\(249, 66, 58, \\\\\\([0-9.]*\\\\\\)\\)|hsl\\(var\\(--primary\\) / \\\\1\\)|g' src/components/conti/RelightModal.tsx)",
+      "Bash(sed -i 's|rgba\\(255,255,255,\\\\\\([0-9.]*\\\\\\)\\)|hsl\\(var\\(--foreground\\) / \\\\1\\)|g' src/components/conti/ChangeAngleModal.tsx)",
+      "Bash(sed -i 's|rgba\\(255, 255, 255, \\\\\\([0-9.]*\\\\\\)\\)|hsl\\(var\\(--foreground\\) / \\\\1\\)|g' src/components/conti/ChangeAngleModal.tsx)",
+      "Bash(sed -i 's|rgba\\(249,66,58,\\\\\\([0-9.]*\\\\\\)\\)|hsl\\(var\\(--primary\\) / \\\\1\\)|g' src/components/conti/ChangeAngleModal.tsx)",
+      "Bash(sed -i 's|rgba\\(249, 66, 58, \\\\\\([0-9.]*\\\\\\)\\)|hsl\\(var\\(--primary\\) / \\\\1\\)|g' src/components/conti/ChangeAngleModal.tsx)",
+      "Bash(sed -i 's|rgba\\(255,255,255,\\\\\\([0-9.]*\\\\\\)\\)|hsl\\(var\\(--foreground\\) / \\\\1\\)|g' src/components/conti/CameraVariationsModal.tsx)",
+      "Bash(sed -i 's|rgba\\(255, 255, 255, \\\\\\([0-9.]*\\\\\\)\\)|hsl\\(var\\(--foreground\\) / \\\\1\\)|g' src/components/conti/CameraVariationsModal.tsx)",
+      "Bash(sed -i 's|rgba\\(249,66,58,\\\\\\([0-9.]*\\\\\\)\\)|hsl\\(var\\(--primary\\) / \\\\1\\)|g' src/components/conti/CameraVariationsModal.tsx)",
+      "Bash(sed -i 's|rgba\\(249, 66, 58, \\\\\\([0-9.]*\\\\\\)\\)|hsl\\(var\\(--primary\\) / \\\\1\\)|g' src/components/conti/CameraVariationsModal.tsx)",
+      "Bash(sed -i 's|background: \"#0a0a0a\"|background: \"hsl\\(var\\(--background\\)\\)\"|g' src/components/conti/CameraVariationsModal.tsx)",
+      "Bash(sed -i 's|color: \"#fff\"|color: \"hsl\\(var\\(--primary-foreground\\)\\)\"|g' src/components/conti/CameraVariationsModal.tsx)",
+      "Bash(sed -i 's|color: \"#fca5a5\"|color: \"hsl\\(var\\(--primary\\) / 0.9\\)\"|g' src/components/conti/CameraVariationsModal.tsx)",
+      "Bash(sed -i 's|background: \"#0e0e0e\"|background: \"hsl\\(var\\(--background\\)\\)\"|g' src/components/conti/CameraVariationsModal.tsx)",
+      "Bash(sed -i 's|background: \"#0c0c0c\"|background: \"hsl\\(var\\(--background\\)\\)\"|g' src/components/conti/CameraVariationsModal.tsx)",
+      "Bash(sed -i 's|\"#fff\"|\"hsl\\(var\\(--primary-foreground\\)\\)\"|g' src/components/conti/CameraVariationsModal.tsx)",
+      "Bash(sed -i 's|\"#fca5a5\"|\"hsl\\(var\\(--primary\\) / 0.9\\)\"|g' src/components/conti/CameraVariationsModal.tsx)",
+      "Bash(find *)"
+    ]
+  }
+}

@@ -1,0 +1,63 @@
+---
+description: lucide-react 아이콘 일관성 규칙 (액션↔아이콘 표준 매핑)
+globs: src/**/*.tsx
+alwaysApply: false
+---
+
+# 아이콘 일관성 (lucide-react)
+
+같은 의미에는 항상 같은 아이콘을 쓴다. 새 아이콘을 추가하기 전에 아래 표준 매핑을 먼저 확인한다.
+
+## 표준 액션 ↔ 아이콘
+
+| 의미 | 사용 아이콘 | 쓰지 말 것 |
+|------|------------|-----------|
+| 삭제 / 휴지통 | `Trash2` | — |
+| 복원 / 되돌리기 / 리셋 | `RotateCcw` | `Trash2`, `RefreshCw` |
+| 재생성 / 새로고침 / 재시도 | `RefreshCw` | `RotateCcw` |
+| AI 생성 | `Sparkles` | `Wand2`, `Network` |
+| AI enhance / 자동수정 | `Wand2` | `Sparkles` |
+| 모델 선택 | `Cpu` | `Wand2` |
+| Highlight(키비주얼) 마크 | `Star` 또는 `Flame` | `Sparkles` |
+| 자료/프로젝트 즐겨찾기 | `Star`(외곽선) | — |
+| 별점(rating) | `Star`(채움) | — |
+| 상단 고정 / Quick Access | `Pin` | `Star` |
+| 앱 설정 | `Settings` | — |
+| 항목 편집(폴더·이름) | `Pencil` / `Edit2` | `Settings` |
+| 내보내기 / 다운로드 | `Download` | `Package` |
+| 소품(item) 에셋 타입 | `Package` | — |
+| 파일 업로드 / 첨부 | `Upload` / `FolderOpen` | `HardDrive` |
+| 저장 용량 표시 | `HardDrive` | — |
+| 외부 브라우저 열기 | `ExternalLink` | — |
+| 채팅/콘티로 전송 | `Send` | `ExternalLink`, `SendHorizonal` |
+| 닫기 / 제거 | `X` | `XIcon`(alias) |
+| 실패 상태 | `XCircle` | `X` |
+| 이미지 없음 | `ImageOff` | `Image` |
+| 마감일 / 날짜 | `Calendar` | `CalendarIcon`(alias) |
+| 로딩 | `Loader2` | — |
+
+## 금지 패턴
+
+```tsx
+// ❌ 톱니를 폴더/항목 편집에 사용
+<Settings onClick={editFolder} />
+// ✅
+<Pencil onClick={editFolder} />
+
+// ❌ 휴지통으로 '복원'을 표현
+<Trash2 title="원본 복원" onClick={restore} />
+// ✅
+<RotateCcw title="원본 복원" onClick={restore} />
+
+// ❌ 채팅 전송에 외부 링크 아이콘
+<ExternalLink onClick={sendToChat} />
+// ✅
+<Send onClick={sendToChat} />
+```
+
+## 신규 아이콘 체크리스트
+
+- [ ] 위 표준 매핑에 이미 정의된 의미인가? → 있으면 그 아이콘 사용
+- [ ] 동일 의미를 다른 alias(`X`/`XIcon`, `Calendar`/`CalendarIcon`)로 import하지 않았는가?
+- [ ] import한 아이콘을 실제 JSX에서 렌더하는가? (미사용 import 금지)
+- [ ] 한 아이콘이 한 화면에서 두 가지 의미로 쓰이지 않는가?

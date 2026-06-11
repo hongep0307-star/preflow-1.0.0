@@ -1,0 +1,8 @@
+{
+  "name": "preflow-drag-out",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Windows OLE drag-out native addon for Pre-Flow. Bypasses Electron's webContents.startDrag to avoid the image-content cursor mode forced for PNG/JPG/WEBP file extensions.",
+  "main": "index.js",
+  "gypfile": true
+}

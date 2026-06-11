@@ -52,6 +52,14 @@ export interface CameraPreset {
   phrase: string;
   /** Surfaced as a chip-group filter in the UI. */
   recommended?: boolean;
+  /**
+   * Novel-view difficulty tier (6-C).
+   *   "stable"       — distance presets + gentle angle changes (default).
+   *   "experimental" — back / overhead / worm's-eye / dutch etc. — large
+   *                    viewpoint moves that can drift from the source.
+   * Absent is treated as "stable".
+   */
+  reliability?: "stable" | "experimental";
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -150,6 +158,7 @@ export const CAMERA_PRESETS: CameraPreset[] = [
     shortDesc: "Bird's-eye flat-lay",
     phrase:
       "an OVERHEAD TOP-DOWN SHOT. Camera directly above the subject, lens pointed straight down. Bird's-eye view. Subject and surrounding elements laid out as a flat composition.",
+    reliability: "experimental",
   },
   {
     id: "worms_eye",
@@ -158,6 +167,7 @@ export const CAMERA_PRESETS: CameraPreset[] = [
     shortDesc: "Ground-up, extreme low",
     phrase:
       "a WORM'S-EYE VIEW. Camera placed at ground level looking almost straight up. The subject looms enormous overhead, sky or ceiling dominates the top of the frame.",
+    reliability: "experimental",
   },
   {
     id: "birds_eye",
@@ -166,6 +176,7 @@ export const CAMERA_PRESETS: CameraPreset[] = [
     shortDesc: "High aerial survey",
     phrase:
       "a BIRD'S-EYE VIEW. Camera high in the air looking down at a steep angle. The subject is visible within a wide swath of surrounding environment, map-like perspective.",
+    reliability: "experimental",
   },
   {
     id: "dutch",
@@ -174,6 +185,7 @@ export const CAMERA_PRESETS: CameraPreset[] = [
     shortDesc: "Canted horizon, uneasy",
     phrase:
       "a DUTCH ANGLE / CANTED SHOT. Camera rolled 15–25° so the horizon line is noticeably tilted. Dynamic off-kilter tension while the subject stays centered.",
+    reliability: "experimental",
   },
 
   // ── Creative ─────────────────────────────────────────────
@@ -193,6 +205,7 @@ export const CAMERA_PRESETS: CameraPreset[] = [
     shortDesc: "Through the subject's eyes",
     phrase:
       "a FIRST-PERSON POINT-OF-VIEW SHOT. Camera placed exactly where the subject's eyes are — we see what they see, hands or arms may enter the bottom of the frame, no face of the subject is visible.",
+    reliability: "experimental",
   },
   {
     id: "two_shot",
@@ -217,6 +230,7 @@ export const CAMERA_PRESETS: CameraPreset[] = [
     shortDesc: "Facing away from camera",
     phrase:
       "a BACK VIEW. Camera directly behind the subject, framing them from behind as they face into the scene. The audience sees what the subject is walking toward.",
+    reliability: "experimental",
   },
   {
     id: "wide_low_hero",
@@ -233,6 +247,7 @@ export const CAMERA_PRESETS: CameraPreset[] = [
     shortDesc: "Close-up with canted horizon",
     phrase:
       "a CLOSE-UP with a DUTCH TILT. Face fills the frame, but the whole image is rotated 15–20° so the eye line cuts across the frame diagonally. Intimate and unsettled.",
+    reliability: "experimental",
   },
   {
     id: "silhouette",
@@ -249,6 +264,7 @@ export const CAMERA_PRESETS: CameraPreset[] = [
     shortDesc: "Seen via reflective surface",
     phrase:
       "a REFLECTION SHOT. The subject is seen via a mirror, puddle, glass, or other reflective surface somewhere in the scene. The reflection is the primary image, the 'real' subject may be partly visible at frame edge.",
+    reliability: "experimental",
   },
 ];
 
@@ -319,11 +335,14 @@ export const contactSheetPresets = (): CameraPreset[] =>
  * the Presets, Contact Sheet, and Advanced paths all speak NB2 the
  * same way.
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-const PRESERVE_BULLETS = [
+/* Bullets that hold for ALL camera moves. The background/location bullet is
+ * pulled OUT of this list because at large yaw (>90°) "keep the background
+ * layout" physically contradicts "the camera moved to the other side" — the
+ * model then compromises by rotating only the subject. See BG_BULLET_* below. */
+const PRESERVE_BULLETS_COMMON = [
   "• Every character — identical face, hair, skin tone, body proportions, age, expression",
   "• All clothing and accessories — identical designs, colors, fabrics, patterns, wear",
   "• All props, vehicles, and objects — same models, colors, surface details",
-  "• The environment, architecture, set dressing, terrain, and background layout",
   "• Time of day, weather, overall lighting direction and color palette",
   "• Art style, rendering technique, line quality, grain, and painterly feel",
   // Image models trained with horizontal-flip augmentation routinely
@@ -336,15 +355,47 @@ const PRESERVE_BULLETS = [
   // examples and the model occasionally invented a person to satisfy
   // them.
   "• LEFT/RIGHT orientation — do NOT mirror or horizontally flip the image. Whatever feature sits on the LEFT side of the subject in the reference must stay on the LEFT side in the new shot, and the same for the RIGHT side. (Examples: for a person, a watch on the right wrist stays on the right wrist; hair parted on the right stays parted on the right. For an object, any asymmetric detail — a side rail, a logo, a bullet ejection port — keeps the same side as in the reference.) Re-photographing from a new camera angle never swaps which side of the subject a feature is on.",
-].join("\n");
+];
 
-const preserveBlock = (subject: string): string => {
+/** yaw ≤ 90°: 기존과 동일 — 배경 레이아웃 자체를 보존. */
+const BG_BULLET_PRESERVE =
+  "• The environment, architecture, set dressing, terrain, and background layout";
+
+/** yaw > 90°: 같은 장소이되 새 시점에선 보이는 배경이 반드시 바뀌어야 함을 명시. */
+const BG_BULLET_ORBIT =
+  "• The LOCATION — the same physical place, same architecture, same materials, " +
+  "same set dressing style. HOWEVER: because the camera has moved to the other " +
+  "side of the subject, the VISIBLE BACKDROP MUST CHANGE. The area that was " +
+  "BEHIND the original camera is now visible behind the subject. Do NOT keep " +
+  "the original backdrop pixels behind the subject — that would mean the camera " +
+  "did not actually move. Render a plausible continuation of the same location " +
+  "as seen from the new camera position.";
+
+export interface PreserveOptions {
+  /** 카메라 yaw 절대값(도). 90 초과 시 배경 불릿을 "일관 변경" 지시로 교체. */
+  yawAbs?: number;
+}
+
+const preserveBlock = (subject: string, opts?: PreserveOptions): string => {
   const subjectLine = subject
     ? `Reference subject: ${subject}.\n\n`
     : "";
+  const yawAbs = Math.abs(opts?.yawAbs ?? 0);
+  const isOrbit = yawAbs > 90;
+  const bgBullet = isOrbit ? BG_BULLET_ORBIT : BG_BULLET_PRESERVE;
+  // 배경 불릿을 props(index 2) 다음, time-of-day(index 3) 앞에 끼워 기존 순서 유지.
+  const bullets = [
+    ...PRESERVE_BULLETS_COMMON.slice(0, 3),
+    bgBullet,
+    ...PRESERVE_BULLETS_COMMON.slice(3),
+  ].join("\n");
+  // 큰 오빗에선 마지막 invent-guard 불릿을 "새로 보이는 영역 채우기는 필수" 로 강화.
+  const newlyVisibleBullet = isOrbit
+    ? "• Newly visible regions (the backdrop behind the subject from this new angle) must be filled with a plausible continuation of the SAME location — same architecture, materials, lighting, and style as the reference — never with new characters, new props, or new story content. Filling these regions IS required; leaving the original backdrop unchanged is an error."
+    : "• If a region of the scene becomes newly visible because of the camera move, fill it with a plausible continuation of what is already shown in the reference (same materials, lighting, style) — never with new characters or new story content.";
   return (
     `${subjectLine}STRICTLY PRESERVE (must match the reference image):\n` +
-    PRESERVE_BULLETS +
+    bullets +
     "\n\nThe world depicted in the reference image is unchanged — only the camera viewpoint has moved. " +
     "Think of a second camera on the same set, shooting the same moment from a new angle.\n\n" +
     "DO NOT INVENT CONTENT THAT IS NOT IN THE REFERENCE:\n" +
@@ -352,7 +403,7 @@ const preserveBlock = (subject: string): string => {
     "• If the reference contains exactly N figures, the new shot must contain exactly N figures (same identities, same outfits, same poses adjusted only for the new viewpoint).\n" +
     "• Do not add new props, weapons, vehicles, furniture, signage, text, screens, particle effects, weather, or background elements that are not visible in the reference.\n" +
     "• Do not add new staging, blocking, action beats, or storytelling moments. The same instant in time is being re-photographed — nothing has happened between the reference and the new shot.\n" +
-    "• If a region of the scene becomes newly visible because of the camera move, fill it with a plausible continuation of what is already shown in the reference (same materials, lighting, style) — never with new characters or new story content."
+    newlyVisibleBullet
   );
 };
 
@@ -407,6 +458,8 @@ export interface AdvancedChainInput {
   angleClause?: string | null;
   emotion?: EmotionChip | null;
   extraNotes?: string;
+  /** 카메라 yaw 절대값(도). ChangeAngleModal 이 cfg.yaw 절대값을 전달 (4-B). */
+  yawAbs?: number;
 }
 export function buildAdvancedChainPrompt({
   subject,
@@ -414,6 +467,7 @@ export function buildAdvancedChainPrompt({
   angleClause,
   emotion,
   extraNotes,
+  yawAbs,
 }: AdvancedChainInput): string {
   const d = (distanceClause ?? "").trim();
   const a = (angleClause ?? "").trim();
@@ -446,7 +500,7 @@ export function buildAdvancedChainPrompt({
     chain +
     moodTail +
     "\n\n" +
-    preserveBlock(subject) +
+    preserveBlock(subject, { yawAbs }) +
     notesTail
   );
 }

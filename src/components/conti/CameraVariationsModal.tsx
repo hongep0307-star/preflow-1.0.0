@@ -806,6 +806,25 @@ function PresetsSetup({
               <div style={{ color: "hsl(var(--foreground) / 0.55)", fontSize: 10.5, lineHeight: 1.35 }}>
                 {p.shortDesc}
               </div>
+              {p.reliability === "experimental" && (
+                <span
+                  title={t("cameraVar.experimentalHint")}
+                  style={{
+                    alignSelf: "flex-start",
+                    marginTop: 2,
+                    fontSize: 9,
+                    fontWeight: 600,
+                    letterSpacing: 0.3,
+                    padding: "1px 6px",
+                    borderRadius: 999,
+                    color: "hsl(38 92% 60%)",
+                    background: "hsl(38 92% 50% / 0.12)",
+                    border: "1px solid hsl(38 92% 50% / 0.3)",
+                  }}
+                >
+                  {t("cameraVar.experimental")}
+                </span>
+              )}
               <div
                 style={{
                   marginTop: 2,

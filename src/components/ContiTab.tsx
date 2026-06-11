@@ -19,6 +19,8 @@ import { generateTransitionFrame } from "@/lib/transitions";
 import { DEFAULT_TRANSITION_KEY, TRANSITION_MAP, normalizeTransitionKey } from "@/lib/transitionGrammar";
 import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
+import { scrollToScene } from "@/lib/scrollToScene";
+import { friendlyGenerationError } from "@/lib/friendlyError";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { computeRelativeTime } from "@/lib/dashboardCardHelpers";
 
@@ -3713,16 +3715,24 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
       console.log("[ChangeAngle] success:", { usedModel: d?.usedModel });
       await applyGeneratedSceneImage(req.sceneId, newUrl, req.sourceImageUrl);
       clearPendingContiSingleJob(projectId, job.id);
-      toast({ title: t("conti.toast.changeAngleOk", { n: String(req.sceneNumber).padStart(2, "0") }) });
+      toast({
+        title: t("conti.toast.changeAngleOk", { n: String(req.sceneNumber).padStart(2, "0") }),
+        action: (
+          <ToastAction altText={t("conti.toast.viewScene")} onClick={() => scrollToScene(req.sceneId, req.sceneNumber)}>
+            {t("conti.toast.viewScene")}
+          </ToastAction>
+        ),
+      });
     } catch (err: any) {
       // Phase 1.8: catch 에서도 pending job 을 비워야 한다. 누락 시 실패한 작업이
       // persisted store 에 남아 다음 마운트에서 resumeSingleJob 이 또 동일 호출을
       // 발사 → 사용자가 무한 12 분 로딩에 갇히는 버그가 발생.
       clearPendingContiSingleJob(projectId, job.id);
       console.error("[ChangeAngle] failed:", err);
+      const fk = friendlyGenerationError(err);
       toast({
         title: t("conti.toast.changeAngleFailed", { n: String(req.sceneNumber).padStart(2, "0") }),
-        description: err?.message ?? String(err),
+        description: fk ? t(fk) : (err?.message ?? String(err)),
         variant: "destructive",
       });
     } finally {
@@ -3789,14 +3799,22 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
       if (!newUrl) throw new Error("Relight returned no image URL");
       await applyGeneratedSceneImage(req.sceneId, newUrl, req.sourceImageUrl);
       clearPendingContiSingleJob(projectId, job.id);
-      toast({ title: t("conti.toast.relit", { n: String(req.sceneNumber).padStart(2, "0") }) });
+      toast({
+        title: t("conti.toast.relit", { n: String(req.sceneNumber).padStart(2, "0") }),
+        action: (
+          <ToastAction altText={t("conti.toast.viewScene")} onClick={() => scrollToScene(req.sceneId, req.sceneNumber)}>
+            {t("conti.toast.viewScene")}
+          </ToastAction>
+        ),
+      });
     } catch (err: any) {
       // Phase 1.8: 실패 시에도 pending job 제거 — 무한 resume 방지.
       clearPendingContiSingleJob(projectId, job.id);
       console.error("[Relight] failed:", err);
+      const fk = friendlyGenerationError(err);
       toast({
         title: t("conti.toast.relightFailed", { n: String(req.sceneNumber).padStart(2, "0") }),
-        description: err?.message ?? String(err),
+        description: fk ? t(fk) : (err?.message ?? String(err)),
         variant: "destructive",
       });
     } finally {
@@ -6748,10 +6766,16 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
             //                   we persist to storage via the save_local
             //                   path on the openai-image endpoint.
             if (req.mode === "preserve") {
+              // 6-B: ChangeAngle 에서 검증된 고정밀 라우트(gpt-image-1.5 +
+              // input_fidelity:high)를 프리셋 단일 생성에 재사용한다. NB2 는
+              // novel-view 일관성이 약해 프리셋 결과가 원본에서 드리프트했다.
+              // contact_sheet 는 그리드 레이아웃 능력 때문에 NB2 유지 (아래).
               const { data, error } = await supabase.functions.invoke("openai-image", {
                 body: {
                   mode: "inpaint",
-                  useNanoBanana: true,
+                  useNanoBanana: false,
+                  gptModel: "gpt-image-1.5",
+                  inputFidelity: "high",
                   sourceImageUrl: req.sourceImageUrl,
                   referenceImageUrls: [],
                   prompt: req.prompt,
@@ -6761,7 +6785,8 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
                 },
               });
               if (error) throw error;
-              const d = data as { publicUrl?: string; url?: string } | null;
+              const d = data as { publicUrl?: string; url?: string; error?: string } | null;
+              if (d?.error) throw new Error(d.error);
               const newUrl = d?.publicUrl ?? d?.url ?? null;
               if (!newUrl) throw new Error("Preserve-source variation returned no image URL");
               return newUrl;
@@ -6810,7 +6835,14 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
             const target = cameraVariationsScene;
             if (!target) return;
             await applyGeneratedSceneImage(target.id, newUrl, previousUrl);
-            toast({ title: t("conti.toast.cameraAngleUpdated", { n: String(target.scene_number).padStart(2, "0") }) });
+            toast({
+              title: t("conti.toast.cameraAngleUpdated", { n: String(target.scene_number).padStart(2, "0") }),
+              action: (
+                <ToastAction altText={t("conti.toast.viewScene")} onClick={() => scrollToScene(target.id, target.scene_number)}>
+                  {t("conti.toast.viewScene")}
+                </ToastAction>
+              ),
+            });
           }}
         />
       )}

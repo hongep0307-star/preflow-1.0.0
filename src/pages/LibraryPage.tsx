@@ -4365,11 +4365,15 @@ const LibraryPage = () => {
      실제로 성공했는지 (중복 잡이면 false). */
   const enqueueClassifyForItem = useCallback((item: ReferenceItem, opts: { silent?: boolean } = {}): boolean => {
     const { silent = false } = opts;
+    /* 토스트 문구와 실제 동작이 절대 어긋나지 않도록 autoApplyTags 를 상수로
+       끌어올린다. true 면 분류 직후 추천 태그가 자동 등록되므로 완료 토스트도
+       "자동 등록됨" 문구를 써야 한다 (이전엔 "검토 후 적용" 으로 거짓 안내됨). */
+    const AUTO_APPLY_TAGS = true;
     const ok = enqueueClassify(item, {
       language: effectiveAiLanguageRef.current,
       /* AI 분석 후 추천 태그를 항상 자동 등록한다. 큐 워커가 분류 직후
          acceptReferenceAiSuggestions 로 suggested_tags 를 item.tags 에 병합. */
-      autoApplyTags: true,
+      autoApplyTags: AUTO_APPLY_TAGS,
       tagLanguage: effectiveAiTagLanguageRef.current,
       onStage: (stage) => {
         setItemClassifyProgress((prev) => {
@@ -4403,7 +4407,11 @@ const LibraryPage = () => {
             loadReferences();
           }
         } else if (result) {
-          toast({ title: t("library.toast.aiClassifyReady"), description: t("library.toast.aiClassifyReadyDesc") });
+          toast(
+            AUTO_APPLY_TAGS
+              ? { title: t("library.toast.aiClassifyDoneAutoTagged"), description: t("library.toast.aiClassifyDoneAutoTaggedDesc") }
+              : { title: t("library.toast.aiClassifyReady"), description: t("library.toast.aiClassifyReadyDesc") },
+          );
         }
       },
     });

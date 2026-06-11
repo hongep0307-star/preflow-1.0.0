@@ -1246,20 +1246,17 @@ export const SidePanel = ({
       fn: onChangeAngle,
       danger: false,
     });
-  // Camera Variations — still gated on novel-view quality. NB2 alone isn't
-  // production-grade at that job; keep the menu entry visible (so operators
-  // know the capability is planned) but block invocation until we wire a
-  // dedicated novel-view model (Qwen-Image-Edit Multi-Angle etc.). Pinned
-  // to the bottom since it's currently disabled.
-  if (hasImage)
+  // Camera Variations — now enabled. The Presets path routes preserve-mode
+  // renders through the GPT-image-1.5 high-fidelity route (see ContiTab
+  // generate dispatcher) and the Contact Sheet path keeps NB2's strong
+  // grid-layout ability. Same gating pattern as Change Angle above.
+  if (hasImage && onCameraVariations)
     variantsChildren.push({
       kind: "leaf",
       icon: <Images className="w-3.5 h-3.5" />,
       label: t("conti.cameraVariations"),
-      fn: () => {},
+      fn: onCameraVariations,
       danger: false,
-      disabled: true,
-      hint: t("conti.unavailable"),
     });
   // "Use as Style" 은 콘티 이미지 호버시 나오는 스타일 퀵 아이콘으로
   // 이미 노출되므로 Variants 서브메뉴에서는 중복 제거. 시그니처의

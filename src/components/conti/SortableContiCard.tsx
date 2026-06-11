@@ -1294,6 +1294,7 @@ export const SortableContiCard = memo(
           {...attributes}
           {...listeners}
           id={`conti-scene-${scene.scene_number}`}
+          data-scene-id={scene.id}
           className={`overflow-visible cursor-grab active:cursor-grabbing h-full ${isRow ? "" : "flex flex-col"}`}
           style={{
             ...dndStyle,

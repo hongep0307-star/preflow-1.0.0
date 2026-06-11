@@ -74,6 +74,8 @@ interface RelightConfig {
   colorLabel: string | null;
   /** 프롬프트에 이어붙일 추가 설명 (optional) */
   customText: string;
+  /** 씬 내 실광원(네온/창문/램프) 처리 방식 (5-B). replace=교체, augment=추가. */
+  lightMode: "replace" | "augment";
 }
 
 interface ColorSwatch {
@@ -91,8 +93,24 @@ interface QuickPreset {
 }
 
 /* ━━━ Constants ━━━ */
-const RELIGHT_PROMPT_PREFIX =
-  "Re-light the input image while strictly preserving identity, geometry, composition, camera angle, framing, pose, clothing silhouette and background layout. Do NOT redraw content, do NOT change the subject, do NOT change props. Only change lighting, color temperature, shadows and highlights as follows: ";
+/** lightMode="replace": 기존 광원을 새 설정으로 완전 대체. */
+const RELIGHT_PREFIX_REPLACE =
+  "Re-light the input image while strictly preserving identity, geometry, composition, " +
+  "camera angle, framing, pose, clothing silhouette and background layout. " +
+  "REPLACE the existing lighting entirely: disregard the original light sources' " +
+  "direction and color, and re-render shadows, highlights, and color temperature " +
+  "according to the new setup below. Do NOT redraw content, do NOT change the subject, " +
+  "do NOT change props. New lighting setup: ";
+
+/** lightMode="augment": 씬의 실광원은 유지하고 키 라이트만 추가. */
+const RELIGHT_PREFIX_AUGMENT =
+  "Re-light the input image while strictly preserving identity, geometry, composition, " +
+  "camera angle, framing, pose, clothing silhouette and background layout. " +
+  "KEEP every practical light source visible in the scene (windows, lamps, neon signs, " +
+  "screens) exactly as it is — same position, same color, same glow. ADD the following " +
+  "key light ON TOP of the existing lighting, blending its shadows and highlights " +
+  "naturally with what is already there. Do NOT redraw content, do NOT change the " +
+  "subject, do NOT change props. Added key light: ";
 
 const COLOR_SWATCHES: ColorSwatch[] = [
   {
@@ -178,6 +196,7 @@ const DEFAULT_CONFIG: RelightConfig = {
   colorHex: COLOR_SWATCHES[3].hex, // Golden Hour
   colorLabel: COLOR_SWATCHES[3].descriptor,
   customText: "",
+  lightMode: "replace",
 };
 
 /* ━━━ Helpers ━━━ */
@@ -258,17 +277,26 @@ const describeElevation = (e: number): string => {
   return "from a low angle below the subject (uplight)";
 };
 
+/**
+ * azimuth → 광원 방향 서술 + 기준 고정 (5-A).
+ * 기준: 모두 "카메라(시청자) 기준 프레임 좌/우" — UI 폴라 패드의 3시=오른쪽과 일치.
+ * bearing: 카메라 정면 = 0°, 시계방향. 숫자 anchor 를 함께 박아 좌우 flip 저항성을
+ * 높인다 (cameraLibrary 의 yaw bearing 기법과 동일 근거).
+ */
 const describeAzimuth = (az: number): string => {
   const a = ((az % 360) + 360) % 360;
-  if (a < 15 || a >= 345) return "from the front (camera side)";
-  if (a < 60) return "from front-right";
-  if (a < 105) return "from the right side";
-  if (a < 150) return "from back-right, creating a rim on the right side";
-  if (a < 195) return "from directly behind the subject (backlit, silhouetting rim light)";
-  if (a < 240) return "from back-left, creating a rim on the left side";
-  if (a < 285) return "from the left side";
-  if (a < 330) return "from front-left";
-  return "from the front";
+  const anchor =
+    `(light bearing ${Math.round(a)}° — 0° is the camera position, ` +
+    `measured clockwise as seen from above; "right" means the VIEWER'S right / ` +
+    `frame-right, not the subject's anatomical right)`;
+  if (a < 15 || a >= 345) return `from the front, the camera side ${anchor}`;
+  if (a < 60) return `from front-right of frame ${anchor}`;
+  if (a < 105) return `from frame-right ${anchor}`;
+  if (a < 150) return `from back-right, creating a rim on the frame-right side of the subject ${anchor}`;
+  if (a < 195) return `from directly behind the subject (backlit, silhouetting rim light) ${anchor}`;
+  if (a < 240) return `from back-left, creating a rim on the frame-left side of the subject ${anchor}`;
+  if (a < 285) return `from frame-left ${anchor}`;
+  return `from front-left of frame ${anchor}`;
 };
 
 const describeIntensity = (i: number): string => {
@@ -304,7 +332,8 @@ const buildRelightPrompt = (cfg: RelightConfig): string => {
   parts.push(`${describeSoftness(cfg.softness)}.`);
   parts.push(`${describeAmbient(cfg.ambient)}.`);
   if (cfg.customText.trim()) parts.push(cfg.customText.trim());
-  return RELIGHT_PROMPT_PREFIX + parts.join(" ");
+  const prefix = cfg.lightMode === "augment" ? RELIGHT_PREFIX_AUGMENT : RELIGHT_PREFIX_REPLACE;
+  return prefix + parts.join(" ");
 };
 
 /* ━━━ Quick presets — 컨트롤 값 전체를 한 번에 세팅 ━━━ */
@@ -893,10 +922,45 @@ export function RelightModal({ scene, projectId, videoFormat, onClose, onSubmit 
 
           {/* Body */}
           <div style={{ padding: "4px 20px 6px", overflow: "auto", flex: 1 }}>
+            {/* Light-source handling mode (5-B) */}
+            <Section label={t("relight.lightSource")} first help={t("relight.lightSourceHelp")}>
+              <div style={{ display: "flex", gap: 6 }}>
+                {(["replace", "augment"] as const).map((mode) => {
+                  const active = cfg.lightMode === mode;
+                  return (
+                    <button
+                      key={mode}
+                      onClick={() => setCfg((p) => ({ ...p, lightMode: mode }))}
+                      disabled={applying}
+                      title={mode === "replace" ? t("relight.modeReplaceHint") : t("relight.modeAugmentHint")}
+                      style={{
+                        flex: 1,
+                        padding: "8px 10px",
+                        borderRadius: 8,
+                        cursor: applying ? "default" : "pointer",
+                        fontSize: 12,
+                        fontWeight: 600,
+                        textAlign: "center",
+                        border: active
+                          ? "1px solid hsl(var(--primary) / 0.8)"
+                          : "1px solid hsl(var(--foreground) / 0.12)",
+                        background: active ? "hsl(var(--primary) / 0.14)" : "transparent",
+                        color: active ? "hsl(var(--foreground) / 0.95)" : "hsl(var(--foreground) / 0.6)",
+                      }}
+                    >
+                      {mode === "replace" ? t("relight.modeReplace") : t("relight.modeAugment")}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ marginTop: 6, fontSize: 11, color: "hsl(var(--foreground) / 0.5)", lineHeight: 1.45 }}>
+                {cfg.lightMode === "replace" ? t("relight.modeReplaceHint") : t("relight.modeAugmentHint")}
+              </div>
+            </Section>
+
             {/* Direction + sliders */}
             <Section
               label={t("variant.direction")}
-              first
               help={t("variant.directionHelp")}
               meta={
                 <span>

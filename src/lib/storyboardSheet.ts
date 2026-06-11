@@ -13,6 +13,7 @@
 
 import { supabase } from "./supabase";
 import { pickCharacterRefUrl } from "./characterSheetStore";
+import type { CharacterRefMode } from "@/components/assets/types";
 import { dataUrlToBase64 } from "./contactSheet";
 import { sanitizeImagePrompt, isGameWeaponContext } from "./conti";
 import type { BriefAnalysis } from "./conti";
@@ -48,7 +49,7 @@ export interface StoryboardSheetAsset {
   space_description?: string | null;
   character_sheet_url?: string | null;
   character_board_url?: string | null;
-  character_ref_mode?: string | null;
+  character_ref_mode?: CharacterRefMode | null;
   use_character_sheet?: boolean | number | null;
 }
 

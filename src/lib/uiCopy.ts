@@ -27,6 +27,12 @@ export const UI_COPY: Record<string, Record<UiLanguage, string>> = {
   "error.inLabel": { en: " in {label}", ko: " ({label})" },
   "error.unknown": { en: "Unknown error", ko: "알 수 없는 오류" },
   "error.retry": { en: "Retry", ko: "다시 시도" },
+  // Friendly generation-error layer (friendlyError.ts → friendlyGenerationError).
+  "error.contentPolicy": { en: "The request was blocked by the image model's content policy. Try rewording the prompt.", ko: "이미지 모델의 콘텐츠 정책에 의해 차단되었습니다. 프롬프트 표현을 바꿔보세요." },
+  "error.rateLimit": { en: "Too many requests. Wait a moment and try again.", ko: "요청이 많아 잠시 제한되었습니다. 잠시 후 다시 시도하세요." },
+  "error.timeout": { en: "The model took too long to respond. Try again.", ko: "모델 응답이 지연되었습니다. 다시 시도해 주세요." },
+  "error.network": { en: "Network error. Check your connection.", ko: "네트워크 오류입니다. 연결 상태를 확인하세요." },
+  "error.modelTier": { en: "This option isn't available on the current API tier.", ko: "현재 API 등급에서 사용할 수 없는 옵션입니다." },
   "error.label.brief tab": { en: "brief tab", ko: "Brief 탭" },
   "error.label.agent tab": { en: "agent tab", ko: "Ideation 탭" },
   "error.label.assets tab": { en: "assets tab", ko: "Assets 탭" },
@@ -3370,6 +3376,7 @@ export const UI_COPY: Record<string, Record<UiLanguage, string>> = {
   "conti.toast.changeAngleOk": { en: "Shot #{n} re-angled.", ko: "컷 #{n} 앵글이 변경되었습니다." },
   "conti.toast.changeAngleFailed": { en: "Shot #{n} change angle failed", ko: "컷 #{n} 앵글 변경 실패" },
   "conti.toast.relit": { en: "Shot #{n} relit.", ko: "컷 #{n} 조명이 변경되었습니다." },
+  "conti.toast.viewScene": { en: "View", ko: "보기" },
   "conti.toast.relightFailed": { en: "Shot #{n} relight failed", ko: "컷 #{n} 조명 변경 실패" },
   "conti.toast.imageUploaded": { en: "Shot #{n} image uploaded.", ko: "컷 #{n} 이미지가 업로드되었습니다." },
   "conti.toast.transitionNeedsAdjacentImages": { en: "Adjacent shots need images first", ko: "양쪽 컷에 먼저 이미지가 필요합니다" },
@@ -3551,6 +3558,9 @@ export const UI_COPY: Record<string, Record<UiLanguage, string>> = {
   "library.toast.searchByImageFailed": { en: "Image search failed. Please try again.", ko: "이미지 검색에 실패했습니다. 잠시 후 다시 시도하세요." },
   "library.toast.aiClassifyReady": { en: "AI classification ready", ko: "AI 분류 준비됨" },
   "library.toast.aiClassifyReadyDesc": { en: "Review the suggestions before applying them.", ko: "제안을 검토한 후 적용하세요." },
+  "library.toast.aiClassifyDoneAutoTagged": { en: "AI analysis complete", ko: "AI 분석 완료" },
+  "library.toast.aiClassifyDoneAutoTaggedDesc": { en: "Suggested tags were added automatically. You can edit them in the inspector.", ko: "추천 태그가 자동으로 등록되었습니다. 인스펙터에서 수정할 수 있습니다." },
+  "library.toast.viewItem": { en: "View", ko: "보기" },
   "library.toast.aiClassifyFailed": { en: "AI classify failed", ko: "AI 분류 실패" },
   "library.toast.aiClassifyQueued": { en: "AI classification queued", ko: "AI 분류 큐에 추가됨" },
   "library.toast.aiClassifyQueuedDesc": { en: "{n} items queued. They will process in the background.", ko: "{n}개 자료가 백그라운드 큐에서 처리됩니다." },
@@ -3867,6 +3877,16 @@ export const UI_COPY: Record<string, Record<UiLanguage, string>> = {
   "cameraVar.allDoneInSelection": { en: "All {n} selected already generated — Reroll in Results to refresh", ko: "선택된 {n}개가 모두 이미 생성됨 — 결과에서 ‘다시 굴리기’로 새로 고침" },
   "cameraVar.willGenerate": { en: "{n} new variation{s} will be generated", ko: "새 변형 {n}개 생성 예정" },
   "cameraVar.alreadyDone": { en: "{n} already done", ko: "이미 {n}개 완료" },
+  "cameraVar.experimental": { en: "Experimental", ko: "실험적" },
+  "cameraVar.experimentalHint": { en: "Large viewpoint moves can drift from the source. Re-roll if needed.", ko: "큰 시점 이동은 원본에서 벗어날 수 있습니다. 필요하면 재생성하세요." },
+
+  // ── Relight light-source handling mode (RelightModal 5-B) ──
+  "relight.lightSource": { en: "Light sources", ko: "광원 처리" },
+  "relight.lightSourceHelp": { en: "Choose whether to replace the scene's existing lighting or keep it and add a new key light.", ko: "씬의 기존 조명을 교체할지, 유지하고 키 라이트를 추가할지 선택합니다." },
+  "relight.modeReplace": { en: "Replace lighting", ko: "조명 교체" },
+  "relight.modeAugment": { en: "Add key light", ko: "키 라이트 추가" },
+  "relight.modeReplaceHint": { en: "Existing light sources are overridden by the new setup.", ko: "기존 광원을 새 조명 설정으로 대체합니다." },
+  "relight.modeAugmentHint": { en: "Practical lights in the scene (windows, lamps, neon) stay; the new key light is added on top.", ko: "씬 안의 실광원(창문, 램프, 네온)은 유지하고 키 라이트만 추가합니다." },
 
   // ── Agent panels ──
   "agent.strategy": { en: "STRATEGY", ko: "전략" },

@@ -307,6 +307,9 @@ const buildChangeAnglePrompt = (
     distanceClause,
     angleClause,
     extraNotes: cfg.customText,
+    // 4-B: yaw > 90° 일 때 preserveBlock 이 배경을 "새 시점에 맞게 변경" 으로
+    // 전환하도록 yaw 절대값을 전달. 후면 전환 시 배경 불변 버그의 핵심 수정.
+    yawAbs: Math.abs(cfg.yaw),
   });
 };
 

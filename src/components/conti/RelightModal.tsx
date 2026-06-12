@@ -936,7 +936,7 @@ export function RelightModal({ scene, projectId, videoFormat, onClose, onSubmit 
                       style={{
                         flex: 1,
                         padding: "8px 10px",
-                        borderRadius: 8,
+                        borderRadius: 0,
                         cursor: applying ? "default" : "pointer",
                         fontSize: 12,
                         fontWeight: 600,

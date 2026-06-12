@@ -24,6 +24,7 @@ import { buildAgentAttachmentForRef } from "@/lib/agentAttach";
 import { appendAgentChatImages, CHAT_IMAGE_MAX, type ChatImage } from "@/components/agent/agentTypes";
 import { referenceToRefItem } from "@/lib/referenceLibrary";
 import { makeCompareLibraryEntry, appendCompareLibraryEntries } from "@/lib/compareLibraryStore";
+import { BRIEF_MATCH_ROOT, isBriefMatchPath } from "@/lib/briefMatch";
 
 export type LibraryImportTarget = "brief" | "conti" | "agent";
 
@@ -94,6 +95,11 @@ export function LibraryImportDialog({ open, onOpenChange, target, projectId, onO
   // 서버는 `folder:` 태그가 *직접* 달린 경로만 반환하므로, 중간(부모) 경로를
   // 보강해 완전한 트리를 만든 뒤 깊이별 들여쓰기로 렌더한다. (라이브러리 폴더
   // 트리와 동일한 중첩 표현.)
+  //
+  // 브리프 매치 특례: "브리프 매치" 상위 폴더 자체는 트리에서 제외하고, 그 하위
+  // 폴더(각 브리프 매치 결과)는 한 단계 끌어올려 *최상위처럼* 보이게 한다 — 사용자가
+  // 브리프 매치 하위에 묶여 있다고 느끼지 않도록. 또 브리프 매치 폴더는 폴더 아이콘을
+  // 빨간색(text-primary)으로 구분한다.
   const folderTree = useMemo(() => {
     const all = new Set<string>();
     for (const f of folders) {
@@ -109,10 +115,16 @@ export function LibraryImportDialog({ open, onOpenChange, target, projectId, onO
       }
       return as.length - bs.length;
     };
-    return [...all].sort(comparePaths).map((p) => {
-      const segs = p.split("/");
-      return { path: p, name: segs[segs.length - 1] || p, depth: segs.length - 1 };
-    });
+    return [...all]
+      .filter((p) => p !== BRIEF_MATCH_ROOT) // 브리프 매치 상위 폴더는 트리에서 제외
+      .sort(comparePaths)
+      .map((p) => {
+        const segs = p.split("/");
+        const briefMatch = isBriefMatchPath(p);
+        // 브리프 매치 하위는 상위(숨김)를 한 칸 빼서 최상위처럼 보이게 한다.
+        const depth = Math.max(0, briefMatch ? segs.length - 2 : segs.length - 1);
+        return { path: p, name: segs[segs.length - 1] || p, depth, briefMatch };
+      });
   }, [folders]);
 
   const toggleSelect = (id: string) => {
@@ -270,7 +282,7 @@ export function LibraryImportDialog({ open, onOpenChange, target, projectId, onO
                     style={{ borderRadius: 0, paddingLeft: 8 + node.depth * 14 }}
                     title={node.path}
                   >
-                    <Folder className="h-3.5 w-3.5 shrink-0" />
+                    <Folder className={cn("h-3.5 w-3.5 shrink-0", node.briefMatch && "text-primary")} />
                     <span className="truncate">{node.name}</span>
                   </button>
                 ))}
@@ -289,7 +301,7 @@ export function LibraryImportDialog({ open, onOpenChange, target, projectId, onO
                 ) : (
                   /* 비율 보존 컬럼 메이슨리 — width/height 로 aspect-ratio 를 미리
                      잡아 로딩 시프트 없이 라이브러리처럼 원본 비율을 살린다. */
-                  <div style={{ columnCount: 4, columnGap: 8, columnFill: "balance" }}>
+                  <div style={{ columnCount: 4, columnGap: 12, columnFill: "balance" }}>
                     {visible.map((r) => {
                       const selected = selectedIds.has(r.id);
                       const src = r.thumbnail_url || r.file_url || "";
@@ -301,7 +313,7 @@ export function LibraryImportDialog({ open, onOpenChange, target, projectId, onO
                           type="button"
                           onClick={() => toggleSelect(r.id)}
                           className={cn(
-                            "group relative mb-2 block w-full overflow-hidden border bg-muted/30 transition [break-inside:avoid]",
+                            "group relative mb-3 block w-full overflow-hidden border bg-muted/30 transition [break-inside:avoid]",
                             selected ? "border-primary shadow-[0_0_0_1px_hsl(var(--primary))]" : "border-border-subtle hover:border-primary/40",
                           )}
                           style={{ borderRadius: 0, aspectRatio: ratio }}
@@ -318,11 +330,10 @@ export function LibraryImportDialog({ open, onOpenChange, target, projectId, onO
                           ) : (
                             <div className="flex aspect-square w-full items-center justify-center text-2xs text-muted-foreground">{r.kind}</div>
                           )}
+                          {/* 종류 배지 — LibraryCanvas 의 좌상단 타입 라벨과 동일한
+                              디자인(bg-secondary, h-5, text-micro)으로 통일. */}
                           {isMotion && (
-                            <span
-                              className="absolute left-0 top-0 text-nano font-semibold uppercase leading-none text-white"
-                              style={{ background: "#f9423a", padding: "2px 3px", letterSpacing: "0.04em" }}
-                            >
+                            <span className="pointer-events-none absolute left-1 top-1 z-10 flex h-5 items-center justify-center bg-secondary px-1.5 text-micro font-medium uppercase text-secondary-foreground">
                               {r.kind}
                             </span>
                           )}

@@ -683,7 +683,7 @@ async function handleOpenaiImageInner(body: any) {
         return { error: "GPT edits 폴백에 imageBase64 가 필요합니다", usedModel: "inpaint-failed" };
       }
       if (!openaiKey) throw new Error("OPENAI_API_KEY가 설정되지 않았습니다.");
-      imageBytes = await callGptInpaint(openaiKey, imageBase64, maskBase64 ?? null, prompt, size, referenceImageUrls, gptModel);
+      imageBytes = await callGptInpaint(openaiKey, imageBase64, maskBase64 ?? null, prompt, size, referenceImageUrls, gptModel, quality);
       suffix = hasMask ? `inpaint-gpt-masked-fallback:${gptModel}` : `inpaint-gpt-fallback:${gptModel}`;
     }
   } else if (model === "gpt") {
@@ -1071,9 +1071,10 @@ async function callGptInpaint(
   size: string,
   refUrls: string[] = [],
   model: string = DEFAULT_GPT_IMAGE_MODEL,
+  quality: string = "high",
 ): Promise<Buffer> {
   const formData = new FormData();
-  formData.append("model", model); formData.append("prompt", prompt); formData.append("n", "1"); formData.append("size", size); formData.append("quality", "high"); formData.append("output_format", "png");
+  formData.append("model", model); formData.append("prompt", prompt); formData.append("n", "1"); formData.append("size", size); formData.append("quality", quality); formData.append("output_format", "png");
   if (SUPPORTS_INPUT_FIDELITY(model)) formData.append("input_fidelity", "high");
   formData.append("image[]", new Blob([Buffer.from(imageB64, "base64")], { type: "image/png" }), "image.png");
   for (let i = 0; i < Math.min(refUrls.length, 3); i++) { try { const refBuf = await downloadImage(refUrls[i]); formData.append("image[]", new Blob([refBuf], { type: "image/png" }), `ref-${i}.png`); } catch {} }

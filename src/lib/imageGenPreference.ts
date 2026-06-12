@@ -16,7 +16,7 @@
  * 비활성화한다(modelIsGpt 로 판정).
  */
 
-export type ImageGenFeature = "conti" | "style" | "angle" | "sketch" | "mood" | "sheet" | "storyboardSheet" | "variation" | "canvas";
+export type ImageGenFeature = "conti" | "style" | "angle" | "sketch" | "mood" | "sheet" | "storyboardSheet" | "variation" | "canvas" | "inpaint" | "cameraVariation";
 export type GptQuality = "low" | "medium" | "high";
 
 export const GPT_QUALITIES: GptQuality[] = ["low", "medium", "high"];
@@ -82,6 +82,34 @@ export const IMAGE_GEN_FEATURES: ImageGenFeatureSpec[] = [
       { id: "gpt-image-2", isGpt: true },
     ],
     defaultModel: "gpt-image-1.5",
+    defaultQuality: "high",
+  },
+  {
+    // 인페인트 — "auto" 는 ContiStudio 에서 마스크 유무로 분기한다(마스크 있으면
+    // gpt-image-1.5 native mask + input_fidelity, 없으면 NB2 instruction 편집).
+    // auto 를 isGpt:true 로 둬서 품질 드롭다운이 살아 있게 한다(GPT 로 풀릴 때 적용,
+    // NB2 로 풀리면 무시).
+    feature: "inpaint",
+    labelKey: "settings.imgGen.inpaint",
+    descKey: "settings.imgGen.inpaintDesc",
+    models: [
+      { id: "auto", isGpt: true },
+      { id: "gpt-image-1.5", isGpt: true },
+      { id: "gpt-image-2", isGpt: true },
+      { id: "nano-banana-2", isGpt: false },
+    ],
+    defaultModel: "auto",
+    defaultQuality: "high",
+  },
+  {
+    // 카메라 베리에이션 — 스토리보드 시트와 동일하게 파이프라인이 모델 고정이다
+    // (GPT Image 2 로 9분할 그리드 생성 → Nano Banana 2 리파인). 따라서 모델은
+    // 단일 옵션으로 노출하고 조절 가능한 것은 GPT 생성 품질뿐이다.
+    feature: "cameraVariation",
+    labelKey: "settings.imgGen.cameraVariation",
+    descKey: "settings.imgGen.cameraVariationDesc",
+    models: [{ id: "gpt-image-2", isGpt: true }],
+    defaultModel: "gpt-image-2",
     defaultQuality: "high",
   },
   {
@@ -158,6 +186,7 @@ export const IMAGE_GEN_FEATURES: ImageGenFeatureSpec[] = [
 
 /** 모델 id → 사람이 읽는 라벨(브랜드명). i18n 불필요한 고유명사. */
 export const IMAGE_GEN_MODEL_LABELS: Record<string, string> = {
+  "auto": "Auto (mask-based)",
   "gpt": "GPT Image 2",
   "gpt-image-2": "GPT Image 2",
   "gpt-image-1.5": "GPT Image 1.5",

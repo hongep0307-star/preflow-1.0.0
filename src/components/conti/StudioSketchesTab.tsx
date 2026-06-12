@@ -18,7 +18,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Sparkles, Loader2, Check, Heart, Trash2, Gauge, Cpu, ChevronDown } from "lucide-react";
+import { Sparkles, Loader2, Check, Heart, Trash2, Gauge, Cpu, ChevronDown, Layers } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
 import { deleteStoredFileIfUnreferenced } from "@/lib/storageUtils";
@@ -31,6 +31,7 @@ import {
   SKETCH_QUALITY_PRESET_DEFAULT,
   generateSceneSketches,
   generateTransitionSketches,
+  generateImageVariationSketches,
   makeSketchFromUrl,
   type SketchModel,
   type SketchQualityPreset,
@@ -196,6 +197,24 @@ export function StudioSketchesTab({
     return () => document.removeEventListener("mousedown", fn);
   }, [modelMenuOpen]);
 
+  // 생성 소스 피커 — 모델/품질 피커와 동일한 클릭→드롭다운 패턴으로 통일.
+  const getSourceLabel = (s: "scene" | "image") =>
+    s === "image" ? t("studio.sketchSourceImage") : t("studio.sketchSourceScene");
+  const getSourceDesc = (s: "scene" | "image") =>
+    s === "image" ? t("studio.sketchSourceImageDesc") : t("studio.sketchSourceSceneDesc");
+  const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
+  const sourceMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!sourceMenuOpen) return;
+    const fn = (e: MouseEvent) => {
+      if (sourceMenuRef.current && !sourceMenuRef.current.contains(e.target as Node)) {
+        setSourceMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", fn);
+    return () => document.removeEventListener("mousedown", fn);
+  }, [sourceMenuOpen]);
+
   // Per-project persisted quality preset (speed vs fidelity). Only the GPT
   // models honour it (NB2 ignores quality/input_fidelity), so the toolbar
   // control is hidden when NB2 is selected.
@@ -256,6 +275,38 @@ export function StudioSketchesTab({
   // persisted across mounts — most users want to see everything when
   // returning to a scene; opting back in is one click away.
   const [showLikedOnly, setShowLikedOnly] = useState(false);
+
+  // ── 생성 소스 모드 ──
+  //
+  // "scene"  : 기존 동작 — 씬 설명 + 에셋 태그로 새 구도를 생성(컷 이미지 무시).
+  // "image"  : 등록된 컷 이미지(conti_image_url)를 원본으로 다각도화하되, 씬 설명과
+  //            태그된 에셋 사진을 참조로 함께 넘겨 정체성(배경/의상/소품)을 유지한다.
+  //
+  // 선택은 **컷별로** localStorage 에 저장한다 — 생성/창 닫기/씬 이동 후 다시 와도
+  // 마지막에 고른 모드가 유지되도록(기본 "scene"). 컷 이미지가 없거나 전환 씬이면
+  // "image" 모드는 쓸 수 없으므로 effectiveSource 로 한 번 더 걸러 잘못된 호출을
+  // 막는다(토글 UI 에서도 비활성 처리).
+  const sourceKey = (sid: string) => `ff_sketch_source_${projectId}_${sid}`;
+  const readSketchSource = (sid: string): "scene" | "image" => {
+    try {
+      const raw = typeof window !== "undefined" ? window.localStorage.getItem(sourceKey(sid)) : null;
+      if (raw === "scene" || raw === "image") return raw;
+    } catch { /* ignore */ }
+    return "scene";
+  };
+  const [sketchSource, setSketchSourceState] = useState<"scene" | "image">(() => readSketchSource(scene.id));
+  const setSketchSource = (val: "scene" | "image") => {
+    setSketchSourceState(val);
+    try { window.localStorage.setItem(sourceKey(scene.id), val); } catch { /* ignore */ }
+  };
+  // 씬을 전환하면(같은 컴포넌트 재사용) 그 컷에 저장된 선택을 다시 불러온다.
+  useEffect(() => {
+    setSketchSourceState(readSketchSource(scene.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scene.id, projectId]);
+  const imageModeAvailable = !!scene.conti_image_url && !scene.is_transition;
+  const effectiveSource: "scene" | "image" =
+    sketchSource === "image" && imageModeAvailable ? "image" : "scene";
 
   // ── Sketches state ──
   //
@@ -396,7 +447,8 @@ export function StudioSketchesTab({
   };
 
   const hasPhotoAssets = useMemo(() => assets.some((a) => a.photo_url), [assets]);
-  const needsAsset = SKETCH_MODEL_USES_ASSET_REFS[model];
+  // 이미지 베리에이션 모드는 원본 컷 이미지만 쓰므로 에셋 사진이 필요 없다.
+  const needsAsset = effectiveSource !== "image" && SKETCH_MODEL_USES_ASSET_REFS[model];
   const assetBlocked = needsAsset && !hasPhotoAssets;
 
   const handleGenerate = async () => {
@@ -485,6 +537,34 @@ export function StudioSketchesTab({
               videoFormat,
               count,
               model: genModel,
+            },
+            onArrive,
+          );
+        } else if (effectiveSource === "image") {
+          // 이미지 베리에이션 — 등록된 컷 이미지를 원본으로 다각도화.
+          // imageModeAvailable 가 conti_image_url non-null 을 보장한다.
+          await generateImageVariationSketches(
+            {
+              projectId,
+              sceneNumber: scene.scene_number,
+              sourceImageUrl: scene.conti_image_url!,
+              scene: {
+                scene_number: scene.scene_number,
+                title: scene.title,
+                description: scene.description,
+                camera_angle: scene.camera_angle,
+                location: scene.location,
+                mood: scene.mood,
+                tagged_assets: scene.tagged_assets,
+                is_highlight: scene.is_highlight,
+                highlight_kind: scene.highlight_kind,
+                highlight_reason: scene.highlight_reason,
+              },
+              assets,
+              videoFormat,
+              count,
+              model: genModel,
+              quality: SKETCH_QUALITY_PRESETS[qualityPreset].quality,
             },
             onArrive,
           );
@@ -731,70 +811,105 @@ export function StudioSketchesTab({
   return (
     <div className="flex flex-col h-full">
       {/* ── Controls ── single compact row, MoodIdeationPanel-style.
-          Layout: [count stepper] [model pill] [spacer] [cols slider] [Generate]
+          Layout: [source] [model] [quality] [saved] [spacer] [cols slider] [count stepper] [Generate]
           The verbose full-width "Generate N sketches with <model>" CTA was
           replaced by a short "Generate" button — model + count are already
           visible immediately to its left, so repeating them in the label is
           noise. Progress (X/Y) still appears on the button while in-flight. */}
       <div className="px-3 py-2.5 border-b border-white/[0.06] shrink-0">
         <div className="flex items-center gap-2">
-          {/* Count stepper */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-              background: "hsl(var(--muted))",
-              borderRadius: 0,
-              padding: "2px 6px",
-              flexShrink: 0,
-            }}
-          >
-            <button
-              onClick={() => setCount((p) => Math.max(COUNT_MIN, p - 1))}
-              disabled={isGeneratingCurrentModel}
-              style={{
-                width: 18, height: 22, borderRadius: 0, fontSize: 13, fontWeight: 600,
-                background: "transparent", color: "hsl(var(--muted-foreground))",
-                border: "none", cursor: isGeneratingCurrentModel ? "not-allowed" : "pointer",
-                lineHeight: 1, opacity: isGeneratingCurrentModel ? 0.5 : 1,
-              }}
-              aria-label={t("studio.decreaseCount")}
-            >
-              −
-            </button>
-            <input
-              type="text"
-              inputMode="numeric"
-              pattern="[0-9]*"
-              value={count}
-              disabled={isGeneratingCurrentModel}
-              onChange={(e) => {
-                const v = parseInt(e.target.value, 10);
-                if (!isNaN(v) && v >= COUNT_MIN && v <= COUNT_MAX) setCount(v);
-              }}
-              style={{
-                width: 30, height: 22, borderRadius: 0, fontSize: 12, fontWeight: 700,
-                background: "hsl(var(--primary))", color: "hsl(var(--primary-foreground))",
-                border: "none", textAlign: "center",
-                fontFamily: "var(--font-mono, monospace)",
-              }}
-              aria-label={t("studio.sketchCount")}
-            />
-            <button
-              onClick={() => setCount((p) => Math.min(COUNT_MAX, p + 1))}
-              disabled={isGeneratingCurrentModel}
-              style={{
-                width: 18, height: 22, borderRadius: 0, fontSize: 13, fontWeight: 600,
-                background: "transparent", color: "hsl(var(--muted-foreground))",
-                border: "none", cursor: isGeneratingCurrentModel ? "not-allowed" : "pointer",
-                lineHeight: 1, opacity: isGeneratingCurrentModel ? 0.5 : 1,
-              }}
-              aria-label={t("studio.increaseCount")}
-            >
-              +
-            </button>
-          </div>
+          {/* 생성 소스 피커 — 모델/품질 피커와 동일한 클릭→드롭다운(아코디언) 형태.
+              씬 설명+에셋으로 새 구도를 지을지(장면 기반), 등록된 컷 이미지를
+              원본으로 다각도화할지(이미지 베리에이션)를 선택한다. 전환 씬에는
+              적용되지 않아 숨긴다. "이미지 베리에이션"은 컷 이미지가 없으면 비활성. */}
+          {!scene.is_transition && (
+            <div ref={sourceMenuRef} className="relative" style={{ minWidth: 0 }}>
+              <button
+                onClick={() => setSourceMenuOpen((v) => !v)}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  padding: "0 8px",
+                  height: 26,
+                  borderRadius: 0,
+                  fontSize: 11,
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  border: `0.5px solid ${sourceMenuOpen ? KR : "hsl(var(--border))"}`,
+                  background: sourceMenuOpen ? KR_BG : "hsl(var(--muted))",
+                  color: sourceMenuOpen ? KR : "hsl(var(--muted-foreground))",
+                  transition: "all 0.15s",
+                  whiteSpace: "nowrap",
+                }}
+                title={getSourceDesc(effectiveSource)}
+              >
+                <Layers className="w-3 h-3" />
+                {getSourceLabel(effectiveSource)}
+                <ChevronDown
+                  className="w-3 h-3 opacity-60"
+                  style={{ transform: sourceMenuOpen ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}
+                />
+              </button>
+              {sourceMenuOpen && (
+                <div
+                  className="absolute top-full left-0 mt-1 border border-border-subtle rounded-none z-20 overflow-hidden"
+                  style={{
+                    background: "hsl(var(--popover))",
+                    boxShadow: "0 4px 16px hsl(0 0% 0% / 0.3)",
+                    minWidth: 320,
+                  }}
+                >
+                  {(["scene", "image"] as const).map((s, si) => {
+                    const active = effectiveSource === s;
+                    const disabled = s === "image" && !imageModeAvailable;
+                    return (
+                      <button
+                        key={s}
+                        disabled={disabled}
+                        onClick={() => {
+                          setSketchSource(s);
+                          setSourceMenuOpen(false);
+                        }}
+                        // pl-4 들여쓰기 — 각 item 이 "선택지"(sub-option)로 읽히도록.
+                        className="w-full flex flex-col items-start gap-0.5 pl-4 pr-3 py-2 text-left disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        style={{
+                          background: active ? KR_BG : "transparent",
+                          color: active ? KR : "hsl(var(--foreground))",
+                          borderTop: si > 0 ? "1px solid hsl(var(--foreground) / 0.04)" : "none",
+                        }}
+                        onMouseEnter={(e) => {
+                          if (!active && !disabled) {
+                            (e.currentTarget as HTMLElement).style.background = "hsl(var(--muted))";
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          if (!active) {
+                            (e.currentTarget as HTMLElement).style.background = "transparent";
+                          }
+                        }}
+                      >
+                        <span className="flex items-center gap-1.5 text-caption font-semibold">
+                          {getSourceLabel(s)}
+                          {s === "scene" && (
+                            <span
+                              className="text-micro tracking-wider px-1.5 py-0.5 border border-current"
+                              style={{ color: "hsl(var(--muted-foreground))", borderColor: "hsl(var(--border))" }}
+                            >
+                              {t("studio.default")}
+                            </span>
+                          )}
+                        </span>
+                        <span className="text-2xs text-muted-foreground whitespace-nowrap">
+                          {disabled ? t("studio.sketchSourceImageNeedsImage") : getSourceDesc(s)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Model pill — collapses to just the label so it doesn't dominate
               the row. Dropdown opens downward with the same description-rich
@@ -1031,6 +1146,64 @@ export function StudioSketchesTab({
               title={t("studio.colsTitle", { count: thumbCols })}
               aria-label={t("studio.galleryColumns")}
             />
+          </div>
+
+          {/* Count stepper — 생성 장수. 생성 버튼 바로 왼쪽, 이미지 슬라이더 오른쪽에 둔다. */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              background: "hsl(var(--muted))",
+              borderRadius: 0,
+              padding: "2px 6px",
+              flexShrink: 0,
+            }}
+          >
+            <button
+              onClick={() => setCount((p) => Math.max(COUNT_MIN, p - 1))}
+              disabled={isGeneratingCurrentModel}
+              style={{
+                width: 18, height: 22, borderRadius: 0, fontSize: 13, fontWeight: 600,
+                background: "transparent", color: "hsl(var(--muted-foreground))",
+                border: "none", cursor: isGeneratingCurrentModel ? "not-allowed" : "pointer",
+                lineHeight: 1, opacity: isGeneratingCurrentModel ? 0.5 : 1,
+              }}
+              aria-label={t("studio.decreaseCount")}
+            >
+              −
+            </button>
+            <input
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={count}
+              disabled={isGeneratingCurrentModel}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10);
+                if (!isNaN(v) && v >= COUNT_MIN && v <= COUNT_MAX) setCount(v);
+              }}
+              style={{
+                width: 30, height: 22, borderRadius: 0, fontSize: 12, fontWeight: 700,
+                background: "hsl(var(--primary))", color: "hsl(var(--primary-foreground))",
+                border: "none", textAlign: "center",
+                fontFamily: "var(--font-mono, monospace)",
+              }}
+              aria-label={t("studio.sketchCount")}
+            />
+            <button
+              onClick={() => setCount((p) => Math.min(COUNT_MAX, p + 1))}
+              disabled={isGeneratingCurrentModel}
+              style={{
+                width: 18, height: 22, borderRadius: 0, fontSize: 13, fontWeight: 600,
+                background: "transparent", color: "hsl(var(--muted-foreground))",
+                border: "none", cursor: isGeneratingCurrentModel ? "not-allowed" : "pointer",
+                lineHeight: 1, opacity: isGeneratingCurrentModel ? 0.5 : 1,
+              }}
+              aria-label={t("studio.increaseCount")}
+            >
+              +
+            </button>
           </div>
 
           {/* Generate — short label, MoodIdeationPanel-style. Progress is

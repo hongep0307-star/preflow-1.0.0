@@ -2,18 +2,17 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Copy,
   Trash2,
-  Columns2,
+  Library,
   Upload,
   Paintbrush,
   X,
   ImageIcon,
   Crop,
   Sun,
-  Sparkles,
   ChevronRight,
   Move3d,
-  Images,
 } from "lucide-react";
+import { DotGrid3x3 } from "@/components/icons/DotGrid3x3";
 import { KR, KR_BG, ACFG, ASSET_ICON, type Asset } from "./contiTypes";
 import { useT } from "@/lib/uiLanguage";
 
@@ -1253,7 +1252,7 @@ export const SidePanel = ({
   if (hasImage && onCameraVariations)
     variantsChildren.push({
       kind: "leaf",
-      icon: <Images className="w-3.5 h-3.5" />,
+      icon: <DotGrid3x3 className="w-3.5 h-3.5" />,
       label: t("conti.cameraVariations"),
       fn: onCameraVariations,
       danger: false,
@@ -1268,7 +1267,7 @@ export const SidePanel = ({
       ? [
           {
             kind: "leaf" as const,
-            icon: <Columns2 className="w-3.5 h-3.5" />,
+            icon: <Library className="w-3.5 h-3.5" />,
             label: t("conti.compareVersions"),
             fn: onCompare,
             danger: false,
@@ -1308,18 +1307,11 @@ export const SidePanel = ({
           },
         ]
       : []),
-    // Variants 서브메뉴 — hasImage + 최소 한 개의 AI 액션 핸들러가 있을 때만 노출
-    ...(hasImage && variantsChildren.length > 0
-      ? [
-          {
-            kind: "group" as const,
-            id: "variants",
-            icon: <Sparkles className="w-3.5 h-3.5" />,
-            label: t("conti.variants"),
-            children: variantsChildren,
-          },
-        ]
-      : []),
+    // 베리에이션 액션(조명 변경 / 앵글 변경 / 카메라 베리에이션)을 상위 메뉴로
+    // 직접 노출 — 과거엔 "베리에이션" 서브메뉴로 묶었으나 한 단계 더 들어가는
+    // 마찰이 커서 평탄화했다. variantsChildren 는 hasImage + 핸들러 존재 시에만
+    // 채워지므로 그대로 스프레드한다.
+    ...variantsChildren,
     null,
     { kind: "leaf", icon: <Upload className="w-3.5 h-3.5" />, label: t("conti.uploadImage"), fn: onUpload, danger: false },
     ...(hasImage

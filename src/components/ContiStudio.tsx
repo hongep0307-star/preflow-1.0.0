@@ -23,14 +23,14 @@ import {
   Eye,
   Paintbrush,
   History,
-  Columns2,
+  Library,
   Upload,
   RotateCcw,
   Eraser,
   Heart,
   PenLine,
   Undo2,
-  Sparkles,
+  SwitchCamera,
   ArrowLeft,
   Plus,
   Check,
@@ -58,6 +58,7 @@ import { LibraryImportDialog } from "@/components/library/LibraryImportDialog";
 import MentionInput from "@/components/MentionInput";
 import { renderMessageWithMentions as renderMentions } from "@/lib/renderMentions";
 import { pickCharacterRefUrl, effectiveRefMode } from "@/lib/characterSheetStore";
+import { getImageModelDefault, getGptQualityDefault } from "@/lib/imageGenPreference";
 import { useT } from "@/lib/uiLanguage";
 import { formatTitleShortcuts } from "@/lib/shortcutLabel";
 
@@ -174,9 +175,9 @@ const TABS: { id: TabId; labelKey: string; icon: typeof Eye }[] = [
   { id: "view", labelKey: "studio.view", icon: Eye },
   { id: "editor", labelKey: "studio.editor", icon: PenLine },
   { id: "edit", labelKey: "studio.inpaint", icon: Paintbrush },
-  { id: "sketches", labelKey: "studio.sketches", icon: Sparkles },
+  { id: "sketches", labelKey: "studio.sketches", icon: SwitchCamera },
   { id: "history", labelKey: "studio.history", icon: History },
-  { id: "compare", labelKey: "studio.compare", icon: Columns2 },
+  { id: "compare", labelKey: "studio.compare", icon: Library },
 ];
 const ASPECT_CLASS: Record<VideoFormat, string> = {
   vertical: "aspect-[9/16]",
@@ -766,14 +767,13 @@ export const ContiStudio = ({
   }, [currentScene.project_id]);
 
   /* ━━━ Compare 탭 — 4 방향 grid 네비게이션 ━━━
-   * Compare 패널의 thumbnail 들은 ver 별/무드별로 다중 행 flex-wrap
-   * 레이아웃이라 순수 인덱스 기반으로는 사용자가 보는 2D 그리드와
-   * 매핑이 어긋난다. 그래서 DOM 에서 `[data-compare-url]` 로 마킹된
-   * 버튼들을 실제 좌표로 조회해 2D 네비를 구현:
-   *   ←/→ : DOM scan 순서로 prev/next (그룹 경계도 자연스럽게 넘어감)
-   *   ↑/↓ : getBoundingClientRect().top 기준으로 행을 그룹핑한 뒤,
-   *          이전/다음 행에서 현재 thumb 의 left 와 가장 가까운 thumb
-   *          으로 이동.
+   * Compare 패널은 탭마다 레이아웃이 다르다 — 버전 탭은 row-major CSS Grid,
+   * 무드/라이브러리 탭은 column-major masonry(CSS columns). DOM 순서 기반으로
+   * 좌/우를 처리하면 masonry 에서 "오른쪽" 이 같은 컬럼의 *아래* 항목으로 가버린다
+   * (DOM 이 컬럼 우선이므로). 그래서 DOM 순서가 아니라 **화면 좌표(중심점)** 로
+   * 방향을 판정한다 — grid·masonry 모두에서 동일하게 동작:
+   *   요청 방향에 실제로 위치한 thumb 들 중, (주 축 거리 + 교차 축 거리×2) 가
+   *   최소인 항목으로 이동(같은 행/열을 우선하면서 가장 가까운 것).
    * 이 함수는 매 키 입력시 호출 — 즉시 동기 query 라 비용 무시 가능. */
   const navigateCompareGrid = useCallback(
     (direction: "left" | "right" | "up" | "down") => {
@@ -801,34 +801,33 @@ export const ContiStudio = ({
         el.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
       };
 
-      if (direction === "left" || direction === "right") {
-        const idx = thumbs.indexOf(current);
-        const next = direction === "left" ? idx - 1 : idx + 1;
-        if (next < 0 || next >= thumbs.length) return;
-        pickFrom(thumbs[next]);
-        return;
-      }
-
-      // up / down — 행 기반 네비
-      const currentRect = current.getBoundingClientRect();
-      const currentTop = Math.round(currentRect.top);
-      const rowTops = Array.from(
-        new Set(thumbs.map((t) => Math.round(t.getBoundingClientRect().top))),
-      ).sort((a, b) => a - b);
-      const currentRowIdx = rowTops.indexOf(currentTop);
-      if (currentRowIdx < 0) return;
-      const targetRowIdx = direction === "up" ? currentRowIdx - 1 : currentRowIdx + 1;
-      if (targetRowIdx < 0 || targetRowIdx >= rowTops.length) return;
-      const targetRowTop = rowTops[targetRowIdx];
-      // 대상 행에서 left 가 가장 가까운 thumb 선택. 같은 거리면 먼저 만난 것.
+      // 기하 기반 2D 네비 — DOM 순서가 아니라 중심점 좌표로 방향을 판정한다.
+      // (masonry 컬럼 레이아웃에서도 "오른쪽"=시각적 오른쪽이 되도록)
+      const cur = current.getBoundingClientRect();
+      const cx = cur.left + cur.width / 2;
+      const cy = cur.top + cur.height / 2;
+      const EPS = 4; // 같은 행/열로 간주할 미세 오차 흡수
       let best: HTMLElement | null = null;
-      let bestDx = Infinity;
+      let bestScore = Infinity;
       for (const t of thumbs) {
-        if (Math.round(t.getBoundingClientRect().top) !== targetRowTop) continue;
-        const dx = Math.abs(t.getBoundingClientRect().left - currentRect.left);
-        if (dx < bestDx) {
+        if (t === current) continue;
+        const r = t.getBoundingClientRect();
+        const dx = r.left + r.width / 2 - cx;
+        const dy = r.top + r.height / 2 - cy;
+        let inDir = false;
+        let primary = 0;
+        let cross = 0;
+        if (direction === "right") { inDir = dx > EPS; primary = dx; cross = Math.abs(dy); }
+        else if (direction === "left") { inDir = dx < -EPS; primary = -dx; cross = Math.abs(dy); }
+        else if (direction === "down") { inDir = dy > EPS; primary = dy; cross = Math.abs(dx); }
+        else { inDir = dy < -EPS; primary = -dy; cross = Math.abs(dx); }
+        if (!inDir) continue;
+        // 주 축(이동 방향) 거리를 최소화하되, 교차 축 이탈은 ×2 로 더 강하게
+        // 페널티 — 같은 행/열에 가까운 항목을 우선 선택한다.
+        const score = primary + cross * 2;
+        if (score < bestScore) {
+          bestScore = score;
           best = t;
-          bestDx = dx;
         }
       }
       if (!best) return;
@@ -1592,6 +1591,42 @@ export const ContiStudio = ({
   };
 
   /**
+   * GPT edits 규약 마스크 추출: OpenAI /v1/images/edits 의 mask 는 "투명(alpha 0)
+   * = 편집 영역, 불투명(alpha 255) = 보존" 규약이다. extractMaskBase64(흰=편집,
+   * 전부 불투명)와 정반대이므로 별도 함수로 명확히 분리한다.
+   * 칠한 픽셀 → alpha 0, 안 칠한 픽셀 → alpha 255. 반환: PNG base64 (프리픽스 제외).
+   */
+  const extractGptEditsMaskBase64 = (): string | null => {
+    const mc = maskCanvasRef.current;
+    const ic = imageCanvasRef.current;
+    if (!mc) return null;
+    const targetW = ic?.width || mc.width;
+    const targetH = ic?.height || mc.height;
+    const src = mc.getContext("2d")!.getImageData(0, 0, mc.width, mc.height);
+    const rawMask = document.createElement("canvas");
+    rawMask.width = mc.width;
+    rawMask.height = mc.height;
+    const rawCtx = rawMask.getContext("2d")!;
+    const rawID = rawCtx.createImageData(mc.width, mc.height);
+    for (let i = 0; i < src.data.length; i += 4) {
+      const painted = src.data[i + 3] > 32;
+      // RGB 는 무의미(불투명 영역만 유지됨) — 검정으로 통일.
+      rawID.data[i] = 0;
+      rawID.data[i + 1] = 0;
+      rawID.data[i + 2] = 0;
+      rawID.data[i + 3] = painted ? 0 : 255; // 편집=투명, 보존=불투명
+    }
+    rawCtx.putImageData(rawID, 0, 0);
+    const out = document.createElement("canvas");
+    out.width = targetW;
+    out.height = targetH;
+    const octx = out.getContext("2d")!;
+    octx.imageSmoothingEnabled = false;
+    octx.drawImage(rawMask, 0, 0, targetW, targetH);
+    return out.toDataURL("image/png").split(",")[1];
+  };
+
+  /**
    * 클라이언트 합성: 원본 + 모델출력 + soft mask
    *   - 마스크 안: 모델출력 (페더된 가장자리로 자연스럽게 블렌드)
    *   - 마스크 밖: 원본 픽셀 그대로 (수학적으로 보존)
@@ -1879,6 +1914,30 @@ export const ContiStudio = ({
       id.data[i + 1] = v;
       id.data[i + 2] = v;
       id.data[i + 3] = 255;
+    }
+    ctx.putImageData(id, 0, 0);
+    return out;
+  };
+
+  /**
+   * GPT edits 규약 마스크(투명=편집, 불투명=보존)를 ROI(bb)로 크롭해 생성.
+   * 출력 캔버스는 bb 크기 그대로 — gpt-image /images/edits 는 image[0] 와
+   * mask 의 픽셀 크기가 같아야 하므로 리스케일하지 않는다. ROI crop(roiSource)과
+   * 동일 좌표계라 마스크가 1:1 로 정렬된다. extractGptEditsMaskBase64 의 ROI 판.
+   */
+  const buildGptEditsMaskCanvas = (mc: HTMLCanvasElement, bb: BBox): HTMLCanvasElement => {
+    const srcID = mc.getContext("2d")!.getImageData(bb.x, bb.y, bb.w, bb.h);
+    const out = document.createElement("canvas");
+    out.width = bb.w;
+    out.height = bb.h;
+    const ctx = out.getContext("2d")!;
+    const id = ctx.createImageData(bb.w, bb.h);
+    for (let i = 0; i < srcID.data.length; i += 4) {
+      const painted = srcID.data[i + 3] > 32;
+      id.data[i] = 0;
+      id.data[i + 1] = 0;
+      id.data[i + 2] = 0;
+      id.data[i + 3] = painted ? 0 : 255; // 편집=투명, 보존=불투명
     }
     ctx.putImageData(id, 0, 0);
     return out;
@@ -2243,9 +2302,24 @@ export const ContiStudio = ({
     const promptText = inpaintPrompt;
     const maskEmptyVal = isMaskEmpty();
     const maskB64 = maskEmptyVal ? null : extractMaskBase64();
-    // 항상 NB2 를 우선 사용. 브러시가 있을 때는 마스크 오버레이 레퍼런스로 영역 지시,
-    // 브러시가 없을 때는 NB2 의 instruction-based 전체 편집을 활용.
-    const useNanoBanana = true;
+    // ── 인페인트 모델 라우팅 (설정 > 모델 > 인페인트) ──────────────────────
+    // "auto": 마스크 있으면 gpt-image-1.5 native-mask(+input_fidelity), 없으면 NB2.
+    // 명시 선택(gpt-image-1.5/2, nano-banana-2)이면 그대로 사용.
+    const inpaintModelPref = getImageModelDefault("inpaint");
+    const inpaintQuality = getGptQualityDefault("inpaint");
+    const resolvedInpaintModel =
+      inpaintModelPref === "auto"
+        ? maskEmptyVal
+          ? "nano-banana-2"
+          : "gpt-image-1.5"
+        : inpaintModelPref;
+    const useGptInpaint =
+      resolvedInpaintModel === "gpt-image-1.5" || resolvedInpaintModel === "gpt-image-2";
+    // NB2 경로: 브러시 있으면 마스크 오버레이 레퍼런스로 영역 지시, 없으면
+    // instruction-based 전체 편집. GPT 경로: native mask 파라미터로 인페인팅.
+    const useNanoBanana = !useGptInpaint;
+    // GPT edits 는 alpha 규약 마스크가 필요 (투명=편집). onClose() 전에 live canvas 에서 추출.
+    const maskB64Gpt = useGptInpaint && !maskEmptyVal ? extractGptEditsMaskBase64() : null;
     const moodRefUrls = useMoodRef && moodReferenceUrl ? [moodReferenceUrl] : [];
     const mentionedTagNames = (promptText.match(/@([\w가-힣-]+)/g) || []).map((t) => t.slice(1));
     const REMOVAL_KEYWORDS = /제거|삭제|없애|지워|지우|remove|delete|erase|get rid/i;
@@ -2329,8 +2403,18 @@ export const ContiStudio = ({
     })();
 
     // ── ROI 적용 판정 ──
+    // GPT native-mask 경로는 전체 이미지 + mask 파라미터로 동작하므로 ROI(크롭)
+    // 모드를 쓰지 않는다. NB2 경로에서만 ROI 최적화를 적용.
     let roi: BBox | null = null;
     let useROI = false;
+    // GPT native-mask ROI 입력 — GPT 경로가 ROI 모드로 돌 때만 채워진다.
+    // 작은 마스크 편집(예: 눈 위 선글라스 제거)에서 전체 프레임을 보내면 모델
+    // 출력 해상도(≤1536) 중 편집 영역에 배정되는 픽셀이 극히 적어 합성 후
+    // 원본 해상도로 업스케일되며 그 패치만 뭉개진다. 마스크 주변만 크롭해
+    // 보내면 모델이 편집 영역에 풀 해상도를 쓴다 — NB2 경로가 이미 쓰던 기법.
+    let gptRoiImageBase64: string | null = null;
+    let gptRoiMaskBase64: string | null = null;
+    let gptRoiImageSize: string | null = null;
     if (!maskEmptyVal && icSnapshot && mcSnapshot) {
       const tight = computeMaskBBox(mcSnapshot);
       if (tight) {
@@ -2338,7 +2422,13 @@ export const ContiStudio = ({
         const coverage = (padded.w * padded.h) / (icSnapshot.width * icSnapshot.height);
         roi = padded;
         useROI = coverage < 0.7;
-        console.log("[Inpaint:roi]", { tight, padded, coverage: coverage.toFixed(3), useROI });
+        console.log("[Inpaint:roi]", {
+          tight,
+          padded,
+          coverage: coverage.toFixed(3),
+          useROI,
+          path: useGptInpaint ? "gpt" : "nb2",
+        });
       }
     }
 
@@ -2375,7 +2465,25 @@ export const ContiStudio = ({
         let nbImageSize: string;
         let maskPrefix: string;
 
-        if (useROI && roi && icSnapshot && mcSnapshot) {
+        if (useROI && roi && icSnapshot && mcSnapshot && useGptInpaint) {
+          /* ━━━ GPT native-mask ROI ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+           * 마스크 주변만 크롭(roiSource)해서 gpt-image edits 에 보낸다.
+           * image[0] 와 mask 의 픽셀 크기가 일치해야 하므로 마스크도 같은 ROI
+           * 좌표로 크롭하고 리스케일하지 않는다. 결과는 compositeROIInpaintResult
+           * 가 원본 위 ROI 자리에 (gen ∩ soft mask) 로 paste-back → 마스크 밖은
+           * 비트 단위 보존. 작은 편집 영역에 모델 풀 해상도가 집중돼 선명해진다.
+           * ────────────────────────────────────────────────────────── */
+          const roiSource = cropCanvas(icSnapshot, roi);
+          gptRoiImageBase64 = roiSource.toDataURL("image/png").split(",")[1];
+          gptRoiMaskBase64 = buildGptEditsMaskCanvas(mcSnapshot, roi).toDataURL("image/png").split(",")[1];
+          gptRoiImageSize = computeImageSizeFromDimensions(roi.w, roi.h);
+          // NB2 전용 필드는 GPT body 에서 쓰이지 않지만, definite-assignment 와
+          // 아래 디버그 로그를 위해 안전한 값으로 채워둔다.
+          nbSourceUrl = sceneImageUrl;
+          nbRefUrls = [];
+          nbImageSize = gptRoiImageSize;
+          maskPrefix = "";
+        } else if (useROI && roi && icSnapshot && mcSnapshot) {
           const strength01 = brushStrengthRef.current / 100;
           const roiSource = cropCanvas(icSnapshot, roi);
           const roiMask = buildBinaryMaskCanvas(mcSnapshot, roi, strength01);
@@ -2516,19 +2624,41 @@ Edit instruction:
         const rawEnrichedPrompt = await buildEnrichedPrompt(imageBase64, tagImageBase64 ?? undefined);
         const enrichedPrompt = maskPrefix + rawEnrichedPrompt;
 
-        const body: Record<string, any> = {
-          mode: "inpaint",
-          imageBase64,
-          maskBase64: maskB64,
-          prompt: enrichedPrompt,
-          forceGpt: false,
-          projectId: sceneProjectId,
-          sceneNumber,
-          imageSize: nbImageSize,
-          referenceImageUrls: nbRefUrls,
-          useNanoBanana,
-          sourceImageUrl: nbSourceUrl,
-        };
+        // GPT native-mask 경로는 NB2 용 마스크 오버레이/마젠타 가이드 프롬프트가
+        // 불필요(혼란만 유발)하다. 실제 alpha 마스크 + 사용자 프롬프트 + 정체성
+        // 레퍼런스(태그/커스텀/무드)만 보낸다. NB2 경로는 기존 동작 그대로.
+        const body: Record<string, any> = useGptInpaint
+          ? {
+              mode: "inpaint",
+              // ROI 모드면 크롭된 이미지/마스크/사이즈를 보낸다 (작은 편집의
+              // 해상도 스머징 방지). 비-ROI 면 기존 전체 이미지 그대로.
+              imageBase64: gptRoiImageBase64 ?? imageBase64,
+              maskBase64: gptRoiMaskBase64 ?? maskB64Gpt,
+              prompt: rawEnrichedPrompt,
+              forceGpt: false,
+              gptModel: resolvedInpaintModel,
+              quality: inpaintQuality,
+              inputFidelity: true,
+              projectId: sceneProjectId,
+              sceneNumber,
+              imageSize: gptRoiImageSize ?? nbImageSize,
+              referenceImageUrls: [...customRefUrls, ...assetRefUrls, ...moodRefUrls, ...selectedRefs].slice(0, 3),
+              useNanoBanana: false,
+              sourceImageUrl: nbSourceUrl,
+            }
+          : {
+              mode: "inpaint",
+              imageBase64,
+              maskBase64: maskB64,
+              prompt: enrichedPrompt,
+              forceGpt: false,
+              projectId: sceneProjectId,
+              sceneNumber,
+              imageSize: nbImageSize,
+              referenceImageUrls: nbRefUrls,
+              useNanoBanana,
+              sourceImageUrl: nbSourceUrl,
+            };
         pendingJobId = onRegisterInpaintJob?.({
           sceneId,
           sceneNumber,
@@ -3834,8 +3964,13 @@ Edit instruction:
                   badge?: React.ReactNode;
                   /** 라이브러리 탭에서만 — 풀에서 항목 제거. */
                   onRemove?: () => void;
+                  /** 무드/라이브러리 탭의 masonry(컬럼) 레이아웃에서만 — 비율이 제각각인
+                   *  레퍼런스를 빈틈 없이 패킹하므로, 항목 간 세로 간격(margin-bottom)과
+                   *  컬럼 끊김 방지(break-inside)를 켠다. 버전 탭(균일 비율 grid)은 gap 이
+                   *  간격을 책임지므로 끈다. */
+                  masonry?: boolean;
                 }) => {
-                  const { thumbKey, url, badge, onRemove } = args;
+                  const { thumbKey, url, badge, onRemove, masonry } = args;
                   const isRef = compareSelectedRefs.includes(url);
                   const isPreviewing = comparePreview?.key === thumbKey;
                   return (
@@ -3865,7 +4000,7 @@ Edit instruction:
                       // 보였음. 클릭과 동시에 즉시 KR 로 갈아끼우는 게 의도.
                       // hover overlay 의 페이드는 자식 div 에 transition-opacity
                       // 가 별도로 박혀 있어 영향 없음.
-                      className="group relative block w-full mb-1.5 overflow-hidden rounded-none focus:outline-none focus-visible:outline-none [break-inside:avoid]"
+                      className={`group relative block w-full overflow-hidden rounded-none focus:outline-none focus-visible:outline-none${masonry ? " mb-[15px] [break-inside:avoid]" : ""}`}
                       style={{
                         border: isPreviewing ? `2px solid ${KR}` : "1px solid rgba(255,255,255,0.08)",
                         boxShadow: isPreviewing ? `inset 0 0 0 1px ${KR}` : undefined,
@@ -4007,7 +4142,7 @@ Edit instruction:
                       {compareSourceTab === "versions" && (
                         versionSections.length === 0 ? (
                           <div className="flex flex-col items-center justify-center h-32 gap-2">
-                            <Columns2 className="w-8 h-8 text-border" />
+                            <Library className="w-8 h-8 text-border" />
                             <p className="text-meta text-muted-foreground">{t("studio.noReferenceImages")}</p>
                           </div>
                         ) : (
@@ -4026,7 +4161,7 @@ Edit instruction:
                                   title={t("conti.versionShort", { num: sec.orderNumber })}
                                   count={sec.thumbs.length}
                                 />
-                                <div style={{ columnCount: 3, columnGap: 6 }}>
+                                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 15, alignItems: "start" }}>
                                   {sec.thumbs.map((th) => renderThumb({
                                     thumbKey: th.key,
                                     url: th.url,
@@ -4055,7 +4190,7 @@ Edit instruction:
                       {compareSourceTab === "mood" && (
                         moodCount === 0 ? (
                           <div className="flex flex-col items-center justify-center h-32 gap-2">
-                            <Columns2 className="w-8 h-8 text-border" />
+                            <Library className="w-8 h-8 text-border" />
                             <p className="text-meta text-muted-foreground">{t("studio.noReferenceImages")}</p>
                           </div>
                         ) : (
@@ -4063,10 +4198,11 @@ Edit instruction:
                               자연스럽게 흐르도록. 북마크 vs 나머지의 분리는 그리드
                               순서(북마크가 앞)와 썸네일 좌상단 KR 하트 배지로
                               충분히 시각화돼 별도 섹션 헤더가 노이즈가 됐음. */
-                          <div style={{ columnCount: 3, columnGap: 6 }}>
+                          <div style={{ columnCount: 4, columnGap: 15 }}>
                             {moodBookmarked.map((url, i) => renderThumb({
                               thumbKey: `mood-bm-${i}`,
                               url,
+                              masonry: true,
                               badge: (
                                 // positioning 은 renderThumb 의 좌상단
                                 // wrapper 가 관리 — 컨텐츠/배경만 책임.
@@ -4082,6 +4218,7 @@ Edit instruction:
                             {moodOthers.map((url, i) => renderThumb({
                               thumbKey: `mood-${i}`,
                               url,
+                              masonry: true,
                             }))}
                           </div>
                         )
@@ -4117,7 +4254,7 @@ Edit instruction:
                             <>
                               {/* 라이브러리 탭은 단일 소스라 섹션 헤더가 잉여.
                                   무드 탭과 동일하게 헤더 없이 단일 그리드. */}
-                              <div style={{ columnCount: 3, columnGap: 6 }}>
+                              <div style={{ columnCount: 4, columnGap: 15 }}>
                                 {compareLibraryItems.map((it) => {
                                   // entry.thumbnailDataUrl 은 attach 시점에 정적
                                   // poster 를 base64 로 박아 둔 data: URL. GIF/영상도
@@ -4128,6 +4265,7 @@ Edit instruction:
                                   return renderThumb({
                                     thumbKey: `lib-${it.id}`,
                                     url: previewUrl_,
+                                    masonry: true,
                                     onRemove: () => removeLibraryItem(it.id),
                                   });
                                 })}
@@ -4135,7 +4273,7 @@ Edit instruction:
                                     이어진다. 빈 상태 CTA 와 동일 동작. */}
                                 <button
                                   onClick={() => setLibraryImportOpen(true)}
-                                  className="block w-full mb-1.5 aspect-square flex flex-col items-center justify-center gap-1 text-muted-foreground hover:text-foreground rounded-none transition-colors [break-inside:avoid]"
+                                  className="block w-full mb-[15px] aspect-square flex flex-col items-center justify-center gap-1 text-muted-foreground hover:text-foreground rounded-none transition-colors [break-inside:avoid]"
                                   style={{ border: "1px dashed rgba(255,255,255,0.15)" }}
                                   title={t("studio.compareLibraryOpen")}
                                 >

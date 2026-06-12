@@ -55,7 +55,6 @@ import {
   FileText,
   ArrowRightLeft,
   Check,
-  SlidersHorizontal,
   ChevronRight,
   ChevronLeft,
   ChevronDown,
@@ -118,7 +117,9 @@ import {
   ASPECT_CLASS,
   MAX_HISTORY,
   normalizeScenesSketches,
+  normalizeGridHistory,
 } from "@/components/conti/contiTypes";
+import { setCamVarGen } from "@/components/conti/camVarGridState";
 import {
   TagChip,
   resolveAsset,
@@ -133,6 +134,7 @@ import { RelightModal, type RelightSubmit } from "@/components/conti/RelightModa
 import { CameraVariationsModal } from "@/components/conti/CameraVariationsModal";
 import { ChangeAngleModal, type ChangeAngleSubmit } from "@/components/conti/ChangeAngleModal";
 import { StyleTransferConfirmModal } from "@/components/conti/StyleTransferConfirmModal";
+import { PhotoStar } from "@/components/icons/PhotoStar";
 import { GenerateAllModal } from "@/components/conti/GenerateAllModal";
 import { SceneImageCropModal } from "@/components/conti/SceneImageCropModal";
 import { useT, useUiLanguage } from "@/lib/uiLanguage";
@@ -1343,7 +1345,7 @@ const StylePickerModal = ({
                         <img src={preset.thumbnail_url} className="w-full h-full object-cover" loading="lazy" decoding="async" />
                       ) : (
                         <div className="absolute inset-0 flex items-center justify-center">
-                          <SlidersHorizontal className="w-5 h-5" style={{ color: "rgba(255,255,255,0.15)" }} />
+                          <PhotoStar className="w-5 h-5" style={{ color: "rgba(255,255,255,0.15)" }} />
                         </div>
                       )}
                       {preset.is_default && (
@@ -6275,7 +6277,7 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
                 />
               </span>
             ) : (
-              <SlidersHorizontal className="w-3.5 h-3.5" />
+              <PhotoStar className="w-3.5 h-3.5" />
             )}
             {currentStyle ? currentStyle.name : t("projectModal.style")}
           </button>
@@ -6744,105 +6746,171 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
 
       {cameraVariationsScene && (
         <CameraVariationsModal
-          scene={cameraVariationsScene}
-          assets={assets}
+          // Pass the LIVE scene (looked up from activeScenes) so the gallery
+          // reflects grids appended by background generations in real time, not
+          // the stale snapshot captured when the modal opened.
+          scene={
+            activeScenes.find((s) => s.id === cameraVariationsScene.id) ?? cameraVariationsScene
+          }
           videoFormat={videoFormat}
           onClose={() => setCameraVariationsScene(null)}
-          generate={async (req) => {
-            // The modal dispatches three distinct generation paths per request:
+          onGenerateGrid={(prompt) => {
+            // BACKGROUND grid generation: kicks off the model call and returns
+            // immediately. Tracked in camVarGridState so it survives the modal
+            // (or whole Conti tab) closing — the scene card shows a spinner on
+            // its Camera Variations icon, and the finished grid is APPENDED to
+            // the scene's grid history (gallery) so "generate again" never
+            // discards earlier grids.
             //
-            //   preserve      → NB2 edit of the current scene image (1K). Used
-            //                   for the Presets tab — one request per selected
-            //                   camera preset, fired in parallel by the modal.
-            //
-            //   contact_sheet → single NB2 edit of the current scene image at
-            //                   1:1 / 2K resolution with the contact-sheet
-            //                   prompt. Returns the URL of a single 3x3 grid
-            //                   image; the modal splits it client-side via
-            //                   splitContactSheetDataUrl.
-            //
-            //   save_local    → a client-side rendered base64 payload (e.g.
-            //                   the contact-sheet tile the user chose) that
-            //                   we persist to storage via the save_local
-            //                   path on the openai-image endpoint.
-            if (req.mode === "preserve") {
-              // 6-B: ChangeAngle 에서 검증된 고정밀 라우트(gpt-image-1.5 +
-              // input_fidelity:high)를 프리셋 단일 생성에 재사용한다. NB2 는
-              // novel-view 일관성이 약해 프리셋 결과가 원본에서 드리프트했다.
-              // contact_sheet 는 그리드 레이아웃 능력 때문에 NB2 유지 (아래).
-              const { data, error } = await supabase.functions.invoke("openai-image", {
-                body: {
-                  mode: "inpaint",
-                  useNanoBanana: false,
-                  gptModel: "gpt-image-1.5",
-                  inputFidelity: "high",
-                  sourceImageUrl: req.sourceImageUrl,
-                  referenceImageUrls: [],
-                  prompt: req.prompt,
-                  projectId,
-                  sceneNumber: cameraVariationsScene.scene_number,
-                  imageSize: IMAGE_SIZE_MAP[videoFormat],
-                },
-              });
-              if (error) throw error;
-              const d = data as { publicUrl?: string; url?: string; error?: string } | null;
-              if (d?.error) throw new Error(d.error);
-              const newUrl = d?.publicUrl ?? d?.url ?? null;
-              if (!newUrl) throw new Error("Preserve-source variation returned no image URL");
-              return newUrl;
-            }
-
-            if (req.mode === "contact_sheet") {
-              // Aspect 1:1 + 2K output so each post-split tile still has
-              // enough pixels to survive being reused as a scene thumbnail.
-              const { data, error } = await supabase.functions.invoke("openai-image", {
-                body: {
-                  mode: "inpaint",
-                  useNanoBanana: true,
-                  sourceImageUrl: req.sourceImageUrl,
-                  referenceImageUrls: [],
-                  prompt: req.prompt,
-                  projectId,
-                  sceneNumber: cameraVariationsScene.scene_number,
-                  imageSize: "2048x2048",
-                  nb2ImageSize: "2K",
-                },
-              });
-              if (error) throw error;
-              const d = data as { publicUrl?: string; url?: string } | null;
-              const newUrl = d?.publicUrl ?? d?.url ?? null;
-              if (!newUrl) throw new Error("Contact-sheet generation returned no image URL");
-              return newUrl;
-            }
-
-            // save_local
-            const { data, error } = await supabase.functions.invoke("openai-image", {
-              body: {
-                mode: "save_local",
-                imageBase64: req.base64,
-                projectId,
-                sceneNumber: cameraVariationsScene.scene_number,
-                suffix: req.suffix,
-              },
-            });
-            if (error) throw error;
-            const d = data as { publicUrl?: string; url?: string } | null;
-            const newUrl = d?.publicUrl ?? d?.url ?? null;
-            if (!newUrl) throw new Error("save_local returned no image URL");
-            return newUrl;
+            // Pipeline is FIXED to match the storyboard sheet: GPT Image 2
+            // composes the 9-panel grid (only its quality is configurable in
+            // Settings), and the chosen tile is later refined by Nano Banana 2.
+            const target = cameraVariationsScene;
+            const src = target?.conti_image_url;
+            if (!target || !src) return;
+            const sid = target.id;
+            setCamVarGen(projectId, sid, { startedAt: Date.now() });
+            void (async () => {
+              try {
+                const quality = getGptQualityDefault("cameraVariation");
+                const { data, error } = await supabase.functions.invoke("openai-image", {
+                  body: {
+                    mode: "inpaint",
+                    preferredAngleModel: "gpt-image-2",
+                    quality,
+                    sourceImageUrl: src,
+                    referenceImageUrls: [],
+                    prompt,
+                    projectId,
+                    sceneNumber: target.scene_number,
+                    imageSize: IMAGE_SIZE_MAP[videoFormat],
+                  },
+                });
+                if (error) throw error;
+                const d = data as { publicUrl?: string; url?: string; error?: string } | null;
+                if (d?.error) throw new Error(d.error);
+                const rawUrl = d?.publicUrl ?? d?.url ?? null;
+                if (!rawUrl) throw new Error("Angle grid generation returned no image URL");
+                // Append to the persisted grid history (active version snapshot —
+                // the source of truth for displayed scenes — + scenes-table mirror).
+                const entry = {
+                  id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                  rawUrl,
+                  generatedAt: Date.now(),
+                };
+                const live = (getSceneState(projectId)?.scenes ?? activeScenes).find((s) => s.id === sid);
+                const nextGrids = [...normalizeGridHistory(live?.camera_variation_grid), entry];
+                await updateVersionScenes((current) =>
+                  current.map((s) => (s.id === sid ? { ...s, camera_variation_grid: nextGrids } : s)),
+                );
+                void supabase.from("scenes").update({ camera_variation_grid: nextGrids }).eq("id", sid);
+              } catch (err: any) {
+                console.error("[cameraVar] grid generation failed:", err);
+                toast({
+                  title: t("cameraVar.generateFailed"),
+                  description: err?.message ?? String(err),
+                  variant: "destructive",
+                });
+              } finally {
+                setCamVarGen(projectId, sid, null);
+              }
+            })();
           }}
-          onApplied={async (newUrl, previousUrl) => {
+          onDeleteGrid={(gridId) => {
+            // Remove one grid from the scene's history.
+            if (!cameraVariationsScene) return;
+            const sid = cameraVariationsScene.id;
+            const live = (getSceneState(projectId)?.scenes ?? activeScenes).find((s) => s.id === sid);
+            const nextGrids = normalizeGridHistory(live?.camera_variation_grid).filter((g) => g.id !== gridId);
+            void updateVersionScenes((current) =>
+              current.map((s) => (s.id === sid ? { ...s, camera_variation_grid: nextGrids } : s)),
+            );
+            void supabase.from("scenes").update({ camera_variation_grid: nextGrids }).eq("id", sid);
+          }}
+          onApplyTile={(tileDataUrl) => {
+            // Apply = close the popup immediately and run the refine in the
+            // BACKGROUND, with the scene card showing the standard generation
+            // overlay (editGeneratingIds → isGenerating + the 1/1 spinner) until
+            // the refined cut lands — same UX as inpaint / Change Angle, so it's
+            // always obvious which card is generating. The chosen tile is
+            // upscaled + reframed to the project's exact aspect via the shared
+            // storyboard-sheet refine pass.
             const target = cameraVariationsScene;
             if (!target) return;
-            await applyGeneratedSceneImage(target.id, newUrl, previousUrl);
-            toast({
-              title: t("conti.toast.cameraAngleUpdated", { n: String(target.scene_number).padStart(2, "0") }),
-              action: (
-                <ToastAction altText={t("conti.toast.viewScene")} onClick={() => scrollToScene(target.id, target.scene_number)}>
-                  {t("conti.toast.viewScene")}
-                </ToastAction>
-              ),
-            });
+            void (async () => {
+              setEditGeneratingIds((prev) => new Set(prev).add(target.id));
+              setSceneStages((prev) => ({ ...prev, [target.id]: "generating" }));
+              setGeneratingSceneVersionMap((prev) => ({ ...prev, [target.id]: activeVersionIdRef.current }));
+              try {
+                const { refineCameraTileGpt, centerCropToFormatDataUrl } =
+                  await import("@/lib/storyboardSheet");
+                const { trimWhiteBorderDataUrl, dataUrlToBase64 } = await import("@/lib/contactSheet");
+                const trimmed = await trimWhiteBorderDataUrl(tileDataUrl);
+                let refined: string;
+                try {
+                  // 모든 비율에서 gpt-image-2 로 리파인한다. NB2(9:16/16:9/1:1만 지원)는
+                  // gpt-image 그리드 셀을 자기 비율로 강제 reframe 하면서 상하/좌우 밴드와
+                  // 줌아웃 같은 "타일 현상"을 만든다(세로뿐 아니라 가로/정사각도 동일).
+                  // gpt-image-2(refineCameraTileGpt)는 타일의 네이티브 비율에 가장 가까운
+                  // 출력 크기로 reframe 없이 업스케일하므로 모든 포맷에서 타일 현상이 없다.
+                  refined = await refineCameraTileGpt({
+                    tileDataUrl: trimmed,
+                    projectId,
+                    sceneNumber: target.scene_number,
+                    videoFormat,
+                  });
+                } catch (refineErr) {
+                  console.warn("[cameraVar] refine failed, falling back to center-crop:", refineErr);
+                  const cropped = await centerCropToFormatDataUrl(trimmed, videoFormat);
+                  const { data } = await supabase.functions.invoke("openai-image", {
+                    body: {
+                      mode: "save_local",
+                      imageBase64: dataUrlToBase64(cropped),
+                      projectId,
+                      sceneNumber: target.scene_number,
+                      suffix: "camvar-cut",
+                      folder: "contis",
+                    },
+                  });
+                  const fb = (data as { publicUrl?: string } | null)?.publicUrl;
+                  if (!fb) throw refineErr;
+                  refined = fb;
+                }
+                await applyGeneratedSceneImage(target.id, refined, target.conti_image_url ?? null);
+                toast({
+                  title: t("conti.toast.cameraAngleUpdated", { n: String(target.scene_number).padStart(2, "0") }),
+                  action: (
+                    <ToastAction altText={t("conti.toast.viewScene")} onClick={() => scrollToScene(target.id, target.scene_number)}>
+                      {t("conti.toast.viewScene")}
+                    </ToastAction>
+                  ),
+                });
+              } catch (err: any) {
+                console.error("[cameraVar] apply failed:", err);
+                toast({
+                  title: t("conti.toast.shotGenerationFailed", { n: String(target.scene_number).padStart(2, "0") }),
+                  description: err?.message ?? String(err),
+                  variant: "destructive",
+                });
+              } finally {
+                setEditGeneratingIds((prev) => {
+                  const n = new Set(prev);
+                  n.delete(target.id);
+                  return n;
+                });
+                setSceneStages((prev) => {
+                  const n = { ...prev };
+                  delete n[target.id];
+                  return n;
+                });
+                setGeneratingSceneVersionMap((prev) => {
+                  if (!(target.id in prev)) return prev;
+                  const n = { ...prev };
+                  delete n[target.id];
+                  return n;
+                });
+              }
+            })();
           }}
         />
       )}

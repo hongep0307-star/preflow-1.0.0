@@ -39,6 +39,29 @@ export interface Sketch {
   liked?: boolean;
 }
 
+/** One persisted Camera Variation 9-up grid in a scene's history. */
+export interface CameraVariationGrid {
+  id: string;
+  /** Stored 3×3 grid image URL — re-split client-side into 9 tiles. */
+  rawUrl: string;
+  generatedAt: number;
+}
+
+/** Coerce a scene's `camera_variation_grid` (array, legacy single object, or
+ *  null) into a clean `CameraVariationGrid[]`, dropping malformed entries. */
+export function normalizeGridHistory(
+  v: Scene["camera_variation_grid"] | undefined,
+): CameraVariationGrid[] {
+  if (Array.isArray(v)) {
+    return v.filter((g): g is CameraVariationGrid => !!g && typeof g.rawUrl === "string");
+  }
+  if (v && typeof v === "object" && typeof (v as { rawUrl?: unknown }).rawUrl === "string") {
+    const o = v as { rawUrl: string; generatedAt?: number; id?: string };
+    return [{ id: o.id ?? "legacy", rawUrl: o.rawUrl, generatedAt: o.generatedAt ?? 0 }];
+  }
+  return [];
+}
+
 export interface Scene {
   id: string;
   project_id: string;
@@ -63,6 +86,12 @@ export interface Scene {
   /** Per-scene Sketches; lives on the scene row so a scene delete cascades.
    *  Optional because legacy rows may not have the column yet. */
   sketches?: Sketch[];
+  /** Persisted Camera Variation 9-up grid HISTORY for this scene. Each entry's
+   *  `rawUrl` is a stored 3×3 grid image; the modal re-splits it into 9 tiles
+   *  on open so results survive a refresh. "Generate again" appends a new entry
+   *  (gallery history) rather than replacing. Legacy rows may hold a single
+   *  object — `normalizeGridHistory` coerces both shapes to an array. */
+  camera_variation_grid?: CameraVariationGrid[] | { rawUrl: string; generatedAt: number } | null;
   /** User-confirmed "final" marker. Dashboard progress counts only scenes
    *  with `is_final === true`. When every non-transition scene is final,
    *  ContiTab auto-promotes `projects.status` to `completed`; unmarking
@@ -164,6 +193,14 @@ export interface Asset {
    *  to `photo_url` when absent. Mirrors
    *  src/components/assets/types.tsx → Asset.character_sheet_url. */
   character_sheet_url?: string | null;
+  /** Character-only multi-angle reference BOARD. Selected when
+   *  `character_ref_mode === "board"`. Mirrors
+   *  src/components/assets/types.tsx → Asset.character_board_url. */
+  character_board_url?: string | null;
+  /** Which artifact the conti/sketch pipelines feed as the character
+   *  reference: "original" (photo_url) / "sheet" / "board". Resolved by
+   *  pickCharacterRefUrl (falls back to photo_url). */
+  character_ref_mode?: "original" | "sheet" | "board" | null;
   /** User-controlled off-switch for the sheet. `false` means "ignore
    *  sheet, fall back to photo_url"; null/undefined/true keep sheet
    *  preference. Mirrors src/components/assets/types.tsx. */

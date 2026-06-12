@@ -1,5 +1,6 @@
 import { supabase } from "./supabase";
 import { KNOWLEDGE_MOOD_CINEMATICS } from "./directorKnowledgeBase";
+import { pickCharacterRefUrl } from "./characterSheetStore";
 
 /* ━━━━━ Types ━━━━━ */
 export interface MoodGenerateOptions {
@@ -48,6 +49,12 @@ export interface MoodGenerateOptions {
     outfit_description?: string | null;
     space_description?: string | null;
     role_description?: string | null;
+    // 캐릭터/배경/소품 참조 선택(원본·시트·보드)을 콘티 본생성과 동일하게 존중하기
+    // 위한 필드. pickCharacterRefUrl 이 이 값으로 보드/시트/원본을 고른다.
+    character_sheet_url?: string | null;
+    character_board_url?: string | null;
+    character_ref_mode?: "original" | "sheet" | "board" | null;
+    use_character_sheet?: boolean | number | null;
   }[];
   videoFormat: string;
   count?: number;
@@ -1003,7 +1010,11 @@ function buildShotRefUrls(tagged: MoodGenerateOptions["assets"]): string[] {
   const urls: string[] = [];
   const seen = new Set<string>();
   for (const a of tagged) {
-    const u = a.photo_url;
+    // 콘티 본생성(buildAssetImageUrls)과 동일하게 character_ref_mode 를 존중해
+    // 보드/시트/원본을 고른다(없으면 photo_url 폴백). 과거엔 photo_url 만 읽어서
+    // 보드로 등록한 캐릭터도 원본 사진이 참조로 들어가, 원본 배경의 소품 등이
+    // 생성 이미지에 새어 들어오는 문제가 있었다.
+    const u = pickCharacterRefUrl(a);
     if (!u || seen.has(u) || urls.length >= MAX_REFS) continue;
     urls.push(u);
     seen.add(u);

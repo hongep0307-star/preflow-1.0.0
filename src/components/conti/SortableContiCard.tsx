@@ -12,14 +12,16 @@ import {
   X,
   Check,
   ChevronDown,
-  Images,
-  SlidersHorizontal,
+  SwitchCamera,
+  Loader2,
   ClipboardPaste,
   Copy,
 } from "lucide-react";
+import { PhotoStar } from "@/components/icons/PhotoStar";
+import { DotGrid3x3 } from "@/components/icons/DotGrid3x3";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { KR, DEFAULT_CONTI_INFO_VISIBILITY, type Scene, type Asset, type ContiInfoVisibility } from "./contiTypes";
+import { KR, DEFAULT_CONTI_INFO_VISIBILITY, normalizeGridHistory, type Scene, type Asset, type ContiInfoVisibility } from "./contiTypes";
 import { InlineField, MetaRows, DescriptionField, SidePanel, resolveAsset } from "./contiInternals";
 import {
   DropdownMenu,
@@ -47,6 +49,7 @@ import {
 } from "@/lib/transitionGrammar";
 import { useUiLanguage, useT } from "@/lib/uiLanguage";
 import { getAllSketchGensForScene, subscribeSketchGen } from "./sketchState";
+import { isCamVarGenerating as isCamVarGeneratingStore, subscribeCamVarGen } from "./camVarGridState";
 
 /* ClipboardItem 의 sanitized write 가 신뢰할 수 있는 MIME 은 사실상 png/jpeg
    뿐이라, gif/webp 등은 canvas 로 png 변환해 복사한다. fetch 한 blob 을
@@ -1186,6 +1189,19 @@ export const SortableContiCard = memo(
     const isSketchGenerating = sketchGenStates.some((g) => !!g.promise);
     const sketchProgressRatio =
       sketchGeneratingTotal > 0 ? Math.min(1, sketchGeneratingDone / sketchGeneratingTotal) : 0;
+    // Camera-variation grid generation runs in the background (survives the
+    // modal closing) — surface a spinner on the Camera Variations quick icon so
+    // it's clear which scene is still generating.
+    const isCamVarGenerating = useSyncExternalStore(
+      useCallback(
+        (onStoreChange) => subscribeCamVarGen(scene.project_id, scene.id, onStoreChange),
+        [scene.project_id, scene.id],
+      ),
+      useCallback(() => isCamVarGeneratingStore(scene.project_id, scene.id), [scene.project_id, scene.id]),
+      () => false,
+    );
+    // 생성된 카메라 베리에이션 그리드 개수 — 스케치 카운트 뱃지와 동일하게 노출한다.
+    const camVarGridCount = normalizeGridHistory(scene.camera_variation_grid).length;
 
     const STAGE_LABELS: Record<GeneratingStage, string> = {
       queued: t("conti.queued"),
@@ -1875,10 +1891,13 @@ export const SortableContiCard = memo(
                   alignItems: "center",
                   justifyContent: "center",
                   background: menuOpen
-                    ? "rgba(255,255,255,0.92)"
+                    ? "rgba(0,0,0,0.82)"
                     : moreHov
                       ? "rgba(255,255,255,0.22)"
                       : "rgba(0,0,0,0.42)",
+                  // 열림 상태는 흰색 대신 어두운 톤 + 옅은 흰 링으로 "눌림"을
+                  // 표현해 다크 UI 전반과 톤을 통일한다.
+                  boxShadow: menuOpen ? "inset 0 0 0 1px rgba(255,255,255,0.28)" : "none",
                   backdropFilter: "blur(6px)",
                   transition: "background 0.12s",
                 }}
@@ -1888,7 +1907,7 @@ export const SortableContiCard = memo(
                   height={14}
                   viewBox="0 0 24 24"
                   fill="none"
-                  stroke={menuOpen ? "#111" : "#fff"}
+                  stroke="#fff"
                   strokeWidth={2.5}
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -1908,7 +1927,7 @@ export const SortableContiCard = memo(
                 Variants 에는 노출.
                 Sketches 는 hasImage 여부와 무관하게 노출 — 오히려 콘티 이미지가
                 없을 때가 주 사용 케이스(구도 탐색). */}
-            {(onSketches || (hasImage && onUseAsStyle)) && (
+            {(onSketches || (hasImage && (onCameraVariations || onUseAsStyle))) && (
               <div
                 style={{
                   position: "absolute",
@@ -1920,9 +1939,9 @@ export const SortableContiCard = memo(
                   // Sketches 생성중일 땐 호버와 무관하게 노출 — 사용자가 콘티탭에
                   // 와 있는 동안 "지금 sketches 가 돌고 있구나" 를 즉시 인지할 수
                   // 있도록 (아이콘 안의 progress ring + count 가 그대로 동작).
-                  opacity: imgHov || isSketchGenerating ? 1 : 0,
+                  opacity: imgHov || isSketchGenerating || isCamVarGenerating ? 1 : 0,
                   transition: "opacity 0.15s",
-                  pointerEvents: imgHov || isSketchGenerating ? "auto" : "none",
+                  pointerEvents: imgHov || isSketchGenerating || isCamVarGenerating ? "auto" : "none",
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
               >
@@ -1989,7 +2008,7 @@ export const SortableContiCard = memo(
                           />
                         </span>
                       ) : (
-                        <Images className="w-3.5 h-3.5" />
+                        <SwitchCamera className="w-3.5 h-3.5" />
                       )}
                       {(isSketchGenerating || sketchCount > 0) && (
                         <span className="text-2xs font-bold tracking-wide">
@@ -1999,6 +2018,36 @@ export const SortableContiCard = memo(
                     </button>
                   );
                 })()}
+                {hasImage && onCameraVariations && (
+                  <button
+                    title={
+                      camVarGridCount > 0
+                        ? t("conti.cameraVariationsCount", { count: camVarGridCount })
+                        : t("conti.cameraVariations")
+                    }
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onCameraVariations();
+                    }}
+                    className="flex items-center justify-center gap-1 min-w-[28px] h-7 px-1.5 rounded-none text-white hover:opacity-90"
+                    style={{
+                      background: isCamVarGenerating || camVarGridCount > 0 ? KR : "rgba(0,0,0,0.55)",
+                      border: isCamVarGenerating
+                        ? "1px solid rgba(255,255,255,0.55)"
+                        : "1px solid rgba(255,255,255,0.12)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {isCamVarGenerating ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <DotGrid3x3 className="w-3.5 h-3.5" />
+                    )}
+                    {(isCamVarGenerating || camVarGridCount > 0) && (
+                      <span className="text-2xs font-bold tracking-wide">{camVarGridCount}</span>
+                    )}
+                  </button>
+                )}
                 {hasImage && onUseAsStyle && (
                   <button
                     title={t("conti.useAsStyle")}
@@ -2013,7 +2062,7 @@ export const SortableContiCard = memo(
                       cursor: "pointer",
                     }}
                   >
-                    <SlidersHorizontal className="w-3.5 h-3.5" />
+                    <PhotoStar className="w-3.5 h-3.5" />
                   </button>
                 )}
               </div>

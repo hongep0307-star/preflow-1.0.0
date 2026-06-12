@@ -402,6 +402,88 @@ export async function refineTileToFormat(opts: {
   });
 }
 
+/** Camera-variation tile upscale prompt — keep framing, never add bars, never zoom out. */
+const cameraTileUpscalePrompt =
+  `Upscale this image into a crisp, high-resolution cinematic film still. ` +
+  `Reproduce the EXACT same composition, framing, camera angle, subjects, poses, props, background, lighting, and color grade — do not crop, zoom, pan, reframe, relocate, or rescale anything. ` +
+  `Keep the subject at the EXACT same size and position within the frame: do NOT zoom out, pull the camera back, shrink the subject, or add any extra headroom, floor, sky, or empty space around it. Match the input's crop edges 1:1 so the subject fills the same proportion of the frame as in the input. ` +
+  `The entire frame is already filled by the scene: do NOT add any black, white, grey, or blurred bars, letterbox bands, borders, vignette, or margins anywhere — fill edge-to-edge with the existing scene. ` +
+  `Preserve all on-screen text, UI, logos, and typography exactly as they appear. Render photorealistic, sharp detail across the whole frame.`;
+
+/** Load a data URL just to read its natural pixel dimensions. */
+function measureDataUrl(dataUrl: string): Promise<{ w: number; h: number }> {
+  if (typeof document === "undefined") return Promise.resolve({ w: 0, h: 0 });
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+    img.onerror = () => resolve({ w: 0, h: 0 });
+    img.src = dataUrl;
+  });
+}
+
+/** Nearest gpt-image edits output size for a width/height ratio.
+ *  gpt-image supports 1536x1024 (3:2), 1024x1536 (2:3), 1024x1024 (1:1). */
+function gptSizeForRatio(ratio: number): string {
+  if (ratio >= 1.2) return "1536x1024";
+  if (ratio <= 0.85) return "1024x1536";
+  return "1024x1024";
+}
+
+/**
+ * Camera-variation tile refine via GPT IMAGE 2 at the tile's OWN aspect ratio.
+ *
+ * Used for the VERTICAL (9:16) project case: the gpt-image grid cell is 2:3,
+ * which nano-banana (9:16/16:9/1:1 only) can't reproduce — it forces the 2:3
+ * tile into a taller 9:16 frame and extends the scene vertically, so the
+ * subject shrinks (zoom-out) and stretched/placeholder bands appear top/bottom.
+ * gpt-image edits supports 2:3 natively and (with input_fidelity) upscales
+ * faithfully at the matching aspect, so there's NO reframe → no bands / no
+ * zoom. The scene card crops to the display ratio like every other conti image.
+ *
+ * Returns the persisted public URL of the refined cut. Throws on failure so the
+ * caller can fall back to center-crop.
+ */
+export async function refineCameraTileGpt(opts: {
+  tileDataUrl: string;
+  projectId: string;
+  sceneNumber: number;
+  videoFormat: string;
+}): Promise<string> {
+  const { w, h } = await measureDataUrl(opts.tileDataUrl);
+  const size =
+    w > 0 && h > 0
+      ? gptSizeForRatio(w / h)
+      : (REFINE_SIZE_BY_FORMAT[opts.videoFormat] ?? REFINE_SIZE_BY_FORMAT.horizontal);
+  const srcUrl = await saveLocalImageBase64({
+    base64: dataUrlToBase64(opts.tileDataUrl),
+    projectId: opts.projectId,
+    sceneNumber: opts.sceneNumber,
+    suffix: "camvar-src",
+    folder: "mood",
+  });
+  // gpt-image-2 edits at the tile's own aspect (preferredAngleModel route →
+  // /v1/images/edits with input_fidelity). Persists + returns a public URL.
+  const { data, error } = await supabase.functions.invoke("openai-image", {
+    body: {
+      mode: "inpaint",
+      preferredAngleModel: "gpt-image-2",
+      quality: "high",
+      sourceImageUrl: srcUrl,
+      referenceImageUrls: [],
+      prompt: cameraTileUpscalePrompt,
+      projectId: opts.projectId,
+      sceneNumber: opts.sceneNumber,
+      imageSize: size,
+    },
+  });
+  if (error) throw new Error(error.message);
+  const d = data as { publicUrl?: string; url?: string; error?: string } | null;
+  if (d?.error) throw new Error(d.error);
+  const url = d?.publicUrl ?? d?.url ?? null;
+  if (!url) throw new Error("camera-tile gpt refine returned no image URL");
+  return url;
+}
+
 /** Upload the grid template to the throwaway `mood` bucket and return its URL.
  *  Returns null on any failure so the caller proceeds without the template. */
 async function uploadGridTemplate(projectId: string, dataUrl: string): Promise<string | null> {

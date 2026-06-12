@@ -312,6 +312,14 @@ function createTables(d: Database.Database) {
     d.exec(`ALTER TABLE scenes ADD COLUMN sequence INTEGER`);
   } catch (_) { /* column already exists */ }
 
+  // camera_variation_grid: 카메라 베리에이션 9분할 그리드의 영구 저장.
+  // JSON { rawUrl, generatedAt } — rawUrl 은 스토리지에 저장된 3×3 그리드 이미지.
+  // 새로고침 후에도 모달이 rawUrl 을 다시 9분할해 타일을 복원한다(타일 자체는
+  // 저장하지 않아 DB 비대화를 피함). 씬 행 lifecycle 에 묶임(FK cascade).
+  try {
+    d.exec(`ALTER TABLE scenes ADD COLUMN camera_variation_grid TEXT`);
+  } catch (_) { /* column already exists */ }
+
   d.exec(`
     CREATE TABLE IF NOT EXISTS assets (
       id TEXT PRIMARY KEY,

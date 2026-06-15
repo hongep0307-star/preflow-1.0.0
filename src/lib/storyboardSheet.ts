@@ -243,6 +243,89 @@ export async function centerCropToFormatDataUrl(srcDataUrl: string, format: stri
   return canvas.toDataURL("image/png");
 }
 
+/** Default vertical anchor for the camera-tile reframe: 0 = top edge, 0.5 =
+ *  center, 1 = bottom. gpt-image refines a tile to its nearest native aspect
+ *  (3:2 / 2:3 / 1:1), which for a 16:9 project is TALLER than the display cut,
+ *  so the card has to trim top/bottom. A centered trim cuts subjects' heads
+ *  (they sit in the upper third); biasing the crop window UP keeps the head. */
+const HEADROOM_VERTICAL_ANCHOR = 0.25;
+
+/**
+ * Reframe a refined camera-tile cut to the project's exact display aspect with a
+ * deterministic client-side canvas crop, then persist + return the new public
+ * URL. gpt-image only outputs 3:2 / 2:3 / 1:1, so the refined cut rarely matches
+ * the project format; baking the crop here means the saved cut already fits the
+ * scene card (no per-card re-crop, no manual thumbnail nudge).
+ *
+ * When the cut is TALLER than the display aspect (e.g. 3:2 in a 16:9 project),
+ * the vertical trim is biased toward the TOP (`verticalAnchor`, default 0.25) so
+ * the subject's head is preserved instead of symmetrically cut.
+ *
+ * Falls back to `srcUrl` unchanged if canvas is unavailable, the image can't be
+ * read, the aspect already matches, or persistence fails — so it never blocks
+ * the apply flow.
+ */
+export async function reframeCutToFormat(opts: {
+  srcUrl: string;
+  projectId: string;
+  sceneNumber: number;
+  videoFormat: string;
+  verticalAnchor?: number;
+}): Promise<string> {
+  if (typeof document === "undefined") return opts.srcUrl;
+  const targetRatio = FORMAT_RATIO[opts.videoFormat] ?? FORMAT_RATIO.horizontal;
+  let img: HTMLImageElement;
+  try {
+    img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.crossOrigin = "anonymous";
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error(`refined cut load failed: ${opts.srcUrl}`));
+      el.src = opts.srcUrl;
+    });
+  } catch {
+    return opts.srcUrl;
+  }
+  const sw = img.naturalWidth;
+  const sh = img.naturalHeight;
+  if (!sw || !sh) return opts.srcUrl;
+  const srcRatio = sw / sh;
+  // Already matches the display aspect (within tolerance) → nothing to crop.
+  if (Math.abs(srcRatio - targetRatio) < 0.01) return opts.srcUrl;
+  let cw = sw;
+  let ch = sh;
+  let sx = 0;
+  let sy = 0;
+  if (srcRatio > targetRatio) {
+    // too wide → trim sides, centered (no head-cut risk on the horizontal axis)
+    cw = Math.round(sh * targetRatio);
+    sx = Math.round((sw - cw) / 2);
+  } else {
+    // too tall → trim top/bottom with a top bias so heads survive
+    ch = Math.round(sw / targetRatio);
+    const anchor = Math.min(1, Math.max(0, opts.verticalAnchor ?? HEADROOM_VERTICAL_ANCHOR));
+    sy = Math.round((sh - ch) * anchor);
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = cw;
+  canvas.height = ch;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return opts.srcUrl;
+  try {
+    ctx.drawImage(img, sx, sy, cw, ch, 0, 0, cw, ch);
+    const dataUrl = canvas.toDataURL("image/png");
+    return await saveLocalImageBase64({
+      base64: dataUrlToBase64(dataUrl),
+      projectId: opts.projectId,
+      sceneNumber: opts.sceneNumber,
+      suffix: "camvar-cut",
+      folder: "contis",
+    });
+  } catch {
+    return opts.srcUrl;
+  }
+}
+
 /**
  * Pad (letterbox) a tile to the project's cut aspect WITHOUT cropping any
  * content. Used before the NB2 refine so the model OUT-PAINTS the added bands

@@ -1,6 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { HashRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
@@ -9,8 +9,9 @@ import AuroraBackground from '@/components/AuroraBackground';
 import { UiLanguageProvider, useT } from '@/lib/uiLanguage';
 import { PageShell } from '@/components/PageShell';
 import Index from './pages/Index';
-import SettingsPage from './pages/SettingsPage';
 import NotFound from './pages/NotFound';
+import SettingsModal from '@/components/settings/SettingsModal';
+import { SettingsModalProvider } from '@/lib/settingsModal';
 
 /* 주요 페이지를 *eager* 가 아닌 *lazy* import 로 분할.
  *
@@ -95,6 +96,7 @@ const App = () => (
         <Toaster />
         <AuroraBackground />
         <HashRouter>
+          <SettingsModalProvider>
           <div style={{ position: "relative", zIndex: 1 }}>
             <ErrorBoundary label="App">
               {/* lazy 페이지 chunk 가 fetch 되는 동안의 fallback.
@@ -104,7 +106,11 @@ const App = () => (
               <Suspense fallback={<RouteSuspenseFallback />}>
                 <Routes>
                   <Route path="/" element={<Index />} />
-                  <Route path="/settings" element={<SettingsPage />} />
+                  {/* 설정은 더 이상 라우트가 아니라 팝업 모달이다(SettingsModal).
+                      과거 `#/settings` 해시가 남아 재진입하는 경우 NotFound 로
+                      떨어지지 않도록 루트로 돌려보낸다(Index 가 활성 워크스페이스에
+                      맞춰 dashboard/library 로 재분배). */}
+                  <Route path="/settings" element={<Navigate to="/" replace />} />
                   <Route element={<ProtectedRoute />}>
                     <Route path="/dashboard" element={<DashboardPage />} />
                     {/* /library 는 아래 LibraryKeepMountSlot 이 처리한다.
@@ -131,7 +137,11 @@ const App = () => (
                   sidebar via <WorkspaceSwitcher /> — see DashboardPage,
                   LibrarySidebar, and ProjectSidebar. */}
             </ErrorBoundary>
+            {/* 설정 팝업 — 전역에서 한 번만 마운트. openSettings() 로 라우트 이동
+                없이 현재 화면 위에 띄운다(닫으면 작업하던 위치 그대로 유지). */}
+            <SettingsModal />
           </div>
+          </SettingsModalProvider>
         </HashRouter>
       </TooltipProvider>
     </UiLanguageProvider>

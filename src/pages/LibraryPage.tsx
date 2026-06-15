@@ -1,5 +1,6 @@
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent, type MouseEvent } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { useSettingsModal } from "@/lib/settingsModal";
 import { Star, Plus, X, HardDrive, FolderInput, Settings as SettingsIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -912,6 +913,7 @@ const VARIATION_ANGLE_DIRECTIVES = [
 
 const LibraryPage = () => {
   const navigate = useNavigate();
+  const { openSettings } = useSettingsModal();
   const location = useLocation();
   const t = useT();
   const { language: uiLanguage } = useUiLanguage();
@@ -6876,11 +6878,10 @@ const LibraryPage = () => {
           )}
           <div className="w-px h-4 bg-border-subtle flex-shrink-0" />
           <button
-            /* Settings 진입 시 어디서 왔는지 state 로 전달 — SettingsPage 의
-               back 버튼이 무조건 /dashboard 로 가지 않고 라이브러리로 돌아오게.
-               기본값(state 미지정)은 dashboard 라 다른 진입 경로(Navbar 등)는
-               손대지 않아도 동작이 그대로 유지된다. */
-            onClick={() => navigate("/settings", { state: { from: "/library" } })}
+            /* 설정을 팝업으로 — 라이브러리 화면을 떠나지 않고 현재 위치를 유지한다.
+               surface="library" 로 열어 이미지 생성 행이 라이브러리 기능 우선으로
+               정렬되게 한다. */
+            onClick={() => openSettings({ surface: "library" })}
             className="flex items-center gap-1.5 text-body text-muted-foreground hover:text-foreground transition-colors"
           >
             <SettingsIcon size={13} />

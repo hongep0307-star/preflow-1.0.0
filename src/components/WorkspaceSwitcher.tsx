@@ -79,8 +79,6 @@ interface Props {
   variant?: Variant;
 }
 
-const shouldShow = (pathname: string) => pathname !== "/settings";
-
 // 충돌 사본 경고는 세션당 한 번만 — WorkspaceSwitcher 가 여러 variant 로
 // 동시에 마운트돼도(full/compact/icon) 토스트가 중복되지 않도록 모듈 레벨
 // 가드. 페이지 hard reload(활성 전환 시) 후엔 모듈이 새로 평가되므로
@@ -546,11 +544,8 @@ export const WorkspaceSwitcher = ({ variant = "full" }: Props) => {
   const [renameTarget, setRenameTarget] = useState<WorkspaceMeta | null>(null);
   const [removeTarget, setRemoveTarget] = useState<{ ws: WorkspaceMeta; mode: "disconnect" | "delete" } | null>(null);
   const [lockConflict, setLockConflict] = useState<{ lock: WorkspaceLockInfo; targetId: string } | null>(null);
-  // Settings 의 "Hide default workspaces" 토글. 모든 훅 호출은 early return
-  // (`if (!shouldShow(...))`) 보다 *위* 에 와야 React 의 훅 호출 순서 invariant
-  // 가 깨지지 않는다 — 과거에는 이 호출이 early return 뒤 line ~611 에 있어
-  // /settings ↔ 그 외 라우트를 오갈 때 호출 횟수가 달라져 즉시 throw 가 가능
-  // 했다. 사용은 아래 popover 렌더 분기에서 그대로 한다.
+  // Settings 의 "Hide default workspaces" 토글. (설정이 팝업 모달로 바뀌어 더는
+  // /settings 라우트가 없으므로 과거의 early-return 분기는 제거됐다.)
   const hideDefault = useHideDefaultWorkspaces();
 
   // OneDrive 충돌 사본이 활성 워크스페이스에 있으면 세션당 1회 경고. 워크
@@ -584,8 +579,6 @@ export const WorkspaceSwitcher = ({ variant = "full" }: Props) => {
     active ??
     workspaces[0] ??
     null;
-
-  if (!shouldShow(location.pathname)) return null;
 
   const handleActivate = async (ws: WorkspaceMeta) => {
     setOpen(false);

@@ -19,6 +19,9 @@
 export type ImageGenFeature = "conti" | "style" | "angle" | "sketch" | "mood" | "sheet" | "storyboardSheet" | "variation" | "canvas" | "inpaint" | "cameraVariation";
 export type GptQuality = "low" | "medium" | "high";
 
+/** 설정 모달이 열린 "공간". 이미지 생성 행의 정렬/그룹 분리에 쓰인다. */
+export type SettingsSurface = "project" | "library" | "dashboard";
+
 export const GPT_QUALITIES: GptQuality[] = ["low", "medium", "high"];
 
 export interface ImageGenModelOption {
@@ -203,6 +206,42 @@ const SPEC_BY_FEATURE: Record<ImageGenFeature, ImageGenFeatureSpec> =
 
 export function getFeatureSpec(feature: ImageGenFeature): ImageGenFeatureSpec {
   return SPEC_BY_FEATURE[feature];
+}
+
+/**
+ * 공간별 이미지 생성 기능 표시 순서.
+ *
+ * 설정 모달이 열린 공간(surface)에 따라 "그 공간에서 자주 쓰는 기능" 을 위에
+ * 워크플로우 순서로 모으고, 나머지는 호출부에서 '기타' 그룹으로 분리한다.
+ *   · project — 콘티 워크플로우 순서(콘티 생성 → 스타일 → 시트 → 앵글 변경 →
+ *     앵글 프리셋 → 인페인트 → 구도 다양화).
+ *   · library — 라이브러리/캔버스 기능(레퍼런스 베리에이션 → 캔버스 → 시트 → 무드).
+ * dashboard 는 특정 워크플로우에 묶이지 않아 기본 배열 순서를 그대로 쓴다.
+ *
+ * 단일 출처를 유지하기 위해 여기 id 배열만 고치면 정렬/그룹이 함께 바뀐다.
+ */
+const SURFACE_FEATURE_ORDER: Record<Exclude<SettingsSurface, "dashboard">, ImageGenFeature[]> = {
+  project: ["conti", "style", "storyboardSheet", "angle", "cameraVariation", "inpaint", "sketch"],
+  library: ["variation", "canvas", "sheet", "mood"],
+};
+
+/**
+ * 공간별로 정렬된 이미지 생성 기능을 { related, other } 로 분리해 돌려준다.
+ * related = 그 공간 우선 기능(워크플로우 순서), other = 나머지(원래 배열 순서).
+ * dashboard 는 전부 related 로 두고 그룹 분리를 하지 않는다(other 빈 배열).
+ */
+export function orderImageGenFeatures(surface: SettingsSurface): {
+  related: ImageGenFeatureSpec[];
+  other: ImageGenFeatureSpec[];
+} {
+  if (surface === "dashboard") {
+    return { related: [...IMAGE_GEN_FEATURES], other: [] };
+  }
+  const order = SURFACE_FEATURE_ORDER[surface];
+  const related = order.map((f) => SPEC_BY_FEATURE[f]).filter(Boolean);
+  const relatedSet = new Set(order);
+  const other = IMAGE_GEN_FEATURES.filter((s) => !relatedSet.has(s.feature));
+  return { related, other };
 }
 
 const modelKey = (feature: ImageGenFeature) => `ff_imggen_model_${feature}`;

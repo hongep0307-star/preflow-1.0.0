@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useCallback, lazy, Suspense } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
+import { useSettingsModal } from "@/lib/settingsModal";
 import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import {
@@ -117,6 +118,7 @@ const readProjectFromDashboardCache = (
 const ProjectPage = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { openSettings } = useSettingsModal();
   const t = useT();
   const { language: uiLanguage } = useUiLanguage();
   const [searchParams] = useSearchParams();
@@ -775,7 +777,7 @@ const ProjectPage = () => {
               버튼이 추가되면서 좌측 pill 들은 자연히 왼쪽으로 밀려 설정 영역을 피함. */}
           <div className="w-px h-4 bg-border-subtle flex-shrink-0" />
           <button
-            onClick={() => navigate("/settings")}
+            onClick={() => openSettings({ surface: "project" })}
             className="flex items-center text-muted-foreground hover:text-foreground transition-colors"
             title={t("common.settings")}
           >

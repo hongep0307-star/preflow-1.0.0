@@ -1,6 +1,7 @@
 import { Settings, HardDrive } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
+import { useSettingsModal } from "@/lib/settingsModal";
 import { BrandLogo } from "@/components/common/BrandLogo";
 import { MetaPill } from "@/components/common/ui-primitives";
 import { TopbarToastCarveOut } from "@/components/common/TopbarToastCarveOut";
@@ -24,6 +25,7 @@ const Divider = () => <div className="w-px h-4 bg-border-subtle flex-shrink-0" /
 // ── 메인 ───────────────────────────────────────────────
 export const Navbar = ({ folderName, projectTitle, tabName, videoFormat, sceneCount }: NavbarProps) => {
   const navigate = useNavigate();
+  const { openSettings } = useSettingsModal();
   const t = useT();
   const isDashboard = !projectTitle;
   const projectWorkspaceName = useActiveWorkspaceName("project");
@@ -67,7 +69,8 @@ export const Navbar = ({ folderName, projectTitle, tabName, videoFormat, sceneCo
   }, [isDashboard]);
 
   const handleSettings = () => {
-    navigate("/settings");
+    // 설정을 팝업으로 — 현재 라우트(콘티 탭 등)는 그대로 유지된다.
+    openSettings({ surface: isDashboard ? "dashboard" : "project" });
   };
 
   return (

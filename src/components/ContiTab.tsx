@@ -6842,7 +6842,7 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
               setSceneStages((prev) => ({ ...prev, [target.id]: "generating" }));
               setGeneratingSceneVersionMap((prev) => ({ ...prev, [target.id]: activeVersionIdRef.current }));
               try {
-                const { refineCameraTileGpt, centerCropToFormatDataUrl } =
+                const { refineCameraTileGpt, centerCropToFormatDataUrl, reframeCutToFormat } =
                   await import("@/lib/storyboardSheet");
                 const { trimWhiteBorderDataUrl, dataUrlToBase64 } = await import("@/lib/contactSheet");
                 const trimmed = await trimWhiteBorderDataUrl(tileDataUrl);
@@ -6855,6 +6855,17 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
                   // 출력 크기로 reframe 없이 업스케일하므로 모든 포맷에서 타일 현상이 없다.
                   refined = await refineCameraTileGpt({
                     tileDataUrl: trimmed,
+                    projectId,
+                    sceneNumber: target.scene_number,
+                    videoFormat,
+                  });
+                  // gpt-image 출력(3:2/2:3/1:1)은 프로젝트 표시 비율(예: 16:9)과 거의
+                  // 안 맞아서, 카드가 매번 센터 크롭 → 세로가 더 긴 컷은 인물 머리가
+                  // 잘렸다. 저장 단계에서 표시 비율로 상단 바이어스 크롭을 구워두면
+                  // 카드 추가 크롭/수동 썸네일 이동이 불필요해진다. 실패해도 원본 URL로
+                  // 그대로 폴백한다.
+                  refined = await reframeCutToFormat({
+                    srcUrl: refined,
                     projectId,
                     sceneNumber: target.scene_number,
                     videoFormat,

@@ -1,10 +1,8 @@
-import { useState, useEffect, useMemo, useRef, type ReactNode } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useState, useEffect, useRef, type ReactNode } from "react";
 import {
   Eye,
   EyeOff,
   Loader2,
-  ArrowLeft,
   Check,
   Key,
   Cpu,
@@ -26,12 +24,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { LOCAL_SERVER_AUTH_HEADERS, LOCAL_SERVER_BASE_URL } from "@shared/constants";
 import ModelPicker from "@/components/common/ModelPicker";
 import { invalidateSettingsCache } from "@/lib/settingsCache";
-import { BrandLogo } from "@/components/common/BrandLogo";
-import { TopbarToastCarveOut } from "@/components/common/TopbarToastCarveOut";
-import { WindowControls } from "@/components/common/WindowControls";
 import { useUiLanguage, type UiLanguage } from "@/lib/uiLanguage";
 import {
   DASHBOARD_CARDS_PER_ROW_OPTIONS,
@@ -49,7 +50,6 @@ import {
 } from "@/lib/workspacePreferences";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
-  IMAGE_GEN_FEATURES,
   IMAGE_GEN_MODEL_LABELS,
   GPT_QUALITIES,
   modelIsGpt,
@@ -57,9 +57,13 @@ import {
   getGptQualityDefault,
   setImageModelDefault,
   setGptQualityDefault,
+  orderImageGenFeatures,
+  IMAGE_GEN_FEATURES,
   type ImageGenFeature,
+  type ImageGenFeatureSpec,
   type GptQuality,
 } from "@/lib/imageGenPreference";
+import { IMAGE_GEN_FEATURE_ICONS } from "@/components/settings/imageGenIcons";
 import {
   getAiOutputLanguageMode,
   getAiTagLanguageMode,
@@ -73,6 +77,10 @@ import { LibraryAiCleanupDialog } from "@/components/library/LibraryAiCleanupDia
 import { KoreanAliasExpandDialog } from "@/components/library/KoreanAliasExpandDialog";
 import { OptimizeThumbnailsDialog } from "@/components/library/OptimizeThumbnailsDialog";
 import { cn } from "@/lib/utils";
+import {
+  useSettingsModal,
+  type SettingsCategoryId,
+} from "@/lib/settingsModal";
 
 const settingsApi = {
   get: async () => {
@@ -82,7 +90,7 @@ const settingsApi = {
     });
     return res.json();
   },
-  set: async (s: any) => {
+  set: async (s: SettingsState) => {
     const res = await fetch(`${LOCAL_SERVER_BASE_URL}/settings/set`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...LOCAL_SERVER_AUTH_HEADERS },
@@ -99,23 +107,12 @@ interface SettingsState {
   google_cloud_project_id: string;
 }
 
-/* ── 좌측 사이드 네비게이션 카테고리 정의 ──
- *
- * 옵션 A 의 핵심 — 기존 2-탭(API Keys / Models & Preferences) 구조가
- * "한 탭에 카드 3개 + 컨트롤 7개" 로 폭주하던 문제를 해결한다.
- *
+/* ── 좌측 카테고리 정의 ──
  *   1) "API Keys"        — 4 fields (제공사 인증)
- *   2) "Models"          — 2 model pickers
- *   3) "Language"        — 전체 언어(UI) + AI 언어(출력/태그 머지) 두 하위 섹션
- *   4) "Display & UI"    — dashboard 컬럼 + 토글 2 + 하단 Maintenance sub-section
- *
- * Maintenance(라이브러리 AI 정리 / 썸네일 최적화) 는 별도 카테고리가
- * 아니라 Display & UI 패널 하단의 "1회성 작업" sub-section 으로 배치 —
- * "이 페이지는 정리 도구가 아니라 설정 페이지" 라는 사용자 모델을 유지하면서,
- * 인접한 카테고리(Display & UI) 안에서 발견될 수 있게 한다.
+ *   2) "Models"          — 모델 picker 2 + 기능별 이미지 생성 디폴트
+ *   3) "Language"        — 전체 언어(UI) + AI 언어(출력/태그)
+ *   4) "Display & UI"    — dashboard 컬럼 + 토글 2 + Maintenance sub-section
  */
-type SettingsCategoryId = "keys" | "models" | "language" | "displayUi";
-
 interface CategoryDef {
   id: SettingsCategoryId;
   labelKey: string;
@@ -130,29 +127,37 @@ const CATEGORIES: CategoryDef[] = [
   { id: "displayUi",  labelKey: "settings.nav.displayUi",  descKey: "settings.displayUiCardDesc",  icon: Monitor },
 ];
 
-const SettingsPage = () => {
-  const navigate = useNavigate();
-  const location = useLocation();
+/**
+ * 설정 모달 — 전역 마운트.
+ *
+ * Radix Dialog 는 닫힐 때 Content 서브트리를 언마운트하므로, 실제 본문은
+ * <SettingsModalBody> 로 분리해 매 오픈마다 새로 마운트되게 한다. 이 덕에
+ * settingsApi.get() 의 마운트 이펙트가 오픈마다 다시 돌아 API 키가 최신값으로
+ * 로드된다(영구 마운트였다면 stale 됐을 부분).
+ */
+const SettingsModal = () => {
+  const { open, closeSettings } = useSettingsModal();
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        if (!o) closeSettings();
+      }}
+    >
+      <DialogContent
+        size="wide"
+        aria-describedby={undefined}
+        className="flex h-[80vh] max-h-[760px] flex-col gap-0 overflow-hidden p-0"
+      >
+        <SettingsModalBody />
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+const SettingsModalBody = () => {
+  const { surface, category, setCategory } = useSettingsModal();
   const { language, setLanguage, t } = useUiLanguage();
-
-  /* 어디서 Settings 로 진입했는지 — 호출부가 navigate("/settings",
-     { state: { from: "/library" } }) 식으로 실어 보내면 그 경로로 돌아간다.
-     state 가 없거나 형태가 이상하면 기존 동작(/dashboard) 으로 fallback. */
-  const { backPath, backLabel } = useMemo(() => {
-    const rawFrom = (location.state as { from?: string } | null)?.from;
-    if (typeof rawFrom === "string" && rawFrom.startsWith("/library")) {
-      return { backPath: "/library", backLabel: t("common.library") };
-    }
-    return { backPath: "/dashboard", backLabel: t("common.dashboard") };
-  }, [location.state, t]);
-
-  /* 활성 카테고리 — 좌측 레일에서 선택. 라우트 state 에서 초기 카테고리를
-     실어 보낼 수도 있게 했지만 (settings:{category:"models"} 같은 식의 향후
-     호출부 확장 여지), 현재는 기본값 "keys" 로 진입한다. */
-  const [category, setCategory] = useState<SettingsCategoryId>(() => {
-    const fromState = (location.state as { category?: SettingsCategoryId } | null)?.category;
-    return fromState ?? "keys";
-  });
 
   const [settings, setSettings] = useState<SettingsState>({
     anthropic_api_key: "",
@@ -185,17 +190,12 @@ const SettingsPage = () => {
   const [aiCleanupOpen, setAiCleanupOpen] = useState(false);
   const [thumbBackfillOpen, setThumbBackfillOpen] = useState(false);
   const [koreanAliasOpen, setKoreanAliasOpen] = useState(false);
-  /* AI 언어 정책 — 두 축(Display, Tag) 모두 같은 이벤트로 구독한다.
-     Inspector 의 토글이 Display 를 바꾸면 여기 Select 도 즉시 따라온다. */
+  /* AI 언어 정책 — 두 축(Display, Tag) 모두 같은 이벤트로 구독한다. */
   const [aiOutputLang, setAiOutputLang] = useState<AiOutputLanguageMode>(getAiOutputLanguageMode);
   const [aiTagLang, setAiTagLang] = useState<AiTagLanguageMode>(getAiTagLanguageMode);
 
-  /* 자동 저장 → 인라인 "Saved" 칩 피드백.
-     API Keys 외의 모든 컨트롤(언어 select, dashboard 컬럼, 토글들)은
-     변경 즉시 영구화된다. "Save Settings" 버튼이 사실상 키만 저장하던 점이
-     기존의 혼란 원인이었으므로, 자동 저장된 변경은 패널 헤더 우측에 1.6초
-     페이드하는 "Saved" 칩으로 명시한다. ref 로 setTimeout 핸들을 추적해
-     빠른 연속 변경에도 깜빡임이 안 생기게 한다. */
+  /* 자동 저장 → 인라인 "Saved" 칩 피드백. API Keys 외의 모든 컨트롤은 변경 즉시
+     영구화되며, 그 변경을 패널 헤더 우측에 1.6초 페이드하는 "Saved" 칩으로 명시한다. */
   const [savedHint, setSavedHint] = useState(false);
   const savedHintTimerRef = useRef<number | null>(null);
   const flashSaved = () => {
@@ -242,7 +242,7 @@ const SettingsPage = () => {
   };
 
   useEffect(() => {
-    settingsApi.get().then((s: any) => {
+    settingsApi.get().then((s: Partial<SettingsState>) => {
       setSettings({
         anthropic_api_key: s.anthropic_api_key ?? "",
         openai_api_key: s.openai_api_key ?? "",
@@ -264,9 +264,7 @@ const SettingsPage = () => {
 
   const toggle = (key: string) => setShowKeys((p) => ({ ...p, [key]: !p[key] }));
 
-  /* 기능별 이미지 생성 디폴트 — ModelPicker 처럼 변경 즉시 localStorage 에
-     영속한다(설정 저장 버튼과 무관). 각 생성 화면은 마운트 시 이 값을 출발값으로
-     읽으므로 다음 생성부터 반영된다. */
+  /* 기능별 이미지 생성 디폴트 — 변경 즉시 localStorage 에 영속. */
   const handleImgGenModelChange = (feature: ImageGenFeature, modelId: string) => {
     setImageModelDefault(feature, modelId);
     setImgGenPrefs((p) => ({ ...p, [feature]: { ...p[feature], model: modelId } }));
@@ -301,13 +299,12 @@ const SettingsPage = () => {
   const inputCls =
     "h-9 bg-surface-panel border-border-subtle text-meta text-foreground/80 placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:border-primary/30 rounded-none";
 
-  /* API 키 형식 휴리스틱 — keyWarning 과 같은 룰. 상태 칩이 keyWarning 과
-     동일 데이터 소스를 쓰게 해 두 곳이 어긋나지 않게 한다. */
+  /* API 키 형식 휴리스틱 — keyWarning 과 같은 룰. */
   type ApiKeyStatus = "empty" | "configured" | "mismatch";
   const apiKeyStatusOf = (key: keyof SettingsState, value: string): ApiKeyStatus => {
     const trimmed = value.trim();
     if (!trimmed) return "empty";
-    if (trimmed.length < 5) return "configured"; // 너무 짧으면 형식 판정 보류
+    if (trimmed.length < 5) return "configured";
     if (key === "openai_api_key" && trimmed.startsWith("sk-ant-")) return "mismatch";
     if (
       key === "anthropic_api_key"
@@ -346,25 +343,14 @@ const SettingsPage = () => {
   ];
 
   /* ── 스타일 토큰 ── */
-
-  // 패널 헤더 — 카테고리 아이콘 + 14px 타이틀 + 11px 설명.
-  // 카드 내부 라벨(text-meta font-semibold) 와 명확히 위계가 갈리도록
-  // 13px → 14px 로 한 단계 키운다.
   const panelTitleCls = "text-label font-semibold text-foreground";
   const panelDescCls = "text-caption text-muted-foreground leading-relaxed";
-
-  // 단일 surface-panel 카드 — 한 카테고리에 하나만 둔다. p-7 + 내부
-  // divide-y 로 행 분리. 카드를 여러 개 쌓던 이전 구조 대비 시각 잡음 ↓.
   const cardCls = "surface-panel w-full rounded-none p-7";
-
-  // 카드 내부 한 행. py-5 로 행 사이 호흡을 조금 늘려 라벨/설명/컨트롤이
-  // 답답하지 않게.
   const rowCls = "space-y-2 py-5 first:pt-0 last:pb-0";
   const fieldLabelCls = "text-meta font-semibold text-text-secondary";
   const fieldDescCls = "text-caption text-muted-foreground leading-relaxed";
 
-  // 좌측 네비 행 — 라이브러리 사이드바와 같은 시각 톤(13px / py-2 /
-  // border-l-2 활성). 익숙한 패턴 재사용으로 학습 비용 0.
+  // 좌측 네비 행 — 라이브러리 사이드바와 같은 시각 톤.
   const navItemCls = (isActive: boolean) =>
     cn(
       "w-full flex items-center gap-2.5 px-3 py-2 text-left text-body border-l-2 transition-colors",
@@ -373,11 +359,9 @@ const SettingsPage = () => {
         : "border-l-transparent text-muted-foreground hover:text-foreground hover:bg-muted/40",
     );
 
-  // 우측 메인 컬럼 폭 — 단일 컬럼이지만 이전 560px 보다 더 여유 있게.
-  // 좌측 220px 레일과 함께 1024px 화면에서도 답답하지 않다.
   const mainColCls = "w-full max-w-[640px] space-y-5";
 
-  // API 키 상태 칩 — 라벨 우측에 작은 도트 + 라벨 형식으로 한눈에 식별.
+  // API 키 상태 칩.
   const StatusChip = ({ status }: { status: ApiKeyStatus }) => {
     const map: Record<ApiKeyStatus, { dot: string; text: string; bg: string; label: string }> = {
       empty: {
@@ -415,7 +399,6 @@ const SettingsPage = () => {
   };
 
   // 패널 헤더(아이콘 + 타이틀 + 설명 + Saved 칩) 공통 렌더러.
-  // 모든 카테고리 패널 상단이 같은 시각 구조를 갖도록 묶었다.
   const renderPanelHeader = (
     Icon: LucideIcon,
     titleKey: string,
@@ -446,10 +429,7 @@ const SettingsPage = () => {
     </div>
   );
 
-  // Maintenance action 카드 — Display & UI 패널 하단의 1회성 작업 행.
-  // 일반 settings 행과 시각적으로 구분되도록 darker bg-card + 좌측 컬러
-  // 아이콘 박스 + 우측 outline 실행 버튼. "이건 설정이 아니라 작업" 임이
-  // 한눈에 읽힌다.
+  // Maintenance action 카드.
   const ActionCard = ({
     icon: Icon,
     title,
@@ -480,68 +460,80 @@ const SettingsPage = () => {
     </div>
   );
 
-  return (
-    <div className="h-screen bg-background flex flex-col overflow-hidden">
-      {/* Library/Dashboard/Project 와 완전히 동일한 3-zone 구조 + 좌표계. */}
-      <nav className="app-topbar relative">
-        {/* Top-center 토스트가 네비바 위에 떠 있을 때 Electron drag region 흡수를
-            막는 carve-out. 자세한 설명은 컴포넌트 파일 헤더 주석 참고. */}
-        <TopbarToastCarveOut />
-        <button
-          onClick={() => navigate(backPath)}
-          className="flex items-center pl-[27px] pr-8 min-w-[260px] hover:opacity-80 transition-opacity flex-shrink-0"
-        >
-          <BrandLogo variant={backPath === "/library" ? "library" : "project"} />
-        </button>
-        <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
-          <span className="text-body font-semibold tracking-wide text-foreground">
-            {t("settings.title")}
+  // ── 기능별 이미지 생성 행 — 라벨 앞에 실제 기능 아이콘을 붙인다. ──
+  const renderImgGenRow = (spec: ImageGenFeatureSpec) => {
+    const cur = imgGenPrefs[spec.feature];
+    const qualityApplies = modelIsGpt(spec.feature, cur.model);
+    const Icon = IMAGE_GEN_FEATURE_ICONS[spec.feature];
+    return (
+      <div key={spec.feature} className={rowCls}>
+        <div className="flex items-center gap-2">
+          <span className="flex h-5 w-5 shrink-0 items-center justify-center text-muted-foreground">
+            <Icon className="h-3.5 w-3.5" />
           </span>
+          <Label className={fieldLabelCls}>{t(spec.labelKey)}</Label>
         </div>
-        <div className="flex items-baseline gap-3 min-w-0 flex-1 px-8" />
-        <div className="flex items-center gap-2 pr-2">
-          <Button
-            variant="outline"
-            onClick={() => navigate(backPath)}
-            className="h-9 text-meta font-bold tracking-wider bg-transparent border-border-subtle text-muted-foreground hover:text-foreground hover:border-primary/30 hover:bg-transparent gap-1.5 rounded-none"
+        <p className={fieldDescCls}>{t(spec.descKey)}</p>
+        <div className="flex items-center gap-2">
+          <Select
+            value={cur.model}
+            onValueChange={(v) => handleImgGenModelChange(spec.feature, v)}
           >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            {backLabel}
-          </Button>
-          {/* "Save API Keys" 는 API Keys 카테고리에서만 노출. 다른 카테고리
-              의 설정은 변경 즉시 자동 저장되므로 별도 저장 버튼이 필요 없고,
-              항상 보이는 버튼은 "이 페이지의 모든 설정을 저장하는 것" 처럼
-              읽히는 옛 혼동을 다시 만든다. 노출 카테고리를 좁혀 라벨 그대로
-              동작이 진실한 1:1 매핑이 되게 한다. */}
-          {category === "keys" && (
-            <Button
-              onClick={handleSave}
-              disabled={loading}
-              className="h-9 min-w-[148px] text-meta font-bold tracking-wider rounded-none border-0 gap-1.5 bg-primary hover:bg-primary/85"
+            <SelectTrigger className={`${inputCls} flex-1`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="bg-popover border-border-subtle text-foreground/80 rounded-none">
+              {spec.models.map((m) => (
+                <SelectItem key={m.id} value={m.id} className="text-meta">
+                  {IMAGE_GEN_MODEL_LABELS[m.id] ?? m.id}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={cur.quality}
+            onValueChange={(v) => handleImgGenQualityChange(spec.feature, v as GptQuality)}
+            disabled={!qualityApplies}
+          >
+            <SelectTrigger
+              className={`${inputCls} w-[150px] ${qualityApplies ? "" : "opacity-40"}`}
             >
-              {loading ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : saved ? (
-                <>
-                  <Check className="w-3.5 h-3.5" />
-                  {t("common.saved")}
-                </>
-              ) : (
-                <>
-                  <Key className="w-3.5 h-3.5" />
-                  {t("settings.saveApiKeys")}
-                </>
-              )}
-            </Button>
-          )}
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="bg-popover border-border-subtle text-foreground/80 rounded-none">
+              {GPT_QUALITIES.map((q) => (
+                <SelectItem key={q} value={q} className="text-meta">
+                  {t(`settings.gptQuality.${q}`)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
-        <WindowControls />
-      </nav>
+        {!qualityApplies && (
+          <p className="text-2xs text-muted-foreground/70">
+            {t("settings.imgGen.qualityNa")}
+          </p>
+        )}
+      </div>
+    );
+  };
 
-      {/* ── 본문: 좌측 카테고리 레일 + 우측 패널 ────────────────────── */}
-      <div className="flex-1 flex min-h-0 overflow-hidden">
-        {/* 좌측 레일 — 라이브러리/대시보드 사이드바와 동일한 220px 폭/시각 톤. */}
-        <aside className="w-[220px] flex-shrink-0 border-r border-border-subtle bg-surface-sidebar overflow-y-auto py-4 px-2">
+  // 공간(surface)별 정렬 — related 를 워크플로우 순서로 위에, 나머지는 '기타' 그룹.
+  const { related, other } = orderImageGenFeatures(surface);
+
+  return (
+    <>
+      {/* ── 헤더(타이틀) — Radix a11y 용 DialogTitle 포함 ── */}
+      <header className="flex shrink-0 items-center border-b border-border-subtle px-6 py-3.5">
+        <DialogTitle className="text-body font-semibold tracking-wide text-foreground">
+          {t("settings.title")}
+        </DialogTitle>
+      </header>
+
+      {/* ── 본문: 좌측 카테고리 레일 + 우측 패널 ── */}
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        {/* 좌측 레일 */}
+        <aside className="w-[220px] flex-shrink-0 overflow-y-auto border-r border-border-subtle bg-surface-sidebar py-4 px-2">
           <div className="space-y-0.5">
             {CATEGORIES.map((cat) => {
               const Icon = cat.icon;
@@ -561,10 +553,10 @@ const SettingsPage = () => {
           </div>
         </aside>
 
-        {/* 우측 패널 영역 — 카테고리 한 개를 한 화면에 표시. */}
-        <main className="flex-1 overflow-y-auto py-8 px-8 flex justify-center">
+        {/* 우측 패널 — 카테고리 한 개를 표시. */}
+        <main className="flex flex-1 justify-center overflow-y-auto py-8 px-8">
           <div className={mainColCls}>
-            {/* ── API Keys 패널 ─────────────────────────────────── */}
+            {/* ── API Keys 패널 ── */}
             {category === "keys" && (
               <>
                 {renderPanelHeader(Key, "settings.nav.apiKeys", "settings.apiKeysCardDesc")}
@@ -632,7 +624,7 @@ const SettingsPage = () => {
               </>
             )}
 
-            {/* ── Models 패널 ───────────────────────────────────── */}
+            {/* ── Models 패널 ── */}
             {category === "models" && (
               <>
                 {renderPanelHeader(Cpu, "settings.nav.models", "settings.modelsCardDesc")}
@@ -651,7 +643,7 @@ const SettingsPage = () => {
                   </div>
                 </div>
 
-                {/* ── 기능별 이미지 생성 기본값 ── */}
+                {/* ── 기능별 이미지 생성 기본값 (공간별 정렬) ── */}
                 <div className="flex items-center gap-3">
                   <Sparkles className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                   <span className="text-caption font-semibold tracking-[0.12em] text-muted-foreground uppercase">
@@ -662,64 +654,30 @@ const SettingsPage = () => {
                 <p className={cn(fieldDescCls, "-mt-1")}>{t("settings.imgGen.sectionDesc")}</p>
                 <div className={cardCls}>
                   <div className="divide-y divide-border-subtle">
-                    {IMAGE_GEN_FEATURES.map((spec) => {
-                      const cur = imgGenPrefs[spec.feature];
-                      const qualityApplies = modelIsGpt(spec.feature, cur.model);
-                      return (
-                        <div key={spec.feature} className={rowCls}>
-                          <Label className={fieldLabelCls}>{t(spec.labelKey)}</Label>
-                          <p className={fieldDescCls}>{t(spec.descKey)}</p>
-                          <div className="flex items-center gap-2">
-                            <Select
-                              value={cur.model}
-                              onValueChange={(v) => handleImgGenModelChange(spec.feature, v)}
-                            >
-                              <SelectTrigger className={`${inputCls} flex-1`}>
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent className="bg-popover border-border-subtle text-foreground/80 rounded-none">
-                                {spec.models.map((m) => (
-                                  <SelectItem key={m.id} value={m.id} className="text-meta">
-                                    {IMAGE_GEN_MODEL_LABELS[m.id] ?? m.id}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                            <Select
-                              value={cur.quality}
-                              onValueChange={(v) =>
-                                handleImgGenQualityChange(spec.feature, v as GptQuality)
-                              }
-                              disabled={!qualityApplies}
-                            >
-                              <SelectTrigger
-                                className={`${inputCls} w-[150px] ${qualityApplies ? "" : "opacity-40"}`}
-                              >
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent className="bg-popover border-border-subtle text-foreground/80 rounded-none">
-                                {GPT_QUALITIES.map((q) => (
-                                  <SelectItem key={q} value={q} className="text-meta">
-                                    {t(`settings.gptQuality.${q}`)}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          {!qualityApplies && (
-                            <p className="text-2xs text-muted-foreground/70">
-                              {t("settings.imgGen.qualityNa")}
-                            </p>
-                          )}
-                        </div>
-                      );
-                    })}
+                    {related.map(renderImgGenRow)}
                   </div>
                 </div>
+
+                {/* 그 공간과 직접 관련 없는 기능은 '기타' 그룹으로 분리. */}
+                {other.length > 0 && (
+                  <>
+                    <div className="flex items-center gap-3 pt-2">
+                      <span className="text-caption font-semibold tracking-[0.12em] text-muted-foreground uppercase">
+                        {t("settings.imgGen.otherGroup")}
+                      </span>
+                      <div className="flex-1 h-px bg-border-subtle" />
+                    </div>
+                    <div className={cardCls}>
+                      <div className="divide-y divide-border-subtle">
+                        {other.map(renderImgGenRow)}
+                      </div>
+                    </div>
+                  </>
+                )}
               </>
             )}
 
-            {/* ── 언어 패널 — "전체 언어(UI)" + "AI 언어" 두 하위 섹션으로 통합 ── */}
+            {/* ── 언어 패널 ── */}
             {category === "language" && (
               <>
                 {renderPanelHeader(Languages, "settings.nav.language", "settings.languageCardDesc")}
@@ -763,9 +721,6 @@ const SettingsPage = () => {
                 </div>
                 <div className={cardCls}>
                   <div className="divide-y divide-border-subtle">
-                    {/* AI 결과 표시 언어 — 라이브러리 인스펙터의 AI 탭에서 칩/본문이
-                        어떤 언어로 나오는지. 분석은 항상 두 언어를 함께 저장하므로
-                        이 값은 LLM 재호출 없이 즉시 토글된다. Auto 는 UI 언어 따라가기. */}
                     <div className={rowCls}>
                       <Label className={fieldLabelCls}>{t("settings.aiOutputLanguage")}</Label>
                       <p className={fieldDescCls}>{t("settings.aiOutputLanguageDesc")}</p>
@@ -781,11 +736,6 @@ const SettingsPage = () => {
                       </Select>
                     </div>
 
-                    {/* AI 태그 머지 언어 — Accept 버튼이 item.tags 에 머지할 언어를
-                        결정. "Follow display" 는 위의 Display 와 함께 움직이고,
-                        Auto/EN/KO 는 Display 와 무관하게 독립으로 고정한다.
-                        ai_suggestions 자체에는 양 언어 모두 보존되므로 검색
-                        haystack 은 항상 양방향. */}
                     <div className={rowCls}>
                       <Label className={fieldLabelCls}>{t("settings.aiTagLanguage")}</Label>
                       <p className={fieldDescCls}>{t("settings.aiTagLanguageDesc")}</p>
@@ -806,7 +756,7 @@ const SettingsPage = () => {
               </>
             )}
 
-            {/* ── Display & UI 패널 ─────────────────────────────── */}
+            {/* ── Display & UI 패널 ── */}
             {category === "displayUi" && (
               <>
                 {renderPanelHeader(Monitor, "settings.nav.displayUi", "settings.displayUiCardDesc")}
@@ -832,7 +782,6 @@ const SettingsPage = () => {
                       </Select>
                     </div>
 
-                    {/* GIF/WebP 썸네일 자동 재생 여부 토글. */}
                     <div className={rowCls}>
                       <Label
                         htmlFor="animatedThumbnailsAutoplay"
@@ -858,7 +807,6 @@ const SettingsPage = () => {
                       </div>
                     </div>
 
-                    {/* Default 워크스페이스 숨김 토글. */}
                     <div className={rowCls}>
                       <Label
                         htmlFor="hideDefaultWorkspaces"
@@ -886,13 +834,7 @@ const SettingsPage = () => {
                   </div>
                 </div>
 
-                {/* ── Maintenance sub-section ─────────────────────────
-                    1회성 라이브러리 정리 작업. 일반 setting 행과 명확히
-                    구분되도록:
-                      - 별도 헤더 (작은 uppercase 라벨 + 아이콘 + 라인)
-                      - 액션 카드는 darker bg-card + outline 실행 버튼
-                      - 카드 hover 시 primary tint 로 "클릭 가능한 작업" 강조
-                    "이건 설정이 아니라 실행" 임이 시각적으로 한눈에 읽힌다. */}
+                {/* ── Maintenance sub-section ── */}
                 <div className="flex items-center gap-3 pt-2">
                   <Wrench className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                   <span className="text-caption font-semibold tracking-[0.12em] text-muted-foreground uppercase">
@@ -928,11 +870,37 @@ const SettingsPage = () => {
         </main>
       </div>
 
+      {/* ── 푸터 — "Save API Keys" 는 API Keys 카테고리에서만. 다른 카테고리의
+          설정은 변경 즉시 자동 저장되므로 별도 저장 버튼이 필요 없다. ── */}
+      {category === "keys" && (
+        <DialogFooter className="shrink-0 border-t border-border-subtle px-6 py-3">
+          <Button
+            onClick={handleSave}
+            disabled={loading}
+            className="h-9 min-w-[148px] text-meta font-bold tracking-wider rounded-none border-0 gap-1.5 bg-primary hover:bg-primary/85"
+          >
+            {loading ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : saved ? (
+              <>
+                <Check className="w-3.5 h-3.5" />
+                {t("common.saved")}
+              </>
+            ) : (
+              <>
+                <Key className="w-3.5 h-3.5" />
+                {t("settings.saveApiKeys")}
+              </>
+            )}
+          </Button>
+        </DialogFooter>
+      )}
+
       <LibraryAiCleanupDialog open={aiCleanupOpen} onOpenChange={setAiCleanupOpen} />
       <OptimizeThumbnailsDialog open={thumbBackfillOpen} onOpenChange={setThumbBackfillOpen} />
       <KoreanAliasExpandDialog open={koreanAliasOpen} onOpenChange={setKoreanAliasOpen} />
-    </div>
+    </>
   );
 };
 
-export default SettingsPage;
+export default SettingsModal;

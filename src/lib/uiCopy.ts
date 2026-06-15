@@ -150,7 +150,7 @@ export const UI_COPY: Record<string, Record<UiLanguage, string>> = {
     en: "Applying a style reference to existing cuts.",
     ko: "기존 컷에 스타일 레퍼런스를 적용.",
   },
-  "settings.imgGen.angle": { en: "Change Angle", ko: "각도 변경" },
+  "settings.imgGen.angle": { en: "Change Angle", ko: "앵글 변경" },
   "settings.imgGen.angleDesc": {
     en: "Camera angle change on a single cut.",
     ko: "단일 컷의 카메라 앵글 변경.",
@@ -185,16 +185,17 @@ export const UI_COPY: Record<string, Record<UiLanguage, string>> = {
     en: "Conti Sheet mode: model is fixed (GPT Image 2 → Nano Banana 2 refine); only GPT generation quality is adjustable.",
     ko: "콘티 시트 모드: 모델 고정(GPT Image 2 → Nano Banana 2 리파인), GPT 생성 품질만 조절 가능.",
   },
-  "settings.imgGen.variation": { en: "Reference Variation", ko: "레퍼런스 베리에이션" },
+  "settings.imgGen.variation": { en: "AI Variation", ko: "AI 베리에이션" },
   "settings.imgGen.variationDesc": {
     en: "AI variations generated from library reference images.",
     ko: "라이브러리 레퍼런스 이미지에서 만드는 AI 베리에이션.",
   },
-  "settings.imgGen.canvas": { en: "Canvas Generation Node", ko: "캔버스 생성 노드" },
+  "settings.imgGen.canvas": { en: "AI Generation Node", ko: "AI 생성 노드" },
   "settings.imgGen.canvasDesc": {
     en: "Image generation node on the library canvas (image-to-image with prompt cards).",
     ko: "라이브러리 캔버스의 이미지 생성 노드(이미지+프롬프트 카드 입력).",
   },
+  "settings.imgGen.otherGroup": { en: "Other", ko: "기타" },
   "settings.uiLanguage": { en: "UI Language", ko: "UI 언어" },
   "settings.uiLanguageDesc": {
     en: "Controls app labels, buttons, dialogs, and toasts. Brief analysis output still follows the KO/EN toggle in the Brief tab.",

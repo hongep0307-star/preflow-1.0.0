@@ -1378,6 +1378,7 @@ export const UI_COPY: Record<string, Record<UiLanguage, string>> = {
 
   // LibraryPage — toasts / dialogs / errors
   "library.toast.importStarted": { en: "Importing {n} item(s)...", ko: "{n}개 가져오는 중..." },
+  "library.toast.importProgress": { en: "Importing {done}/{total}...", ko: "{done}/{total} 가져오는 중..." },
   "library.toast.importDone": { en: "Imported {n} item(s)", ko: "{n}개 가져왔습니다" },
   "library.toast.importPartial": { en: "Imported {ok}/{total}, {failed} failed", ko: "{ok}/{total} 가져옴, {failed}개 실패" },
   "library.toast.importFailed": { en: "Import failed", ko: "가져오기 실패" },

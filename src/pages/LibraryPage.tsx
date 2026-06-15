@@ -2086,6 +2086,16 @@ const LibraryPage = () => {
     let successCount = 0;
     const failures: Array<{ name: string; message: string }> = [];
 
+    // 가져오는 중 진행 표시 — 대용량 영상은 업로드/썸네일 추출에 수 초~수십 초가
+    // 걸려, 표시가 없으면 사용자가 "되는 건지" 알 수 없다. 지속 토스트(긴 duration)
+    // 로 띄우고 파일마다 진행률을 갱신, 완료/실패 시 수동 dismiss.
+    const total = mediaFiles.length;
+    const loadingToast = toast({
+      title: t("library.toast.importProgress", { done: 0, total }),
+      duration: 600_000,
+    });
+    let processed = 0;
+
     for (const file of mediaFiles) {
       try {
         const item = await uploadReferenceFile(file, uploadOptions);
@@ -2098,7 +2108,11 @@ const LibraryPage = () => {
           message: err instanceof Error ? err.message : String(err),
         });
       }
+      processed += 1;
+      loadingToast.update({ title: t("library.toast.importProgress", { done: processed, total }) });
     }
+
+    loadingToast.dismiss();
 
     if (successCount > 0) {
       toast({

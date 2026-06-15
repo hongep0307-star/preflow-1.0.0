@@ -196,22 +196,26 @@ function createQueryBuilder(table: string): QueryBuilder {
 function createStorageBucket(bucket: string) {
   return {
     async upload(filePath: string, data: File | Blob | Uint8Array | ArrayBuffer | Buffer, options?: { contentType?: string; upsert?: boolean }) {
-      let arrayBuf: ArrayBuffer;
-      if (data instanceof Blob) {
-        arrayBuf = await data.arrayBuffer();
-      } else if (data instanceof ArrayBuffer) {
-        arrayBuf = data;
-      } else {
-        arrayBuf = (data as any).buffer ?? new Uint8Array(data as any).buffer;
+      // 바이너리(octet-stream) 전송 — base64 JSON 은 ~33% 팽창 + 거대한 문자열/
+      // JSON.stringify 로 대용량(>~250MB)에서 렌더러 fetch 가 "Failed to fetch"
+      // 로 죽는다. Blob 바디는 Chromium 이 스트리밍하므로 메모리/크기에 안전하다.
+      const blob =
+        data instanceof Blob
+          ? data
+          : data instanceof ArrayBuffer
+            ? new Blob([data])
+            : new Blob([new Uint8Array(data as Uint8Array)]);
+      const qs = new URLSearchParams({ bucket, path: filePath });
+      const res = await fetch(`${LOCAL_SERVER_BASE_URL}/storage/upload-raw?${qs.toString()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream", ...LOCAL_SERVER_AUTH_HEADERS },
+        body: blob,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || `HTTP ${res.status}`);
       }
-      const bytes = new Uint8Array(arrayBuf);
-      let b64 = "";
-      const chunk = 8192;
-      for (let i = 0; i < bytes.length; i += chunk) {
-        b64 += String.fromCharCode(...bytes.subarray(i, i + chunk));
-      }
-      b64 = btoa(b64);
-      return localPost("/storage/upload", { bucket, filePath, data: b64, contentType: options?.contentType });
+      return res.json();
     },
     getPublicUrl(filePath: string) {
       return { data: { publicUrl: `${LOCAL_SERVER_BASE_URL}/storage/file/${bucket}/${filePath}` } };

@@ -4,6 +4,7 @@ import path from "path";
 import { getLocalServerBaseUrl } from "./constants";
 import { dbInsert, dbSelect } from "./db-utils";
 import { getStorageBasePath } from "./paths";
+import { MAX_VIDEO_BYTES } from "../shared/constants";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -43,7 +44,6 @@ type EagleItem = {
 
 const VIDEO_EXTENSIONS = new Set(["mp4", "mov", "webm"]);
 const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "svg"]);
-const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
 
 function asRecord(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : {};

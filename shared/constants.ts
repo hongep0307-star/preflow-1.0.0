@@ -50,8 +50,14 @@ export const LOCAL_SERVER_AUTH_HEADERS: Record<string, string> = LOCAL_SERVER_AU
   : {};
 
 /** Reference Library 업로드의 절대 상한 (bytes).
- *  렌더러와 local-server 양쪽이 동일한 값을 써야 한쪽 우회로 200 MiB 를 넘는
- *  파일이 디스크에 들어가는 일을 막을 수 있다. UX 메시지("200MB 이하…") 도
+ *  렌더러와 local-server 양쪽이 동일한 값을 써야 한쪽 우회로 300 MiB 를 넘는
+ *  파일이 디스크에 들어가는 일을 막을 수 있다. UX 메시지("300MB 이하…") 도
  *  여기서 파생된다. */
-export const REFERENCE_UPLOAD_MAX_BYTES = 200 * 1024 * 1024;
-export const REFERENCE_UPLOAD_MAX_LABEL = "200MB";
+export const REFERENCE_UPLOAD_MAX_BYTES = 300 * 1024 * 1024;
+export const REFERENCE_UPLOAD_MAX_LABEL = "300MB";
+
+/** 영상 reference 의 절대 용량 상한 (bytes).
+ *  영상은 전체 업로드 상한과 동일한 천장을 쓴다 — videoFrames(렌더러) /
+ *  eagle-import(main) 가 각자 200MB 를 하드코딩해 드리프트하던 것을 한 곳으로
+ *  통일한다. 이 값을 넘는 *원본* 은 저장하지 않으며, 컨버팅된 결과만 저장된다. */
+export const MAX_VIDEO_BYTES = REFERENCE_UPLOAD_MAX_BYTES;

@@ -10,8 +10,10 @@
  *
  * 다운스케일: 가로 768px (GPT vision detail=auto 권장 영역). 세로는 비율 유지.
  *
- * 한도: 200MB / 5분 — 그 이상은 호출자가 사전 검증하고 throw.
+ * 한도: 300MB / 5분 — 그 이상은 호출자가 사전 검증하고 throw.
  */
+
+import { MAX_VIDEO_BYTES, REFERENCE_UPLOAD_MAX_LABEL } from "@shared/constants";
 
 export interface ExtractedFrame {
   /** 영상 내 시점 (초) */
@@ -28,7 +30,7 @@ export interface VideoMeta {
   heightPx: number;
 }
 
-export const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
+export { MAX_VIDEO_BYTES };
 export const MAX_DURATION_SEC = 5 * 60;
 const TARGET_WIDTH = 768;
 
@@ -76,15 +78,17 @@ export function suggestedFrameCount(durationSec: number): number {
 
 export function validateVideoFile(file: File): { ok: true } | { ok: false; reason: string } {
   if (!file.type.startsWith("video/")) return { ok: false, reason: "비디오 파일이 아닙니다." };
-  if (file.size > MAX_VIDEO_BYTES) return { ok: false, reason: "200MB 이하 영상만 지원합니다." };
+  if (file.size > MAX_VIDEO_BYTES) return { ok: false, reason: `${REFERENCE_UPLOAD_MAX_LABEL} 이하 영상만 지원합니다.` };
   return { ok: true };
 }
 
 export function validateVideoMeta(meta: VideoMeta): { ok: true } | { ok: false; reason: string } {
   if (meta.durationSec > MAX_DURATION_SEC) {
+    // 길이 초과는 toast 설명으로 그대로 노출된다. 용량 초과와 혼동되지 않도록
+    // "분" 단위로 안내하고, 컨버팅으로도 해결되지 않음을 명시한다.
     return {
       ok: false,
-      reason: `5분 이하 영상만 지원합니다. 현재 길이: ${Math.round(meta.durationSec)}초`,
+      reason: `5분 이하 영상만 지원합니다 (현재 약 ${Math.ceil(meta.durationSec / 60)}분). 영상 길이는 변환으로 줄일 수 없습니다.`,
     };
   }
   return { ok: true };

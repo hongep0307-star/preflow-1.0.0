@@ -122,6 +122,28 @@ function parseBody(req: http.IncomingMessage, maxBytes = MAX_JSON_BODY_BYTES): P
   });
 }
 
+/** Raw(바이너리) 업로드 바디를 Buffer 로 모은다. base64 JSON 우회 경로의
+ *  ~33% 팽창 + 거대한 문자열 할당(대용량에서 fetch 실패) 을 피하기 위한
+ *  `/storage/upload-raw` 전용. 한도는 `REFERENCE_UPLOAD_MAX_BYTES`(실제 디스크
+ *  파일 크기 기준) 로 직접 검증한다 — JSON body 한도와 달리 팽창분이 없다. */
+function readRawBody(req: http.IncomingMessage, maxBytes = REFERENCE_UPLOAD_MAX_BYTES): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    req.on("data", (c: Buffer) => {
+      total += c.length;
+      if (total > maxBytes) {
+        reject(new HttpError(413, `Reference uploads must be ${REFERENCE_UPLOAD_MAX_LABEL} or smaller.`));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
 /* 실험 ④ (2026-05-14, 실패로 검증): PNG/JPG/WEBP 만 application/octet-stream
  * 으로 응답해도 Chromium 의 byte-level sniffer 가 binary signature
  * (PNG magic / JPEG SOI / WEBP RIFF) 를 직접 보고 image-mode 를 켠다.
@@ -1038,6 +1060,24 @@ export function startLocalServer(): Promise<number> {
       }
 
       try {
+        // 바이너리 업로드 — base64 JSON 경로(/storage/upload) 는 대용량(>~250MB)
+        // 에서 거대한 문자열 + JSON.stringify 로 렌더러 fetch 가 실패한다. raw
+        // octet-stream 바디는 스트리밍돼 메모리/크기에 안전. bucket/path 는 쿼리로
+        // 받고, 바디는 parseBody(JSON) 를 거치지 않고 직접 읽는다.
+        if (url.startsWith("/storage/upload-raw")) {
+          const parsed = new URL(url, "http://127.0.0.1");
+          const bucket = parsed.searchParams.get("bucket") || "";
+          const fp = parsed.searchParams.get("path") || "";
+          const fullPath = resolveBucketPath(bucket, fp);
+          const uploadBuffer = await readRawBody(req);
+          await fs.promises.mkdir(path.dirname(fullPath), { recursive: true });
+          await fs.promises.writeFile(fullPath, uploadBuffer);
+          invalidateStorageUsageCache();
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: null }));
+          return;
+        }
+
         // tsconfig.node.json 의 strict 모드에서 JsonBody = Record<string, unknown>
         // 을 destructure 하면 각 필드가 unknown 으로 잡혀 dbSelect/dbInsert
         // 같은 string-기반 함수에 그대로 못 넘긴다. 이 라우터의 모든 path 는

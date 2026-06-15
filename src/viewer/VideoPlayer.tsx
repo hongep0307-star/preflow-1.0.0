@@ -7,15 +7,21 @@ import {
   type RefObject,
 } from "react";
 import {
+  FastForward,
   Maximize,
   Pause,
   Play,
   Repeat,
+  Repeat1,
+  Rewind,
   Volume2,
   VolumeX,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { RegionView } from "./RegionView";
+import { ShortcutsPopover } from "./ShortcutsPopover";
+import { ViewerSelect } from "./ViewerSelect";
+import { vt, type ViewerLang } from "./i18n";
 import type { ReferenceItem, TimestampNote } from "./types";
 
 /* Read-only 영상 플레이어.
@@ -42,6 +48,8 @@ interface VideoPlayerProps {
   /** NotesPanel 이 시각 노트 active highlight 에 쓸 timeupdate 콜백.
    *  매 timeupdate 마다 호출되므로 부모는 throttle/RAF 자체 처리. */
   onTimeUpdate?: (sec: number) => void;
+  /** 툴팁/단축키 라벨 언어 — App 의 언어 토글이 구동. */
+  language?: ViewerLang;
 }
 
 function formatDuration(value?: number | null): string {
@@ -52,7 +60,7 @@ function formatDuration(value?: number | null): string {
   return `${minutes}:${seconds}`;
 }
 
-export function VideoPlayer({ item, registerSeek, onTimeUpdate }: VideoPlayerProps) {
+export function VideoPlayer({ item, registerSeek, onTimeUpdate, language = "en" }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hoverVideoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -73,6 +81,8 @@ export function VideoPlayer({ item, registerSeek, onTimeUpdate }: VideoPlayerPro
   const [loopStart, setLoopStart] = useState<number | null>(null);
   const [loopEnd, setLoopEnd] = useState<number | null>(null);
   const [loopDragMode, setLoopDragMode] = useState<"start" | "end" | null>(null);
+  /* 전체 반복 — 구간 루프와 별개로 클립 전체를 무한 반복(video loop 속성). */
+  const [fullLoop, setFullLoop] = useState(false);
 
   /* 호버 썸네일 — 메인 앱과 동일 패턴(drop-old-seek). */
   const [hoverPreview, setHoverPreview] = useState<{ sec: number; pct: number } | null>(null);
@@ -92,6 +102,7 @@ export function VideoPlayer({ item, registerSeek, onTimeUpdate }: VideoPlayerPro
     setLoopStart(null);
     setLoopEnd(null);
     setLoopDragMode(null);
+    setFullLoop(false);
     setHoverPreview(null);
     hoverTargetRef.current = null;
     hoverSeekingRef.current = false;
@@ -202,60 +213,14 @@ export function VideoPlayer({ item, registerSeek, onTimeUpdate }: VideoPlayerPro
     };
   }, [requestHoverSeek]);
 
-  /* 키보드 단축키 — Space(재생/정지), M(mute), [, ].
-   *
-   *  capture: true 로 등록하는 이유:
-   *    플레이어 안의 버튼(재생, 루프 등) 이 focus 를 가져간 상태에서 Space 를
-   *    누르면 브라우저가 "버튼 활성화"(=click) 를 기본 동작으로 발사한다.
-   *    bubble 단계에서 preventDefault 해도 이미 일부 엔진은 활성화 큐에
-   *    넣어버려 두 번 토글되거나 무반응처럼 보이는 케이스가 있었다.
-   *    capture 단계에서 preventDefault + 직접 togglePlay 를 호출하면
-   *    버튼 활성화 경로를 확실히 가로채 항상 재생/정지가 한 번만 일어난다. */
-  useEffect(() => {
-    const FRAME_STEP_SEC = 1 / 30;
-    const onKey = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
-        return;
-      }
-      /* repeat 가드 — 사용자가 Space 를 길게 누르고 있을 때 매 frame 마다
-       *  togglePlay 가 호출돼 재생/정지가 떨려 보이는 것을 막는다. */
-      if (event.key === " " || event.code === "Space") {
-        event.preventDefault();
-        if (event.repeat) return;
-        togglePlay();
-        /* 포커스된 버튼이 다음 Space 에서도 click 으로 동작하지 않도록 blur.
-         *  이렇게 안 하면 두번째 Space 가 또 같은 버튼을 activate 해 재생이
-         *  꼬일 수 있다. */
-        if (target && typeof (target as HTMLElement).blur === "function") {
-          (target as HTMLElement).blur();
-        }
-      } else if (event.key === "m" || event.key === "M") {
-        event.preventDefault();
-        const v = videoRef.current;
-        if (v) v.muted = !v.muted;
-      } else if (event.key === "[") {
-        event.preventDefault();
-        const v = videoRef.current;
-        if (!v) return;
-        if (!v.paused) v.pause();
-        try { v.currentTime = Math.max(0, v.currentTime - FRAME_STEP_SEC); } catch { /* noop */ }
-      } else if (event.key === "]") {
-        event.preventDefault();
-        const v = videoRef.current;
-        if (!v) return;
-        if (!v.paused) v.pause();
-        const dur = Number.isFinite(v.duration) ? v.duration : 0;
-        const next = v.currentTime + FRAME_STEP_SEC;
-        try { v.currentTime = dur > 0 ? Math.min(dur, next) : next; } catch { /* noop */ }
-      }
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item.id]);
-
   const totalDuration = videoDuration || item.duration_sec || 0;
+  /* 단축키 안내용 시크 수식키 라벨 — Mac 은 Option(⌥), 그 외는 Ctrl. */
+  const seekModLabel = useMemo(() => {
+    const mac =
+      typeof navigator !== "undefined" &&
+      /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent || "");
+    return `${mac ? "\u2325" : "Ctrl"} \u2190/\u2192`;
+  }, []);
   const positionToPct = (atSec: number): number => {
     if (!totalDuration) return 0;
     return Math.max(0, Math.min(100, (atSec / totalDuration) * 100));
@@ -282,6 +247,22 @@ export function VideoPlayer({ item, registerSeek, onTimeUpdate }: VideoPlayerPro
     else v.pause();
   }, []);
 
+  /* ±초 시크 (5초 점프). duration 을 알면 clamp, 모르면 0 하한만. */
+  const seekBy = useCallback(
+    (delta: number) => {
+      const v = videoRef.current;
+      if (!v) return;
+      const dur = Number.isFinite(v.duration) ? v.duration : item.duration_sec || 0;
+      const next = v.currentTime + delta;
+      try {
+        v.currentTime = dur > 0 ? Math.max(0, Math.min(dur, next)) : Math.max(0, next);
+      } catch {
+        /* noop */
+      }
+    },
+    [item.duration_sec],
+  );
+
   const toggleMute = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -294,6 +275,26 @@ export function VideoPlayer({ item, registerSeek, onTimeUpdate }: VideoPlayerPro
     const v = videoRef.current;
     if (v) v.playbackRate = Number(rate) || 1;
   }, []);
+
+  /* Ctrl/Cmd + ↑/↓ 로 배속 단계 이동 — 메인 앱과 동일. 현재 배속에서 가장
+   *  가까운 단계를 찾아 한 칸 위/아래로. */
+  const cyclePlaybackRate = useCallback(
+    (dir: 1 | -1) => {
+      const v = videoRef.current;
+      const cur = v ? v.playbackRate : Number(playbackRate) || 1;
+      let idx = PLAYBACK_RATES.findIndex((r) => r === cur);
+      if (idx === -1) {
+        idx = PLAYBACK_RATES.reduce(
+          (best, r, i) =>
+            Math.abs(r - cur) < Math.abs(PLAYBACK_RATES[best] - cur) ? i : best,
+          0,
+        );
+      }
+      const next = Math.max(0, Math.min(PLAYBACK_RATES.length - 1, idx + dir));
+      handlePlaybackRateChange(String(PLAYBACK_RATES[next]));
+    },
+    [handlePlaybackRateChange, playbackRate],
+  );
 
   const cycleLoop = useCallback(() => {
     const v = videoRef.current;
@@ -314,11 +315,12 @@ export function VideoPlayer({ item, registerSeek, onTimeUpdate }: VideoPlayerPro
     const cur = Number.isFinite(v.currentTime) ? v.currentTime : 0;
     const start = Math.max(0, Math.min(duration - window, cur - half));
     const end = Math.min(duration, start + window);
+    /* 현재 위치를 중심으로 루프 구간만 생성하고 playhead 는 건드리지 않는다.
+     *  (이전엔 start 로 시크 + 자동재생을 해 "엉뚱한 곳으로 점프" 하는 문제가
+     *  있었음.) 현재 시각이 [start,end] 안에 있어 loop-enforce 도 즉시 점프
+     *  하지 않는다. 구간은 [/] 또는 핸들 드래그로 조정. */
     setLoopStart(start);
     setLoopEnd(end);
-    /* 사용자가 루프를 누른 순간 바로 그 구간이 들리도록 in 으로 시크. */
-    try { v.currentTime = start; } catch { /* noop */ }
-    if (v.paused) v.play().catch(() => {});
   }, [item.duration_sec, loopEnd, loopStart, videoDuration]);
 
   /* Timeline seek 드래그. */
@@ -456,6 +458,96 @@ export function VideoPlayer({ item, registerSeek, onTimeUpdate }: VideoPlayerPro
     }
   }, []);
 
+  /* 키보드 단축키 — 메인 앱 LibraryPreviewPanel 과 동일 키맵:
+   *   Space 재생/정지 · M 음소거 · D/F 프레임 이동 · L 루프 토글 ·
+   *   [/] 루프 in/out 을 현재 시각으로 조정(루프 활성 시) ·
+   *   ±5초/±10초 시크는 Mac=Alt+화살표 / Win=Ctrl+화살표(+Shift=10초).
+   *   평범한 ←/→ 는 모달의 이전/다음 자료 이동이라 여기서 건드리지 않고
+   *   App 핸들러로 흘려보낸다.
+   *   capture 단계 등록: 포커스된 버튼이 Space 를 click 으로 가로채는 사고 방지.
+   *   deps 에 loop/seek 핸들러를 포함해야 stale 값으로 루프 조정이 깨지지 않는다. */
+  useEffect(() => {
+    const FRAME_STEP_SEC = 1 / 30;
+    const isMac =
+      typeof navigator !== "undefined" &&
+      /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent || "");
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+      ) {
+        return;
+      }
+      const v = videoRef.current;
+
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        const fiveMod = isMac
+          ? event.altKey && !event.ctrlKey && !event.metaKey
+          : event.ctrlKey && !event.altKey && !event.metaKey;
+        const tenMod = event.shiftKey;
+        if (fiveMod || tenMod) {
+          event.preventDefault();
+          const skip = tenMod ? 10 : 5;
+          seekBy(event.key === "ArrowLeft" ? -skip : skip);
+        }
+        /* 수식키 없는 ←/→ 는 App 의 자료 이동으로 전파(preventDefault 안 함). */
+        return;
+      }
+
+      /* Ctrl/Cmd + ↑/↓ → 배속 단계 이동. */
+      if ((event.key === "ArrowUp" || event.key === "ArrowDown") && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        cyclePlaybackRate(event.key === "ArrowUp" ? 1 : -1);
+        return;
+      }
+
+      if (event.key === " " || event.code === "Space") {
+        event.preventDefault();
+        if (event.repeat) return;
+        togglePlay();
+        if (target && typeof target.blur === "function") target.blur();
+      } else if (event.key === "m" || event.key === "M") {
+        event.preventDefault();
+        if (v) v.muted = !v.muted;
+      } else if (event.key === "d" || event.key === "D") {
+        event.preventDefault();
+        if (!v) return;
+        if (!v.paused) v.pause();
+        try { v.currentTime = Math.max(0, v.currentTime - FRAME_STEP_SEC); } catch { /* noop */ }
+      } else if (event.key === "f" || event.key === "F") {
+        event.preventDefault();
+        if (!v) return;
+        if (!v.paused) v.pause();
+        const dur = Number.isFinite(v.duration) ? v.duration : 0;
+        const next = v.currentTime + FRAME_STEP_SEC;
+        try { v.currentTime = dur > 0 ? Math.min(dur, next) : next; } catch { /* noop */ }
+      } else if (event.key === "l" || event.key === "L") {
+        event.preventDefault();
+        cycleLoop();
+      } else if (event.key === "[") {
+        if (loopStart === null || loopEnd === null) return;
+        event.preventDefault();
+        if (!v) return;
+        const cur = Number.isFinite(v.currentTime) ? v.currentTime : 0;
+        const MIN_GAP = 0.05;
+        const upper = Math.max(0, loopEnd - MIN_GAP);
+        setLoopStart(Math.max(0, Math.min(cur, upper)));
+      } else if (event.key === "]") {
+        if (loopStart === null || loopEnd === null) return;
+        event.preventDefault();
+        if (!v) return;
+        const cur = Number.isFinite(v.currentTime) ? v.currentTime : 0;
+        const dur = videoDuration || item.duration_sec || (Number.isFinite(v.duration) ? v.duration : 0);
+        const MIN_GAP = 0.05;
+        const lower = Math.min(dur, loopStart + MIN_GAP);
+        setLoopEnd(Math.min(dur, Math.max(cur, lower)));
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [item.id, item.duration_sec, videoDuration, loopStart, loopEnd, cycleLoop, seekBy, togglePlay, cyclePlaybackRate]);
+
   return (
     <div ref={fullscreenWrapRef} className="flex min-h-0 flex-1 flex-col bg-background">
       <div className="flex min-h-0 flex-1 flex-col items-stretch justify-center p-4">
@@ -468,6 +560,7 @@ export function VideoPlayer({ item, registerSeek, onTimeUpdate }: VideoPlayerPro
             src={item.file_url ?? undefined}
             poster={item.thumbnail_url ?? undefined}
             controls={false}
+            loop={fullLoop}
             onClick={togglePlay}
             className="absolute inset-0 h-full w-full cursor-pointer object-contain"
             onLoadedMetadata={(event) => {
@@ -639,13 +732,19 @@ export function VideoPlayer({ item, registerSeek, onTimeUpdate }: VideoPlayerPro
 
       {/* 컨트롤 바 */}
       <div className="flex flex-shrink-0 items-center gap-2 border-t border-border-subtle px-4 py-2.5">
-        <ControlButton onClick={togglePlay} title={isPlaying ? "Pause (Space)" : "Play (Space)"}>
+        <ControlButton onClick={() => seekBy(-5)} title={vt(language, "skipBack5")}>
+          <Rewind className="h-3.5 w-3.5" />
+        </ControlButton>
+        <ControlButton onClick={togglePlay} title={isPlaying ? vt(language, "pause") : vt(language, "play")}>
           {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+        </ControlButton>
+        <ControlButton onClick={() => seekBy(5)} title={vt(language, "skipFwd5")}>
+          <FastForward className="h-3.5 w-3.5" />
         </ControlButton>
         <span className="font-mono text-caption tabular-nums text-muted-foreground">
           {formatDuration(currentTime)} / {formatDuration(totalDuration)}
         </span>
-        <ControlButton onClick={toggleMute} title={muted ? "Unmute (M)" : "Mute (M)"}>
+        <ControlButton onClick={toggleMute} title={muted ? vt(language, "unmute") : vt(language, "mute")}>
           {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
         </ControlButton>
 
@@ -653,12 +752,12 @@ export function VideoPlayer({ item, registerSeek, onTimeUpdate }: VideoPlayerPro
           ref={volumeTrackRef}
           className="group/volume relative h-1.5 w-16 shrink-0 cursor-pointer bg-muted/40 transition-[height] hover:h-2"
           role="slider"
-          aria-label="Volume"
+          aria-label={vt(language, "volume")}
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={muted ? 0 : Math.round(volume * 100)}
           onMouseDown={handleVolumeMouseDown}
-          title={muted ? "Muted" : `Volume ${Math.round(volume * 100)}%`}
+          title={muted ? vt(language, "muted") : `${vt(language, "volume")} ${Math.round(volume * 100)}%`}
         >
           <div className="absolute inset-x-0 -top-2 -bottom-2" aria-hidden />
           <div
@@ -676,23 +775,21 @@ export function VideoPlayer({ item, registerSeek, onTimeUpdate }: VideoPlayerPro
 
         <div className="flex-1" />
 
-        <select
+        <ViewerSelect
           value={playbackRate}
-          onChange={(event) => handlePlaybackRateChange(event.target.value)}
-          className="h-8 w-[68px] shrink-0 border border-border-subtle bg-background px-2 text-caption"
-          style={{ borderRadius: 0 }}
-        >
-          {PLAYBACK_RATES.map((rate) => (
-            <option key={rate} value={String(rate)}>{`${rate}x`}</option>
-          ))}
-        </select>
+          options={PLAYBACK_RATES.map((rate) => ({ value: String(rate), label: `${rate}x` }))}
+          onChange={handlePlaybackRateChange}
+          title={vt(language, "speed")}
+          placement="top"
+          className="w-[72px] shrink-0"
+        />
 
         <ControlButton
           onClick={cycleLoop}
           title={
             loopStart !== null && loopEnd !== null
-              ? `Loop ${formatDuration(loopStart)} – ${formatDuration(loopEnd)} — click to clear`
-              : "Loop — activate range (drag handles to set in/out)"
+              ? `${vt(language, "loopLabel")} ${formatDuration(loopStart)} – ${formatDuration(loopEnd)} — ${vt(language, "loopClearHint")}`
+              : `${vt(language, "loopLabel")} — ${vt(language, "loopActivateHint")}`
           }
           aria-pressed={loopStart !== null && loopEnd !== null}
           variant="outline"
@@ -701,7 +798,33 @@ export function VideoPlayer({ item, registerSeek, onTimeUpdate }: VideoPlayerPro
           <Repeat className="h-3.5 w-3.5" />
         </ControlButton>
 
-        <ControlButton onClick={toggleFullscreen} title="Fullscreen">
+        <ControlButton
+          onClick={() => setFullLoop((v) => !v)}
+          title={vt(language, "fullLoop")}
+          aria-pressed={fullLoop}
+          variant="outline"
+          active={fullLoop}
+        >
+          <Repeat1 className="h-3.5 w-3.5" />
+        </ControlButton>
+
+        <ShortcutsPopover
+          title={vt(language, "shortcutsTitle")}
+          buttonTitle={vt(language, "shortcuts")}
+          rows={[
+            { keys: "Space", label: vt(language, "scPlayPause") },
+            { keys: "M", label: vt(language, "scMute") },
+            { keys: "D / F", label: vt(language, "scFrameStep") },
+            { keys: seekModLabel, label: vt(language, "scSeek5") },
+            { keys: "Ctrl \u2191/\u2193", label: vt(language, "speed") },
+            { keys: "L", label: vt(language, "scLoop") },
+            { keys: "[ / ]", label: vt(language, "scLoopRegion") },
+            { keys: "\u2190 / \u2192", label: vt(language, "scItemNav") },
+            { keys: "Esc", label: vt(language, "scClose") },
+          ]}
+        />
+
+        <ControlButton onClick={toggleFullscreen} title={vt(language, "fullscreen")}>
           <Maximize className="h-3.5 w-3.5" />
         </ControlButton>
       </div>

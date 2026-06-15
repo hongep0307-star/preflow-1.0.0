@@ -25,3 +25,55 @@ export function buildViewerHtml(viewerHtml: string, data: unknown): string {
   }
   return viewerHtml + inject;
 }
+
+/* export 시점의 폴더 구조 스냅샷 노드 — viewer/types.ts 의 ViewerFolderNode
+ *  와 1:1. viewer 의 foldersFromTags 폴백과 동일 로직을 main 측에 둬, 명시
+ *  스냅샷을 페이로드에 실어 보낸다(구버전 export 호환을 위해 viewer 는
+ *  폴백을 계속 유지). */
+export interface ViewerFolderNode {
+  path: string;
+  name: string;
+  count: number;
+}
+
+/** items 의 `folder:` prefix 태그에서 폴더 노드 목록을 만든다.
+ *  - `count`: 해당 경로에 *직접* 소속된 아이템 수(하위 미포함).
+ *  - 중간(조상) 경로도 노드로 포함해 트리가 끊기지 않게 한다(직접 소속이
+ *    없는 조상은 count 0).
+ *  - `scopePath` 지정 시(폴더 범위 export) 그 경로와 하위 경로만 남긴다.
+ *    한 자료가 여러 폴더에 태깅돼 있어도 내보낸 폴더 밖의 "유령 폴더" 가
+ *    트리에 섞이지 않게 한다. ("folder:" prefix 없는 normalized path)
+ *  순수 함수 — vitest 로 직접 검증 가능. */
+export function buildFolderNodes(
+  items: Array<{ tags: string[] }>,
+  scopePath?: string,
+): ViewerFolderNode[] {
+  const FOLDER_PREFIX = "folder:";
+  const direct = new Map<string, number>();
+  const allPaths = new Set<string>();
+  for (const item of items) {
+    for (const tag of item.tags ?? []) {
+      if (typeof tag !== "string" || !tag.startsWith(FOLDER_PREFIX)) continue;
+      const full = tag.slice(FOLDER_PREFIX.length).replace(/^\/+|\/+$/g, "");
+      if (!full) continue;
+      direct.set(full, (direct.get(full) ?? 0) + 1);
+      let acc = "";
+      for (const seg of full.split("/")) {
+        if (!seg) continue;
+        acc = acc ? `${acc}/${seg}` : seg;
+        allPaths.add(acc);
+      }
+    }
+  }
+  const scope = scopePath?.replace(/^\/+|\/+$/g, "") || "";
+  const inScope = (path: string): boolean =>
+    !scope || path === scope || path.startsWith(`${scope}/`);
+  return [...allPaths]
+    .filter(inScope)
+    .sort((a, b) => a.localeCompare(b))
+    .map((path) => ({
+      path,
+      name: path.slice(path.lastIndexOf("/") + 1),
+      count: direct.get(path) ?? 0,
+    }));
+}

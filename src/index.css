@@ -135,6 +135,15 @@
   [data-radix-collection-item]:focus-visible {
     outline: none;
   }
+
+  /* 라이브러리 카드는 선택 상태를 자체 primary ring 으로 표시한다. 카드를
+     클릭한 뒤 화살표로 선택을 옮겨도 DOM focus 는 처음 클릭한 카드에 남아,
+     그 카드에 글로벌 무채색 outline(흰 프레임) 이 잔상처럼 남는 문제가 있었다.
+     selection ring 이 이미 키보드 위치를 나타내므로 카드의 focus outline 은
+     면제한다(위 Radix 항목과 동일한 이유). */
+  [data-library-card]:focus-visible {
+    outline: none;
+  }
 }
 
 @layer components {

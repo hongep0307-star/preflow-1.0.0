@@ -1,8 +1,9 @@
-import { useMemo } from "react";
-import { ExternalLink, Film, Image as ImageIcon, Link2, Maximize2, Youtube } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Check, Download, ExternalLink, Film, Image as ImageIcon, Link2, Maximize2, Youtube } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { resolveTypeLabel } from "./linkPlatform";
+import { vt, type ViewerLang } from "./i18n";
 import type { ReferenceItem, ReferenceAiSuggestions, TimestampNote } from "./types";
 
 /* Viewer 인스펙터 패널 — 메인 앱 LibraryInspector 의 read-only 사본.
@@ -20,23 +21,17 @@ interface ViewerInspectorProps {
   item: ReferenceItem;
   /** "Open large" 버튼 / 썸네일 클릭 시 호출 — App 이 모달/외부 URL 분기. */
   onOpen: () => void;
+  /** AI 분석 표시 언어 — App 의 언어 토글이 구동. */
+  language: "ko" | "en";
 }
 
-export function ViewerInspector({ item, onOpen }: ViewerInspectorProps) {
-  /* 시스템 언어 추정 — `<html lang>` 우선, 없으면 navigator. ko 이면 한국어
-   *  필드를 우선으로 보여주고 폴백으로 영어. 명시 토글이 없는 것은 viewer 가
-   *  최소 노출을 목표로 하기 때문 — 메인 앱처럼 Settings 의 displayLang/
-   *  tagLang 두 축이 있어야 하는 복잡한 케이스는 의도적으로 무시. */
-  const preferKo = useMemo(() => {
-    const htmlLang = typeof document !== "undefined"
-      ? (document.documentElement.getAttribute("lang") || "").toLowerCase()
-      : "";
-    if (htmlLang.startsWith("ko")) return true;
-    if (typeof navigator !== "undefined" && navigator.language) {
-      return navigator.language.toLowerCase().startsWith("ko");
-    }
-    return false;
-  }, []);
+export function ViewerInspector({ item, onOpen, language }: ViewerInspectorProps) {
+  /* swatch 클릭 → 색상 코드 클립보드 복사(메인 앱과 동일). 방금 복사한 색은
+   *  잠깐 체크 표시로 피드백. */
+  const [copiedColor, setCopiedColor] = useState<string | null>(null);
+  /* AI 분석의 KO/EN 필드 선택 — App 의 언어 토글(localStorage / export
+   *  source_language / navigator 기본값)에서 내려온 language prop 을 따른다. */
+  const preferKo = language === "ko";
 
   /* tags 중 folder: prefix 가 붙은 가상 폴더 태그는 제외하고, 사용자가 직접
    *  남긴 라벨만 표시. 메인 앱과 동일 정책. */
@@ -57,28 +52,44 @@ export function ViewerInspector({ item, onOpen }: ViewerInspectorProps) {
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <div className="flex-1 overflow-y-auto p-4">
-        <PreviewBlock item={item} onOpen={onOpen} />
+        <PreviewBlock item={item} onOpen={onOpen} language={language} />
 
         {palette.length > 0 ? (
           <div className="mt-3 flex flex-wrap items-center justify-center gap-1.5">
-            {palette.slice(0, 8).map((swatch, idx) => (
-              <button
-                key={`${swatch.color}-${idx}`}
-                type="button"
-                /* 이중 윤곽 — 메인 앱 인스펙터와 동일 패턴. 외곽선
-                   border-border 가 밝은 swatch 와 패널 배경 분리를,
-                   내부 ring-white/20 가 검정/짙은 swatch 와 dark 배경
-                   분리를 담당. */
-                className="h-5 w-5 border border-border ring-1 ring-inset ring-white/20 shadow-sm transition-transform hover:scale-110"
-                style={{ backgroundColor: swatch.color, borderRadius: 0 }}
-                title={swatch.color}
-                onClick={() => {
-                  if (typeof navigator !== "undefined" && navigator.clipboard) {
-                    navigator.clipboard.writeText(swatch.color).catch(() => {});
-                  }
-                }}
-              />
-            ))}
+            {palette.slice(0, 8).map((swatch, idx) => {
+              const copied =
+                copiedColor !== null && copiedColor.toLowerCase() === swatch.color.toLowerCase();
+              return (
+                <button
+                  key={`${swatch.color}-${idx}`}
+                  type="button"
+                  /* 이중 윤곽 — 메인 앱 인스펙터와 동일 패턴. 외곽선
+                     border-border 가 밝은 swatch 와 패널 배경 분리를,
+                     내부 ring-white/20 가 검정/짙은 swatch 와 dark 배경
+                     분리를 담당. */
+                  className="relative flex h-5 w-5 items-center justify-center border border-border shadow-sm ring-1 ring-inset ring-white/20 transition-transform hover:scale-110"
+                  style={{ backgroundColor: swatch.color, borderRadius: 0 }}
+                  title={`${swatch.color} — ${vt(language, copied ? "colorCopied" : "copyColor")}`}
+                  onClick={() => {
+                    if (typeof navigator === "undefined" || !navigator.clipboard) return;
+                    navigator.clipboard
+                      .writeText(swatch.color)
+                      .then(() => {
+                        setCopiedColor(swatch.color);
+                        window.setTimeout(
+                          () => setCopiedColor((c) => (c === swatch.color ? null : c)),
+                          1200,
+                        );
+                      })
+                      .catch(() => {});
+                  }}
+                >
+                  {copied ? (
+                    <Check className="h-3 w-3 text-white [filter:drop-shadow(0_0_1px_rgba(0,0,0,0.8))]" />
+                  ) : null}
+                </button>
+              );
+            })}
           </div>
         ) : null}
 
@@ -89,14 +100,16 @@ export function ViewerInspector({ item, onOpen }: ViewerInspectorProps) {
           <div className="text-label font-semibold leading-snug">{item.title || "—"}</div>
         </div>
 
+        <DownloadButton item={item} language={language} />
+
         {item.notes ? (
-          <div className="mt-4 border-t border-border-subtle pt-3 text-meta whitespace-pre-wrap text-foreground/85">
+          <div className="mt-4 border-t border-border-subtle/60 pt-3 text-meta whitespace-pre-wrap text-foreground/85">
             {item.notes}
           </div>
         ) : null}
 
         {item.source_url ? (
-          <div className="mt-3 flex items-center gap-2 border-t border-border-subtle pt-3">
+          <div className="mt-3 flex items-center gap-2 border-t border-border-subtle/60 pt-3">
             <Link2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             <div className="min-w-0 flex-1 truncate text-meta" title={item.source_url}>
               {item.source_url}
@@ -106,7 +119,7 @@ export function ViewerInspector({ item, onOpen }: ViewerInspectorProps) {
               target="_blank"
               rel="noopener noreferrer"
               className="text-muted-foreground hover:text-primary"
-              title="Open in browser"
+              title={vt(language, "openInBrowser")}
             >
               <ExternalLink className="h-3.5 w-3.5" />
             </a>
@@ -114,8 +127,8 @@ export function ViewerInspector({ item, onOpen }: ViewerInspectorProps) {
         ) : null}
 
         {visibleTags.length > 0 ? (
-          <div className="mt-5 border-t border-border-subtle pt-4">
-            <SectionLabel>Tags</SectionLabel>
+          <div className="mt-5 border-t border-border-subtle/60 pt-4">
+            <SectionLabel>{vt(language, "tags")}</SectionLabel>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {visibleTags.map((tag) => (
                 <Badge key={tag} variant="outline" className="text-caption">
@@ -126,12 +139,12 @@ export function ViewerInspector({ item, onOpen }: ViewerInspectorProps) {
           </div>
         ) : null}
 
-        {ai ? <AiSection ai={ai} preferKo={preferKo} /> : null}
+        {ai ? <AiSection ai={ai} preferKo={preferKo} language={language} /> : null}
 
-        <PropertiesGrid item={item} />
+        <PropertiesGrid item={item} language={language} />
 
         {item.timestamp_notes && item.timestamp_notes.length > 0 ? (
-          <NotesList notes={item.timestamp_notes} kind={item.kind} />
+          <NotesList notes={item.timestamp_notes} kind={item.kind} language={language} />
         ) : null}
       </div>
     </div>
@@ -144,7 +157,7 @@ export function ViewerInspector({ item, onOpen }: ViewerInspectorProps) {
  * 보여주고, 우상단 Maximize 버튼으로 큰 화면(모달/외부 URL) 진입.
  * GIF/영상의 자동 재생은 사이드바에서는 잡음이 많아 정지된 첫 프레임만
  * 노출. */
-function PreviewBlock({ item, onOpen }: { item: ReferenceItem; onOpen: () => void }) {
+function PreviewBlock({ item, onOpen, language }: { item: ReferenceItem; onOpen: () => void; language: ViewerLang }) {
   const src = item.thumbnail_url || item.file_url || null;
   const aspect =
     item.width && item.height && item.width > 0 && item.height > 0
@@ -159,7 +172,7 @@ function PreviewBlock({ item, onOpen }: { item: ReferenceItem; onOpen: () => voi
         onClick={onOpen}
         className="group/preview relative block w-full overflow-hidden border border-border-subtle bg-muted/30 transition-colors hover:border-primary/40"
         style={{ borderRadius: 0, aspectRatio: `${aspect}` }}
-        title="Open large view"
+        title={vt(language, "openLarge")}
       >
         {src && item.kind !== "youtube" && item.kind !== "link" ? (
           <img
@@ -176,6 +189,52 @@ function PreviewBlock({ item, onOpen }: { item: ReferenceItem; onOpen: () => voi
         </div>
       </button>
     </div>
+  );
+}
+
+/* 원본 다운로드 — single-html 은 file_url 이 data: URI, ZIP 은 상대경로라
+ *  두 경우 모두 <a download> 으로 받을 수 있다. youtube/link 는 원본 파일이
+ *  없으므로 (source_url 외부 링크는 아래 별도 표시) 버튼을 숨긴다. */
+function downloadFilename(item: ReferenceItem): string {
+  const MIME_EXT: Record<string, string> = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "image/avif": ".avif",
+    "video/mp4": ".mp4",
+    "video/webm": ".webm",
+    "video/quicktime": ".mov",
+  };
+  const fromUrl = (item.file_url ?? "").match(/\.([a-z0-9]{1,5})(?:[?#]|$)/i);
+  const ext = (fromUrl ? `.${fromUrl[1]}` : "") || MIME_EXT[item.mime_type ?? ""] || "";
+  const base = (item.title || item.id || "download")
+    .replace(/[\\/:*?"<>|]+/g, "_")
+    .slice(0, 80);
+  return ext && !base.toLowerCase().endsWith(ext) ? `${base}${ext}` : base;
+}
+
+function DownloadButton({ item, language }: { item: ReferenceItem; language: ViewerLang }) {
+  if (!item.file_url || item.kind === "youtube" || item.kind === "link") return null;
+  /* single-html(=data: URI) 은 <a download> 으로 실제 다운로드가 되지만, ZIP
+   *  (=상대경로) 은 file:// 에서 download 속성이 무시돼 그냥 열린다. 그래서
+   *  스킴에 따라 동작/라벨을 바꾼다: data → 다운로드, 상대경로 → 원본 파일 열기. */
+  const isData = item.file_url.startsWith("data:");
+  const label = vt(language, isData ? "download" : "openOriginal");
+  const Icon = isData ? Download : ExternalLink;
+  return (
+    <a
+      href={item.file_url}
+      {...(isData
+        ? { download: downloadFilename(item) }
+        : { target: "_blank", rel: "noopener noreferrer" })}
+      className="mt-3 inline-flex h-8 items-center gap-1.5 border border-primary bg-primary/10 px-2.5 text-caption font-medium text-primary transition-colors hover:bg-primary/20"
+      style={{ borderRadius: 0 }}
+      title={label}
+    >
+      <Icon className="h-3.5 w-3.5" />
+      {label}
+    </a>
   );
 }
 
@@ -198,7 +257,7 @@ function PreviewFallback({ item }: { item: ReferenceItem }) {
  * 메인 앱 LibraryInspector 의 ai 탭에서 read-only 영역만 추림. Accept/
  * Reanalyze 같은 mutation 액션은 viewer 에 의미 없어 제거. Mood 와 분석
  * 본문 (Style/Motion/Brief/Conti) 만 노출. */
-function AiSection({ ai, preferKo }: { ai: ReferenceAiSuggestions; preferKo: boolean }) {
+function AiSection({ ai, preferKo, language }: { ai: ReferenceAiSuggestions; preferKo: boolean; language: ViewerLang }) {
   const pickArr = (en?: string[], ko?: string[]): string[] => {
     if (preferKo) return ko && ko.length > 0 ? ko : en ?? [];
     return en && en.length > 0 ? en : ko ?? [];
@@ -219,22 +278,22 @@ function AiSection({ ai, preferKo }: { ai: ReferenceAiSuggestions; preferKo: boo
   const brief = pickStr(ai.brief_fit, ai.brief_fit_ko);
   const conti = pickStr(ai.conti_use, ai.conti_use_ko);
   const blocks: { key: string; label: string; body: string }[] = [];
-  if (scene) blocks.push({ key: "scene", label: preferKo ? "장면" : "Scene", body: scene });
-  if (style) blocks.push({ key: "style", label: "Style", body: style });
-  if (motion) blocks.push({ key: "motion", label: "Motion", body: motion });
-  if (brief) blocks.push({ key: "brief", label: "Brief", body: brief });
-  if (conti) blocks.push({ key: "conti", label: "Conti", body: conti });
+  if (scene) blocks.push({ key: "scene", label: vt(language, "sceneLabel"), body: scene });
+  if (style) blocks.push({ key: "style", label: vt(language, "styleLabel"), body: style });
+  if (motion) blocks.push({ key: "motion", label: vt(language, "motionLabel"), body: motion });
+  if (brief) blocks.push({ key: "brief", label: vt(language, "briefLabel"), body: brief });
+  if (conti) blocks.push({ key: "conti", label: vt(language, "contiLabel"), body: conti });
 
   if (suggestedTags.length === 0 && moods.length === 0 && blocks.length === 0) {
     return null;
   }
   return (
-    <div className="mt-5 border-t border-border-subtle pt-4">
-      <SectionLabel>AI Analysis</SectionLabel>
+    <div className="mt-5 border-t border-border-subtle/60 pt-4">
+      <SectionLabel>{vt(language, "aiAnalysis")}</SectionLabel>
       {suggestedTags.length > 0 ? (
         <div className="mt-2">
-          <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Suggested Tags
+          <div className="text-2xs font-semibold tracking-wide text-muted-foreground">
+            {vt(language, "suggestedTags")}
           </div>
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             {suggestedTags.map((tag, idx) => (
@@ -247,8 +306,8 @@ function AiSection({ ai, preferKo }: { ai: ReferenceAiSuggestions; preferKo: boo
       ) : null}
       {moods.length > 0 ? (
         <div className="mt-3 border-t border-border-subtle/60 pt-3">
-          <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Mood
+          <div className="text-2xs font-semibold tracking-wide text-muted-foreground">
+            {vt(language, "moodSection")}
           </div>
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             {moods.map((mood, idx) => (
@@ -264,7 +323,7 @@ function AiSection({ ai, preferKo }: { ai: ReferenceAiSuggestions; preferKo: boo
           <div className="space-y-2.5">
             {blocks.map((block) => (
               <div key={block.key}>
-                <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
+                <div className="text-2xs font-semibold tracking-wide text-muted-foreground">
                   {block.label}
                 </div>
                 <div className="mt-1 whitespace-pre-wrap text-caption leading-relaxed text-foreground/80">
@@ -285,31 +344,31 @@ function AiSection({ ai, preferKo }: { ai: ReferenceAiSuggestions; preferKo: boo
  * 사용자별 상태는 viewer 에 의미 없으니 제거. Dimensions/Duration/Type/
  * Size/Date Created/Date Modified/Date Imported 만 표시. 정보가 없으면
  * 해당 행 자체를 숨겨 빈 자리에 "—" 가 줄지어 보이지 않도록. */
-function PropertiesGrid({ item }: { item: ReferenceItem }) {
+function PropertiesGrid({ item, language }: { item: ReferenceItem; language: ViewerLang }) {
   const rows: Array<{ label: string; value: string }> = [];
   if (item.width && item.height) {
-    rows.push({ label: "Dimensions", value: `${item.width} × ${item.height}` });
+    rows.push({ label: vt(language, "propDimensions"), value: `${item.width} × ${item.height}` });
   }
   if (item.kind === "video" || (item.duration_sec ?? 0) > 0) {
-    rows.push({ label: "Duration", value: formatDuration(item.duration_sec) });
+    rows.push({ label: vt(language, "propDuration"), value: formatDuration(item.duration_sec) });
   }
-  rows.push({ label: "Type", value: item.mime_type || resolveTypeLabel(item) });
+  rows.push({ label: vt(language, "propType"), value: item.mime_type || resolveTypeLabel(item) });
   if (item.file_size) {
-    rows.push({ label: "Size", value: formatBytes(item.file_size) });
+    rows.push({ label: vt(language, "propSize"), value: formatBytes(item.file_size) });
   }
   if (item.imported_at || item.created_at) {
-    rows.push({ label: "Imported", value: formatDateTime(item.imported_at ?? item.created_at) });
+    rows.push({ label: vt(language, "propImported"), value: formatDateTime(item.imported_at ?? item.created_at) });
   }
   if (item.created_at) {
-    rows.push({ label: "Created", value: formatDateTime(item.created_at) });
+    rows.push({ label: vt(language, "propCreated"), value: formatDateTime(item.created_at) });
   }
   if (item.updated_at) {
-    rows.push({ label: "Modified", value: formatDateTime(item.updated_at) });
+    rows.push({ label: vt(language, "propModified"), value: formatDateTime(item.updated_at) });
   }
   if (rows.length === 0) return null;
   return (
     <div className="mt-5 border border-border-subtle bg-surface-panel p-3" style={{ borderRadius: 0 }}>
-      <SectionLabel className="mb-3">Properties</SectionLabel>
+      <SectionLabel className="mb-3">{vt(language, "properties")}</SectionLabel>
       <div className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2 text-caption">
         {rows.map((row) => (
           <span key={row.label} className="contents">
@@ -329,7 +388,7 @@ function PropertiesGrid({ item }: { item: ReferenceItem }) {
  * read-only 라 시각/프레임/region 표시만. 영상 자료의 시각 시크는 모달
  * 안 NotesPanel 이 책임 — 사이드바는 진입 전 미리보기 정도라 단순 텍스트
  * 리스트로 노출. */
-function NotesList({ notes, kind }: { notes: TimestampNote[]; kind: string }) {
+function NotesList({ notes, kind, language }: { notes: TimestampNote[]; kind: string; language: ViewerLang }) {
   const sorted = useMemo(() => {
     return [...notes].sort((a, b) => {
       if (kind === "video" || kind === "youtube") {
@@ -342,9 +401,9 @@ function NotesList({ notes, kind }: { notes: TimestampNote[]; kind: string }) {
     });
   }, [notes, kind]);
   return (
-    <div className="mt-5 border-t border-border-subtle pt-4">
+    <div className="mt-5 border-t border-border-subtle/60 pt-4">
       <SectionLabel className="mb-2">
-        {kind === "image" || kind === "webp" ? "Region Notes" : "Notes"}
+        {kind === "image" || kind === "webp" ? vt(language, "regionNotes") : vt(language, "notesSection")}
       </SectionLabel>
       <div className="space-y-2">
         {sorted.map((note) => (
@@ -380,7 +439,7 @@ function SectionLabel({ children, className }: { children: React.ReactNode; clas
   return (
     <div
       className={cn(
-        "text-2xs font-semibold uppercase tracking-wide text-muted-foreground",
+        "text-2xs font-semibold tracking-wide text-muted-foreground",
         className,
       )}
     >

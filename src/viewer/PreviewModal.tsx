@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ExternalLink, Link2 } from "lucide-react";
+import { ExternalLink, FileText, Link2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { youtubeEmbedUrl } from "@/lib/youtube";
 import { useImagePanZoom } from "@/lib/useImagePanZoom";
@@ -7,6 +7,8 @@ import { VideoPlayer } from "./VideoPlayer";
 import { GifPlayer, GifFallback } from "./GifPlayer";
 import { NotesPanel } from "./NotesPanel";
 import { RegionView } from "./RegionView";
+import { docViewMode } from "./linkPlatform";
+import { vt, type ViewerLang } from "./i18n";
 import type { ReferenceItem } from "./types";
 
 /* 큰 화면 모달 본체.
@@ -24,9 +26,11 @@ const NOTES_PANEL_MIN_VIEWPORT_WIDTH = 900;
 
 interface PreviewModalProps {
   item: ReferenceItem;
+  /** 플레이어 툴팁/단축키 라벨 언어 — App 의 언어 토글이 구동. */
+  language?: ViewerLang;
 }
 
-export function PreviewModal({ item }: PreviewModalProps) {
+export function PreviewModal({ item, language = "en" }: PreviewModalProps) {
   const hasNotes = (item.timestamp_notes?.length ?? 0) > 0;
   // useViewportWiderThan 은 항상 호출되어야 한다 — `hasNotes && useViewportWiderThan(...)`
   // 처럼 short-circuit 자리에 두면 자료에 노트가 추가/제거되는 순간 호출 횟수가
@@ -52,11 +56,14 @@ export function PreviewModal({ item }: PreviewModalProps) {
   const [activeFrameIndex, setActiveFrameIndex] = useState<number | undefined>(undefined);
   /* item 변경 시 초기화 — 이전 자료의 active 가 새 자료 NotesPanel 에 잘못
    *  강조되는 것을 막는다. */
+  /* seek 핸들러 ref 는 여기서 null 로 초기화하지 않는다 — 자식(VideoPlayer/
+   *  GifPlayer) effect 가 먼저 실행돼 핸들러를 등록하는데, 이 부모 effect 가
+   *  나중에 실행되며 그 등록을 null 로 덮어써 "노트 클릭 시크" 가 동작하지
+   *  않던 버그가 있었다. 핸들러는 videoRef/frame state 를 캡쳐해 안정적이라
+   *  초기화가 필요 없다. */
   useEffect(() => {
     setActiveAtSec(undefined);
     setActiveFrameIndex(undefined);
-    seekSecRef.current = null;
-    seekFrameRef.current = null;
   }, [item.id]);
 
   return (
@@ -64,6 +71,7 @@ export function PreviewModal({ item }: PreviewModalProps) {
       <div className="flex min-w-0 flex-1 flex-col">
         <MediaBranch
           item={item}
+          language={language}
           registerSeekSec={registerSeekSec}
           registerSeekFrame={registerSeekFrame}
           onTimeUpdate={setActiveAtSec}
@@ -81,6 +89,7 @@ export function PreviewModal({ item }: PreviewModalProps) {
             onSeekFrame={(idx) => seekFrameRef.current?.(idx)}
             activeAtSec={activeAtSec}
             activeFrameIndex={activeFrameIndex}
+            language={language}
           />
         </aside>
       ) : null}
@@ -90,6 +99,7 @@ export function PreviewModal({ item }: PreviewModalProps) {
 
 interface MediaBranchProps {
   item: ReferenceItem;
+  language: ViewerLang;
   registerSeekSec: (fn: (sec: number) => void) => void;
   registerSeekFrame: (fn: (idx: number) => void) => void;
   onTimeUpdate: (sec: number) => void;
@@ -98,6 +108,7 @@ interface MediaBranchProps {
 
 function MediaBranch({
   item,
+  language,
   registerSeekSec,
   registerSeekFrame,
   onTimeUpdate,
@@ -112,16 +123,18 @@ function MediaBranch({
     return (
       <VideoPlayer
         item={item}
+        language={language}
         registerSeek={registerSeekSec}
         onTimeUpdate={onTimeUpdate}
       />
     );
   }
   if (item.kind === "gif" && item.file_url) {
-    if (gifFallback) return <GifFallback item={item} />;
+    if (gifFallback) return <GifFallback item={item} language={language} />;
     return (
       <GifPlayer
         item={item}
+        language={language}
         onUnsupported={() => setGifFallback(true)}
         registerSeek={registerSeekFrame}
         onFrameUpdate={onFrameUpdate}
@@ -134,8 +147,52 @@ function MediaBranch({
   if (item.kind === "link") {
     return <LinkView item={item} />;
   }
+  if (item.kind === "doc") {
+    const mode = docViewMode(item);
+    if (mode === "pdf" && item.file_url) return <PdfView item={item} />;
+    if (mode === "audio" && item.file_url) return <AudioView item={item} />;
+    return <UnsupportedDocView item={item} language={language} />;
+  }
   /* image / webp / file_url 없는 자료들 — 정지 이미지 + 줌. */
   return <ImageView item={item} />;
+}
+
+/* ────────────── PDF ────────────── */
+
+function PdfView({ item }: { item: ReferenceItem }) {
+  return (
+    <div className="flex h-full w-full items-center justify-center bg-black">
+      <iframe
+        src={item.file_url ?? undefined}
+        title={item.title}
+        className="h-full w-full border-0 bg-white"
+      />
+    </div>
+  );
+}
+
+/* ────────────── Audio ────────────── */
+
+function AudioView({ item }: { item: ReferenceItem }) {
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-6 bg-black px-8 text-center text-white/80">
+      <FileText className="h-12 w-12 text-white/40" />
+      <div className="max-w-[80%] truncate text-label">{item.title}</div>
+      <audio src={item.file_url ?? undefined} controls autoPlay className="w-full max-w-[480px]" />
+    </div>
+  );
+}
+
+/* ────────────── 미지원 문서/아카이브 등 ────────────── */
+
+function UnsupportedDocView({ item, language }: { item: ReferenceItem; language: ViewerLang }) {
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-4 bg-black px-8 text-center text-white/80">
+      <FileText className="h-12 w-12 text-white/40" />
+      <div className="max-w-[80%] truncate text-label">{item.title}</div>
+      <div className="text-meta text-white/50">{vt(language, "docNotViewable")}</div>
+    </div>
+  );
 }
 
 /* ────────────── Image / WebP ────────────── */

@@ -5,7 +5,7 @@ import { pipeline } from "stream/promises";
 import JSZip from "jszip";
 import { getStorageBasePath } from "./paths";
 import { dbSelect } from "./db-utils";
-import { buildViewerHtml } from "./htmlExportBuilder";
+import { buildViewerHtml, buildFolderNodes, type ViewerFolderNode } from "./htmlExportBuilder";
 
 export { buildViewerHtml };
 
@@ -37,6 +37,12 @@ interface ExportHtmlRequest {
   title?: string;
   /** "zip" | "single-html". 기본 "zip". */
   format?: "zip" | "single-html";
+  /** export 한 앱의 UI 언어 — 뷰어 초기 언어 기본값으로 직렬화. */
+  language?: "ko" | "en";
+  /** 폴더 트리를 한정할 폴더 경로("folder:" 접두 유무 무관). folder scope 가
+   *  아닌데도(예: 활성 폴더에서 선택 export) 폴더 트리를 그 폴더 하위로만
+   *  보이게 하고 싶을 때 사용. folder scope 면 folderTag 가 우선. */
+  folderScope?: string;
 }
 
 interface ReferenceRow {
@@ -93,7 +99,7 @@ interface AiSuggestionsOut {
  *  여기 정의를 그대로 JSON 으로 넣으면 viewer 가 그대로 받아 쓴다. */
 interface ViewerReference {
   id: string;
-  kind: "image" | "webp" | "gif" | "video" | "youtube" | "link";
+  kind: "image" | "webp" | "gif" | "video" | "youtube" | "link" | "doc";
   title: string;
   file_url: string | null;
   thumbnail_url: string | null;
@@ -119,6 +125,10 @@ interface ViewerData {
   generated_at: string;
   item_count: number;
   items: ViewerReference[];
+  /** export 시점 폴더 구조 스냅샷. viewer 는 부재 시 tags 폴백. */
+  folders?: ViewerFolderNode[];
+  /** 뷰어 초기 언어 기본값. */
+  source_language?: "ko" | "en";
 }
 
 export interface ExportHtmlResult {
@@ -159,7 +169,14 @@ function normalizeTimestampNotes(value: unknown): Array<Record<string, unknown>>
 }
 
 function normalizeKind(raw: unknown): ViewerReference["kind"] {
-  if (raw === "webp" || raw === "gif" || raw === "video" || raw === "youtube" || raw === "link") {
+  if (
+    raw === "webp" ||
+    raw === "gif" ||
+    raw === "video" ||
+    raw === "youtube" ||
+    raw === "link" ||
+    raw === "doc"
+  ) {
     return raw;
   }
   return "image";
@@ -468,12 +485,24 @@ async function loadViewerBundle(): Promise<ViewerBundle> {
  * 크기를 줄인다. file_url 은 호출자가 ZIP/single-html 분기에서 덮어
  * 쓰므로 여기선 null. */
 function toViewerReference(row: ReferenceRow): ViewerReference {
+  const kind = normalizeKind(row.kind);
+  /* youtube 는 원격 썸네일(i.ytimg.com) URL 만 있고 로컬 파일이 없는 경우가
+   *  많다. resolveStorageUrlToPath 가 원격 URL 은 null 을 돌려줘 그대로 두면
+   *  뷰어에 썸네일이 안 뜬다. 원격 URL 을 기본값으로 보존해 (온라인에서)
+   *  카드/인스펙터가 썸네일을 보이게 한다. 로컬 썸네일이 존재하면 아래
+   *  export 루프가 이 값을 ZIP 상대경로 / data: URI 로 덮어쓴다. */
+  const remoteYoutubeThumb =
+    kind === "youtube" &&
+    typeof row.thumbnail_url === "string" &&
+    /^https?:\/\//i.test(row.thumbnail_url)
+      ? row.thumbnail_url
+      : null;
   return {
     id: String(row.id),
-    kind: normalizeKind(row.kind),
+    kind,
     title: typeof row.title === "string" ? row.title : "",
     file_url: null,
-    thumbnail_url: null,
+    thumbnail_url: remoteYoutubeThumb,
     mime_type: typeof row.mime_type === "string" ? row.mime_type : null,
     file_size: typeof row.file_size === "number" ? row.file_size : null,
     duration_sec: typeof row.duration_sec === "number" ? row.duration_sec : null,
@@ -510,6 +539,15 @@ export async function exportLibraryAsHtml(req: ExportHtmlRequest): Promise<Expor
   const rows = resolveRows(req);
 
   const scopeLabel = req.folderTag?.replace(/^folder:/, "") || req.scope;
+  /* 폴더 범위 export 면 폴더 트리를 그 폴더 하위로만 한정한다. 한 자료가
+   *  여러 폴더에 태깅돼 있어도(예: test_01 자료가 test_02/브리프매치에도
+   *  속함) 내보낸 폴더 밖의 유령 폴더가 트리에 섞이지 않게 한다. */
+  const folderScopePath =
+    req.scope === "folder" && req.folderTag
+      ? req.folderTag.replace(/^folder:/, "")
+      : req.folderScope
+        ? req.folderScope.replace(/^folder:/, "")
+        : undefined;
   const today = new Date().toISOString().slice(0, 10);
   const baseName = sanitizeName(req.suggestedName || `${scopeLabel}-${today}`);
   const extension = format === "zip" ? "zip" : "html";
@@ -541,15 +579,32 @@ export async function exportLibraryAsHtml(req: ExportHtmlRequest): Promise<Expor
       const ref = toViewerReference(row);
       const fileSrc = resolveStorageUrlToPath(row.file_url);
       if (await fileExists(fileSrc)) {
-        const ext = path.extname(fileSrc!) || ".bin";
-        const rel = `assets/files/${row.id}${ext}`;
-        zip.file(rel, fs.createReadStream(fileSrc!));
-        ref.file_url = rel;
-        try {
-          const stat = await fs.promises.stat(fileSrc!);
-          totalSize += stat.size;
-        } catch {
-          /* stat 실패는 무시 — 크기 합산에서만 빠짐. */
+        if (ref.kind === "gif") {
+          /* gif / 애니메이션 webp 는 뷰어가 ImageDecoder(=fetch 기반)로 프레임을
+           *  읽는다. ZIP 을 file:// 로 더블클릭해 열면 상대경로 fetch 가 브라우저
+           *  보안에 막혀 프레임 디코드가 실패한다(→ 폴백 + 컨트롤 없음). 따라서
+           *  gif 만 data: URI 로 인라인해 file:// 에서도 fetch 가 되어 재생/프레임/
+           *  루프 컨트롤이 정상 동작하게 한다. (gif 는 보통 작아 인라인 부담 적음) */
+          try {
+            const buf = await fs.promises.readFile(fileSrc!);
+            const mime = guessMime(fileSrc!, typeof row.mime_type === "string" ? row.mime_type : null);
+            ref.file_url = `data:${mime};base64,${buf.toString("base64")}`;
+            ref.mime_type = mime;
+            totalSize += buf.byteLength;
+          } catch {
+            skipped.push(`${row.title}: failed to read file`);
+          }
+        } else {
+          const ext = path.extname(fileSrc!) || ".bin";
+          const rel = `assets/files/${row.id}${ext}`;
+          zip.file(rel, fs.createReadStream(fileSrc!));
+          ref.file_url = rel;
+          try {
+            const stat = await fs.promises.stat(fileSrc!);
+            totalSize += stat.size;
+          } catch {
+            /* stat 실패는 무시 — 크기 합산에서만 빠짐. */
+          }
         }
       } else if (row.file_url && row.kind !== "youtube" && row.kind !== "link") {
         skipped.push(`${row.title}: missing file_url`);
@@ -574,6 +629,8 @@ export async function exportLibraryAsHtml(req: ExportHtmlRequest): Promise<Expor
       generated_at: new Date().toISOString(),
       item_count: items.length,
       items,
+      folders: buildFolderNodes(items, folderScopePath),
+      source_language: req.language === "ko" || req.language === "en" ? req.language : undefined,
     };
     const finalHtml = buildViewerHtml(bundle.html, viewerData);
     zip.file("index.html", finalHtml);
@@ -621,6 +678,8 @@ export async function exportLibraryAsHtml(req: ExportHtmlRequest): Promise<Expor
       generated_at: new Date().toISOString(),
       item_count: items.length,
       items,
+      folders: buildFolderNodes(items, folderScopePath),
+      source_language: req.language === "ko" || req.language === "en" ? req.language : undefined,
     };
     const finalHtml = buildViewerHtml(bundle.html, viewerData);
 

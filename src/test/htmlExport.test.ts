@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildViewerHtml } from "../../electron/htmlExportBuilder";
+import { buildFolderNodes, buildViewerHtml } from "../../electron/htmlExportBuilder";
 
 /* HTML Viewer Export — pure builder 검증.
  *
@@ -81,5 +81,40 @@ describe("buildViewerHtml", () => {
     const out = buildViewerHtml(noBody, { title: "Z", items: [] });
     expect(out.endsWith("</script>")).toBe(true);
     expect(out).toContain("window.__PREFLOW_VIEWER_DATA__");
+  });
+});
+
+describe("buildFolderNodes", () => {
+  it("parses folder: prefix tags into nodes with direct counts and ancestors", () => {
+    const nodes = buildFolderNodes([
+      { tags: ["folder:캐릭터/메인", "a"] },
+      { tags: ["folder:캐릭터/메인"] },
+      { tags: ["folder:배경"] },
+      { tags: ["b"] },
+    ]);
+    const byPath = Object.fromEntries(nodes.map((n) => [n.path, n]));
+    expect(byPath["캐릭터"]).toEqual({ path: "캐릭터", name: "캐릭터", count: 0 });
+    expect(byPath["캐릭터/메인"]).toEqual({ path: "캐릭터/메인", name: "메인", count: 2 });
+    expect(byPath["배경"]).toEqual({ path: "배경", name: "배경", count: 1 });
+  });
+
+  it("returns empty for items without folder tags", () => {
+    expect(buildFolderNodes([{ tags: ["x", "y"] }, { tags: [] }])).toEqual([]);
+  });
+
+  it("scopePath limits the tree to that folder subtree (multi-folder items don't leak siblings)", () => {
+    /* 한 자료가 여러 폴더에 태깅돼 있어도 폴더 범위 export 면 그 폴더 하위만
+     *  남아야 한다 (test_01 export 시 test_02/브리프 매치 가 트리에 안 나옴). */
+    const items = [
+      { tags: ["folder:test_01", "folder:브리프 매치/PUBGM"] },
+      { tags: ["folder:test_01/sub"] },
+      { tags: ["folder:test_02"] },
+    ];
+    const scoped = buildFolderNodes(items, "test_01");
+    expect(scoped.map((n) => n.path).sort()).toEqual(["test_01", "test_01/sub"]);
+    /* scope 없으면 전체 폴더가 다 잡힌다(대조군). */
+    const all = buildFolderNodes(items).map((n) => n.path);
+    expect(all).toContain("test_02");
+    expect(all).toContain("브리프 매치/PUBGM");
   });
 });

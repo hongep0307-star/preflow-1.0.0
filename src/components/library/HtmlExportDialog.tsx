@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -16,7 +17,16 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { exportPackAsHtml } from "@/lib/preflowPackClient";
 import type { HtmlExportFormat, PackScope } from "@/lib/preflowPack";
 import { useToast } from "@/hooks/use-toast";
-import { useT } from "@/lib/uiLanguage";
+import { useUiLanguage } from "@/lib/uiLanguage";
+import { formatBytes } from "@/lib/storageMaintenance";
+
+/* single-html 은 모든 미디어를 base64(4/3 오버헤드)로 인라인 + 뷰어 셸
+ *  (~600KB). 합산 file_size 로 결과 용량을 사전 추정한다. */
+const SINGLE_HTML_SHELL_BYTES = 600 * 1024;
+const SINGLE_HTML_LIMIT_BYTES = 200 * 1024 * 1024;
+function estimateSingleHtmlBytes(totalFileBytes: number): number {
+  return Math.round(totalFileBytes * (4 / 3)) + SINGLE_HTML_SHELL_BYTES;
+}
 
 /**
  * HTML Viewer Export 다이얼로그.
@@ -40,6 +50,10 @@ interface HtmlExportDialogProps {
   ids?: string[];
   folderTag?: string;
   itemCount: number;
+  /** 범위 내 아이템 file_size 합(바이트) — single-html 용량 사전 표기용. */
+  sizeBytes?: number;
+  /** 폴더 트리를 한정할 폴더 경로(선택 export 등 folder scope 가 아닐 때). */
+  folderScope?: string;
 }
 
 export function HtmlExportDialog({
@@ -50,9 +64,11 @@ export function HtmlExportDialog({
   ids,
   folderTag,
   itemCount,
+  sizeBytes,
+  folderScope,
 }: HtmlExportDialogProps) {
   const { toast } = useToast();
-  const t = useT();
+  const { t, language } = useUiLanguage();
   const [format, setFormat] = useState<HtmlExportFormat>("zip");
   const [includeSubfolders, setIncludeSubfolders] = useState(true);
   const [viewerTitle, setViewerTitle] = useState(scopeLabel);
@@ -68,10 +84,15 @@ export function HtmlExportDialog({
     }
   }, [open, scopeLabel]);
 
-  /* single-html 포맷은 base64 인라인이라 큰 영상이 들어가면 결과 파일이
-   *  쉽게 100MB 를 넘긴다. itemCount 와 함께 보조 경고만 표시 — 사용자가
-   *  스스로 ZIP 으로 갈아탈지 결정. */
-  const showSingleHtmlWarning = format === "single-html" && itemCount > 20;
+  /* single-html 예상 용량 — 합산 file_size 가 있을 때만 실측 추정. 200MB
+   *  초과면 경고 톤 + ZIP 권장. (sizeBytes 부재 시 표기 생략.) */
+  const estimatedBytes = useMemo(
+    () => (typeof sizeBytes === "number" ? estimateSingleHtmlBytes(sizeBytes) : null),
+    [sizeBytes],
+  );
+  const estimatedLabel = estimatedBytes !== null ? formatBytes(estimatedBytes) : null;
+  const overLimit = estimatedBytes !== null && estimatedBytes > SINGLE_HTML_LIMIT_BYTES;
+  const showSingleHtmlWarning = format === "single-html" && overLimit;
 
   const description = useMemo(
     () =>
@@ -94,6 +115,8 @@ export function HtmlExportDialog({
         suggestedName: packName,
         title: viewerTitle,
         format,
+        language,
+        folderScope,
       });
       if (result.canceled) return;
       toast({
@@ -185,7 +208,19 @@ export function HtmlExportDialog({
                   htmlFor="html-export-format-single"
                   className="cursor-pointer text-meta font-normal"
                 >
-                  <div>{t("htmlExport.formatSingleHtml")}</div>
+                  <div className="flex items-center gap-2">
+                    <span>{t("htmlExport.formatSingleHtml")}</span>
+                    {estimatedLabel ? (
+                      <span
+                        className={cn(
+                          "font-mono text-2xs",
+                          overLimit ? "text-amber-600" : "text-muted-foreground",
+                        )}
+                      >
+                        {t("htmlExport.estimatedSize", { size: estimatedLabel })}
+                      </span>
+                    ) : null}
+                  </div>
                   <div className="mt-0.5 text-2xs text-muted-foreground">
                     {t("htmlExport.formatSingleHtmlHint")}
                   </div>
@@ -212,7 +247,7 @@ export function HtmlExportDialog({
               className="border border-amber-500/40 bg-amber-500/10 p-3 text-caption text-amber-600"
               style={{ borderRadius: 0 }}
             >
-              {t("htmlExport.singleHtmlWarning")}
+              {t("htmlExport.tooLargeHint", { limit: formatBytes(SINGLE_HTML_LIMIT_BYTES) })}
             </div>
           ) : null}
         </div>

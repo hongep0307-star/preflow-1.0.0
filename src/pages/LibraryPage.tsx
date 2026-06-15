@@ -412,6 +412,10 @@ type HtmlExportDialogState = {
   ids?: string[];
   folderTag?: string;
   itemCount: number;
+  /** 범위 내 아이템 file_size 합(바이트) — single-html 용량 사전 표기용. */
+  sizeBytes?: number;
+  /** 폴더 트리를 한정할 폴더 경로(활성 폴더에서 선택 export 시). */
+  folderScope?: string;
 } | null;
 
 type FolderEditState = {
@@ -5984,6 +5988,22 @@ const LibraryPage = () => {
     return activeItems.filter((item) => item.tags.some((candidate) => candidate === tag || candidate.startsWith(`${tag}/`))).length;
   }, [activeItems]);
 
+  /* 폴더(하위 포함) 내 아이템 file_size 합 — HTML single-html export 용량
+   *  사전 표기에만 사용. file_size 누락은 0 으로 무시. */
+  const folderSizeBytes = useCallback((tag: string): number => {
+    return activeItems
+      .filter((item) => item.tags.some((candidate) => candidate === tag || candidate.startsWith(`${tag}/`)))
+      .reduce((acc, item) => acc + (item.file_size ?? 0), 0);
+  }, [activeItems]);
+
+  /* 주어진 id 집합의 file_size 합. */
+  const sizeBytesForIds = useCallback((ids: string[]): number => {
+    const idSet = new Set(ids);
+    return activeItems
+      .filter((item) => idSet.has(item.id))
+      .reduce((acc, item) => acc + (item.file_size ?? 0), 0);
+  }, [activeItems]);
+
   const handleCreateFolder = useCallback((parentPath?: string) => {
     setFolderEdit({ mode: "create", parentPath: parentPath ?? null });
   }, []);
@@ -6730,8 +6750,9 @@ const LibraryPage = () => {
       scopeLabel: row.tag.replace(/^folder:/, ""),
       folderTag: row.tag,
       itemCount: folderCount(row.tag),
+      sizeBytes: folderSizeBytes(row.tag),
     });
-  }, [folderCount]);
+  }, [folderCount, folderSizeBytes]);
 
   const handleExportSelected = useCallback((item?: ReferenceItem) => {
     const ids = item ? selectedIdsForItem(item) : selectedItems.map((row) => row.id);
@@ -6750,8 +6771,13 @@ const LibraryPage = () => {
       scopeLabel: t("library.page.nSelected", { n: ids.length }),
       ids,
       itemCount: ids.length,
+      sizeBytes: sizeBytesForIds(ids),
+      /* 활성 폴더에서 선택해 내보내면 뷰어 폴더 트리를 그 폴더 하위로만
+       *  한정한다(자료가 다른 폴더에도 태깅돼 있어도 사이드/형제 폴더가
+       *  섞이지 않게). 폴더가 활성 아니면 undefined → 항목들의 폴더 전체. */
+      folderScope: activeTag?.startsWith("folder:") ? activeTag : undefined,
     });
-  }, [selectedIdsForItem, selectedItems, t]);
+  }, [activeTag, selectedIdsForItem, selectedItems, sizeBytesForIds, t]);
 
   const handleExportFiltered = useCallback(() => {
     openExportDialog({
@@ -7638,6 +7664,8 @@ const LibraryPage = () => {
           ids={htmlExportDialog.ids}
           folderTag={htmlExportDialog.folderTag}
           itemCount={htmlExportDialog.itemCount}
+          sizeBytes={htmlExportDialog.sizeBytes}
+          folderScope={htmlExportDialog.folderScope}
         />
       ) : null}
       <PackImportDialog

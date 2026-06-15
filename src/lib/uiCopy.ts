@@ -3798,6 +3798,11 @@ export const UI_COPY: Record<string, Record<UiLanguage, string>> = {
     en: "Single HTML files with many videos can become very large. Consider the ZIP option.",
     ko: "영상이 많은 단일 HTML 파일은 크기가 매우 커질 수 있습니다. ZIP 사용을 고려해 주세요.",
   },
+  "htmlExport.estimatedSize": { en: "approx. {size}", ko: "약 {size}" },
+  "htmlExport.tooLargeHint": {
+    en: "Over {limit} — the ZIP format is strongly recommended.",
+    ko: "{limit} 초과 — ZIP 형식을 권장합니다.",
+  },
   "htmlExport.saveButton": { en: "Save...", ko: "저장..." },
 
   // ── Version History ──

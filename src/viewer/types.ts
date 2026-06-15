@@ -26,7 +26,7 @@ export interface TimestampNote {
   region?: RegionRect;
 }
 
-export type ReferenceKind = "image" | "webp" | "gif" | "video" | "youtube" | "link";
+export type ReferenceKind = "image" | "webp" | "gif" | "video" | "youtube" | "link" | "doc";
 
 /* 메인 앱 ColorSwatch 의 viewer 용 단순화 형태.
  *  - `ratio`: 해당 색이 차지하는 픽셀 비중(0..1). viewer 가 인스펙터의
@@ -96,12 +96,28 @@ export interface ReferenceItem {
   ai_suggestions?: ReferenceAiSuggestions | null;
 }
 
+/* export 시점의 폴더 구조 스냅샷 노드.
+ *  - `path`: 폴더 태그 전체 경로 ("folder:" prefix 제거). 예 "캐릭터/메인".
+ *  - `name`: 표시명 (경로 마지막 세그먼트). 예 "메인".
+ *  - `count`: 해당 폴더에 *직접* 소속된 아이템 수 (하위 폴더 미포함).
+ *  구버전 export 엔 없으므로(부재) 뷰어는 tags 의 "folder:" prefix 에서
+ *  트리를 재구성하는 폴백(foldersFromTags)을 유지한다. */
+export interface ViewerFolderNode {
+  path: string;
+  name: string;
+  count: number;
+}
+
 export interface ViewerData {
   title: string;
   /** ISO timestamp. 빈 문자열이면 헤더에 표시 X. */
   generated_at: string;
   item_count: number;
   items: ReferenceItem[];
+  /** 신규 — export 시점의 폴더 구조 스냅샷. 부재 시 foldersFromTags 폴백. */
+  folders?: ViewerFolderNode[];
+  /** 신규 — export 한 앱의 UI 언어 (뷰어 초기 언어 기본값). */
+  source_language?: "ko" | "en";
 }
 
 declare global {

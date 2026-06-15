@@ -11,6 +11,7 @@
  *   · angle           → Move3d            (ChangeAngle 모달 / SidePanel)
  *   · inpaint         → Paintbrush        (콘티 SidePanel 인페인트)
  *   · cameraVariation → DotGrid3x3(커스텀) (콘티 SidePanel 앵글 프리셋)
+ *   · refine          → Wand2             (콘티 카드 "리파인(고해상)" 퀵 버튼/메뉴)
  *   · sketch          → SwitchCamera      (콘티 카드 구도 다양화 퀵 버튼, 카운트 배지)
  *   · mood            → Sparkles          (MoodIdeationPanel 생성)
  *   · sheet           → Sparkles          (AssetDetailModal 시트 생성)
@@ -32,6 +33,7 @@ import {
   Sparkles,
   SwitchCamera,
   Network,
+  Wand2,
 } from "lucide-react";
 import { DotGrid3x3 } from "@/components/icons/DotGrid3x3";
 import { PhotoStar } from "@/components/icons/PhotoStar";
@@ -47,6 +49,7 @@ export const IMAGE_GEN_FEATURE_ICONS: Record<ImageGenFeature, FeatureIcon> = {
   angle: Move3d,
   inpaint: Paintbrush,
   cameraVariation: DotGrid3x3,
+  refine: Wand2,
   sketch: SwitchCamera,
   mood: Sparkles,
   sheet: Sparkles,

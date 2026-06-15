@@ -83,6 +83,12 @@ export interface Scene {
   is_transition?: boolean;
   transition_type?: string | null;
   conti_image_crop?: any;
+  /** 모션 모드 전용 키네틱 노트 — 컷 진입/이탈 핸드오프. 이미지 생성 프롬프트엔
+   *  넣지 않는다(정지 프레임 품질 보존). 레거시 행엔 없을 수 있어 옵셔널. */
+  motion_in?: string | null;
+  motion_out?: string | null;
+  /** 다음 컷으로의 추천 트랜지션 기법 키(TransitionKey) 또는 짧은 의도. */
+  transition_to_next?: string | null;
   /** Per-scene Sketches; lives on the scene row so a scene delete cascades.
    *  Optional because legacy rows may not have the column yet. */
   sketches?: Sketch[];

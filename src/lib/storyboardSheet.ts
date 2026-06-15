@@ -18,6 +18,7 @@ import { dataUrlToBase64 } from "./contactSheet";
 import { sanitizeImagePrompt, isGameWeaponContext } from "./conti";
 import type { BriefAnalysis } from "./conti";
 import { generateShotPlan, type ShotPlan } from "./shotPlan";
+import { getImageModelDefault, getGptQualityDefault } from "./imageGenPreference";
 
 export interface StoryboardSheetScene {
   id?: string;
@@ -75,6 +76,11 @@ export interface GenerateStoryboardSheetOptions {
    *  rendering. Default true. On failure it silently falls back to the
    *  deterministic Phase-1 grouping. Set false to force the deterministic path. */
   enableShotPlan?: boolean;
+  /** When true, the user has manually grouped these cuts: use their `sequence`
+   *  (deterministic continuity ranges) for the STORY CONTINUITY scene boundaries
+   *  instead of the LLM shot plan's groups. The shot plan still runs and still
+   *  provides per-cut camera/blocking notes + the through-line. */
+  respectManualGrouping?: boolean;
   /** Progress callback so the UI can surface "planning" vs "generating". */
   onStage?: (stage: "planning" | "generating") => void;
   /** GPT generation quality for the sheet render. Defaults to "high".
@@ -205,12 +211,33 @@ const FORMAT_RATIO: Record<string, number> = {
   square: 1,
 };
 
+/** Default vertical anchor for the camera-tile reframe: 0 = top edge, 0.5 =
+ *  center, 1 = bottom. gpt-image refines a tile to its nearest native aspect
+ *  (3:2 / 2:3 / 1:1), which for a 16:9 project is TALLER than the display cut,
+ *  so the card has to trim top/bottom. A centered trim cuts subjects' heads
+ *  (they sit in the upper third); biasing the crop window UP keeps the head. */
+export const HEADROOM_VERTICAL_ANCHOR = 0.25;
+
 /**
  * Center-crop a tile data URL to the project's cut aspect ratio. Used by
  * "apply to conti" so a sliced panel fits the scene card without letterboxing.
  * Returns the original data URL unchanged if canvas is unavailable.
+ *
+ * `verticalAnchor` (0 top … 1 bottom, default 0.5 = center) biases the
+ * top/bottom trim when the source is taller than the target aspect — pass
+ * `HEADROOM_VERTICAL_ANCHOR` to keep subjects' heads.
+ *
+ * `overscan` (default 1.0) zooms in by sampling a slightly smaller centered
+ * region and drawing it to fill the output — a deterministic safety net that
+ * removes thin residual white gutter lines that `trimWhiteBorderDataUrl` may
+ * miss (e.g. 1.02 trims ~1% off each edge).
  */
-export async function centerCropToFormatDataUrl(srcDataUrl: string, format: string): Promise<string> {
+export async function centerCropToFormatDataUrl(
+  srcDataUrl: string,
+  format: string,
+  verticalAnchor = 0.5,
+  overscan = 1,
+): Promise<string> {
   if (typeof document === "undefined") return srcDataUrl;
   const targetRatio = FORMAT_RATIO[format] ?? FORMAT_RATIO.horizontal;
   const img = await new Promise<HTMLImageElement>((resolve, reject) => {
@@ -223,6 +250,7 @@ export async function centerCropToFormatDataUrl(srcDataUrl: string, format: stri
   const sh = img.naturalHeight;
   if (!sw || !sh) return srcDataUrl;
   const srcRatio = sw / sh;
+  const anchor = Math.min(1, Math.max(0, verticalAnchor));
   let cw = sw;
   let ch = sh;
   if (srcRatio > targetRatio) {
@@ -233,22 +261,22 @@ export async function centerCropToFormatDataUrl(srcDataUrl: string, format: stri
     ch = Math.round(sw / targetRatio);
   }
   const sx = Math.round((sw - cw) / 2);
-  const sy = Math.round((sh - ch) / 2);
+  const sy = Math.round((sh - ch) * anchor);
+  // Overscan: sample a smaller centered region and stretch it to the full output
+  // so the outer ~(overscan-1) fraction (white gutter remnants) is dropped.
+  const os = Math.max(1, overscan);
+  const sampW = cw / os;
+  const sampH = ch / os;
+  const sampSx = sx + (cw - sampW) / 2;
+  const sampSy = sy + (ch - sampH) * anchor;
   const canvas = document.createElement("canvas");
   canvas.width = cw;
   canvas.height = ch;
   const ctx = canvas.getContext("2d");
   if (!ctx) return srcDataUrl;
-  ctx.drawImage(img, sx, sy, cw, ch, 0, 0, cw, ch);
+  ctx.drawImage(img, sampSx, sampSy, sampW, sampH, 0, 0, cw, ch);
   return canvas.toDataURL("image/png");
 }
-
-/** Default vertical anchor for the camera-tile reframe: 0 = top edge, 0.5 =
- *  center, 1 = bottom. gpt-image refines a tile to its nearest native aspect
- *  (3:2 / 2:3 / 1:1), which for a 16:9 project is TALLER than the display cut,
- *  so the card has to trim top/bottom. A centered trim cuts subjects' heads
- *  (they sit in the upper third); biasing the crop window UP keeps the head. */
-const HEADROOM_VERTICAL_ANCHOR = 0.25;
 
 /**
  * Reframe a refined camera-tile cut to the project's exact display aspect with a
@@ -567,6 +595,60 @@ export async function refineCameraTileGpt(opts: {
   return url;
 }
 
+/**
+ * Refine (upscale + detail) an EXISTING conti cut via GPT Image 2, on demand.
+ *
+ * Same upscale pass as `refineCameraTileGpt` but the input is already a public
+ * URL (`scene.conti_image_url`), so the pre-save step is skipped and the URL is
+ * passed straight to the edit endpoint. The output is then reframed to the
+ * project's exact display aspect (top-biased) via `reframeCutToFormat` so the
+ * card needs no re-crop. Returns the persisted public URL of the refined cut;
+ * throws on failure so the caller can surface a toast.
+ */
+export async function refineExistingCut(opts: {
+  srcUrl: string;
+  projectId: string;
+  sceneNumber: number;
+  videoFormat: string;
+}): Promise<string> {
+  const { w, h } = await measureDataUrl(opts.srcUrl);
+  const size =
+    w > 0 && h > 0
+      ? gptSizeForRatio(w / h)
+      : (REFINE_SIZE_BY_FORMAT[opts.videoFormat] ?? REFINE_SIZE_BY_FORMAT.horizontal);
+  // Model + quality come from Settings → "Refine" (both options are GPT-edits
+  // models, so quality always applies). Falls back to the spec defaults
+  // (gpt-image-2 / high) when nothing is stored.
+  const model = getImageModelDefault("refine") as "gpt-image-2" | "gpt-image-1.5";
+  const quality = getGptQualityDefault("refine");
+  const { data, error } = await supabase.functions.invoke("openai-image", {
+    body: {
+      mode: "inpaint",
+      preferredAngleModel: model,
+      quality,
+      sourceImageUrl: opts.srcUrl,
+      referenceImageUrls: [],
+      prompt: cameraTileUpscalePrompt,
+      projectId: opts.projectId,
+      sceneNumber: opts.sceneNumber,
+      imageSize: size,
+    },
+  });
+  if (error) throw new Error(error.message);
+  const d = data as { publicUrl?: string; url?: string; error?: string } | null;
+  if (d?.error) throw new Error(d.error);
+  const refined = d?.publicUrl ?? d?.url ?? null;
+  if (!refined) throw new Error("cut refine returned no image URL");
+  // Reframe to the exact display aspect (top-biased) so the saved cut fits the
+  // card without a manual crop. Falls back to `refined` unchanged on any issue.
+  return reframeCutToFormat({
+    srcUrl: refined,
+    projectId: opts.projectId,
+    sceneNumber: opts.sceneNumber,
+    videoFormat: opts.videoFormat,
+  });
+}
+
 /** Upload the grid template to the throwaway `mood` bucket and return its URL.
  *  Returns null on any failure so the caller proceeds without the template. */
 async function uploadGridTemplate(projectId: string, dataUrl: string): Promise<string | null> {
@@ -847,6 +929,7 @@ function buildStoryboardPrompt(
   assetRoster: string,
   shotPlan: ShotPlan | null,
   refs: { url: string; asset: StoryboardSheetAsset }[],
+  forceSequenceGroups: boolean = false,
 ): string {
   const n = scenes.length;
   const cells = cols * rows;
@@ -890,7 +973,11 @@ function buildStoryboardPrompt(
   // (consecutive same-location / sequence runs).
   let groupLines: string[];
   let leadLines: string[];
-  if (shotPlan && (shotPlan.throughLine || shotPlan.groups.length > 0)) {
+  // When the user has manually grouped (forceSequenceGroups), bypass the LLM
+  // shot plan's grouping and use the deterministic sequence-based ranges for
+  // scene boundaries — while still keeping the shot plan's per-cut notes
+  // (camera/blocking, already applied above) and through-line.
+  if (!forceSequenceGroups && shotPlan && (shotPlan.throughLine || shotPlan.groups.length > 0)) {
     leadLines = [
       shotPlan.throughLine
         ? `- Story through-line (the whole sheet tells this in order): ${sani(shotPlan.throughLine.trim())}`
@@ -914,6 +1001,11 @@ function buildStoryboardPrompt(
   } else {
     const ranges = continuityRanges(scenes);
     leadLines = [
+      // Keep the shot plan's through-line even when grouping is forced to the
+      // user's manual sequence, since it still narrates the whole sheet.
+      ...(shotPlan?.throughLine
+        ? [`- Story through-line (the whole sheet tells this in order): ${sani(shotPlan.throughLine.trim())}`]
+        : []),
       `- Panels progress as a single narrative. Keep character identity, wardrobe, and prop state consistent from one panel to the next; let them change only when the scene/location changes.`,
       `- Honour each panel's "camera" note for its shot size, angle, and movement so the framing reads as intentional shot design, not random angles.`,
     ];
@@ -1068,6 +1160,7 @@ export async function generateStoryboardSheet(
     assetRoster,
     shotPlan,
     usedRefs,
+    opts.respectManualGrouping === true,
   );
 
   console.info("[storyboardSheet] start", {

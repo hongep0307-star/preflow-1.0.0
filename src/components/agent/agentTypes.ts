@@ -77,6 +77,12 @@ export interface Scene {
   is_highlight?: boolean;
   highlight_kind?: "hook" | "hero" | "product" | "emotion" | "cta" | null;
   highlight_reason?: string | null;
+  /** 모션 모드 전용 — 이 컷이 어떻게 들어오고/빠지는지(키네틱 핸드오프).
+   *  description(정지 프레임 상태문)과 분리해 이미지 생성 프롬프트엔 넣지 않는다. */
+  motion_in?: string | null;
+  motion_out?: string | null;
+  /** 다음 컷으로의 추천 트랜지션 기법 키(transitionGrammar의 TransitionKey) 또는 짧은 의도. */
+  transition_to_next?: string | null;
 }
 
 export type BriefField = string[] | { summary: string; detail?: string; memo_link?: string | null };
@@ -294,6 +300,21 @@ export type ParsedScene = {
   is_highlight?: boolean;
   highlight_kind?: "hook" | "hero" | "product" | "emotion" | "cta" | null;
   highlight_reason?: string | null;
+  /** 모션 모드 전용 키네틱 필드 (정지 프레임 description 과 분리). */
+  motion_in?: string;
+  motion_out?: string;
+  transition_to_next?: string;
+};
+
+/** 연출 방향 모드 — 진입 시 선제안되고, 시놉시스/컷 기획 전체를 바꾼다. */
+export type DirectionMode = "narrative" | "motion" | "hybrid";
+
+/** 진입 시 방향 선제안 카드(Phase 0.5) 데이터. */
+export type ParsedDirection = {
+  options?: Array<{ mode: DirectionMode; title?: string; reason?: string }>;
+  recommended?: DirectionMode;
+  /** 사용자 자유 채팅 의도를 받아 에이전트가 확정한 모드(있으면 그 즉시 모드 세팅). */
+  confirmed?: DirectionMode;
 };
 
 export type StorylineOption = { id: string; title: string; synopsis: string; mood?: string; reference_anchor?: string };
@@ -329,7 +350,8 @@ export type MessageSegment =
   | { type: "storylines"; options: StorylineOption[] }
   | { type: "scene_alt"; data: ParsedSceneAlt | null }
   | { type: "scene_audit"; data: ParsedSceneAudit | null }
-  | { type: "reference_decomposition"; data: ParsedReferenceDecomposition | null };
+  | { type: "reference_decomposition"; data: ParsedReferenceDecomposition | null }
+  | { type: "direction"; data: ParsedDirection | null };
 
 export type RightPanel = "scenes" | "mood";
 
@@ -596,7 +618,7 @@ export function parseMessageSegments(text: string, usedIds?: Set<string>): Messa
   const segments: MessageSegment[] = [];
   // ★ scene_alt 와 scene 의 매칭 우선순위 — `scene_alt` 가 더 길어 alternation 앞에 둔다.
   // ★ reference_decomposition 도 추가.
-  const regex = /```(reference_decomposition|scene_audit|scene_alt|scene|strategy|storylines)\s*([\s\S]*?)```/g;
+  const regex = /```(reference_decomposition|scene_audit|scene_alt|scene|strategy|storylines|direction)\s*([\s\S]*?)```/g;
   let lastIndex = 0,
     match: RegExpExecArray | null;
   let idMap: Record<string, string> = {};
@@ -612,9 +634,16 @@ export function parseMessageSegments(text: string, usedIds?: Set<string>): Messa
       | "storylines"
       | "scene_alt"
       | "scene_audit"
-      | "reference_decomposition";
+      | "reference_decomposition"
+      | "direction";
     const bc = match[2].trim();
-    if (bt === "scene") {
+    if (bt === "direction") {
+      try {
+        segments.push({ type: "direction", data: JSON.parse(cleanJsonString(bc)) });
+      } catch {
+        segments.push({ type: "direction", data: null });
+      }
+    } else if (bt === "scene") {
       try {
         segments.push({ type: "scene", data: JSON.parse(cleanJsonString(bc)) });
       } catch {

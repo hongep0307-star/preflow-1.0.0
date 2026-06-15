@@ -16,7 +16,7 @@
  * 비활성화한다(modelIsGpt 로 판정).
  */
 
-export type ImageGenFeature = "conti" | "style" | "angle" | "sketch" | "mood" | "sheet" | "storyboardSheet" | "variation" | "canvas" | "inpaint" | "cameraVariation";
+export type ImageGenFeature = "conti" | "style" | "angle" | "sketch" | "mood" | "sheet" | "storyboardSheet" | "variation" | "canvas" | "inpaint" | "cameraVariation" | "refine";
 export type GptQuality = "low" | "medium" | "high";
 
 /** 설정 모달이 열린 "공간". 이미지 생성 행의 정렬/그룹 분리에 쓰인다. */
@@ -112,6 +112,21 @@ export const IMAGE_GEN_FEATURES: ImageGenFeatureSpec[] = [
     labelKey: "settings.imgGen.cameraVariation",
     descKey: "settings.imgGen.cameraVariationDesc",
     models: [{ id: "gpt-image-2", isGpt: true }],
+    defaultModel: "gpt-image-2",
+    defaultQuality: "high",
+  },
+  {
+    // 컷 리파인 — 콘티 카드의 "리파인(고해상)" 액션. 기존 컷을 GPT-edits
+    // (input_fidelity) 경로로 업스케일/디테일 향상한다. ChangeAngle 과 동일하게
+    // GPT 계열만 의미가 있어(NB2 는 충실 업스케일 부적합) 두 GPT 모델만 노출하고,
+    // 둘 다 품질 파라미터가 적용된다. 디테일 직결이라 기본 high.
+    feature: "refine",
+    labelKey: "settings.imgGen.refine",
+    descKey: "settings.imgGen.refineDesc",
+    models: [
+      { id: "gpt-image-2", isGpt: true },
+      { id: "gpt-image-1.5", isGpt: true },
+    ],
     defaultModel: "gpt-image-2",
     defaultQuality: "high",
   },
@@ -221,7 +236,7 @@ export function getFeatureSpec(feature: ImageGenFeature): ImageGenFeatureSpec {
  * 단일 출처를 유지하기 위해 여기 id 배열만 고치면 정렬/그룹이 함께 바뀐다.
  */
 const SURFACE_FEATURE_ORDER: Record<Exclude<SettingsSurface, "dashboard">, ImageGenFeature[]> = {
-  project: ["conti", "style", "storyboardSheet", "angle", "cameraVariation", "inpaint", "sketch"],
+  project: ["conti", "style", "storyboardSheet", "angle", "cameraVariation", "refine", "inpaint", "sketch"],
   library: ["variation", "canvas", "sheet", "mood"],
 };
 

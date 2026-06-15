@@ -20,6 +20,41 @@ import {
 } from "./agentTypes";
 import { useT } from "@/lib/uiLanguage";
 
+/* ━━━━━ MotionNotes ━━━━━
+ * 모션 모드 컷의 키네틱 노트(motion_in/out)와 다음 컷 추천 트랜지션을 컷 카드에
+ * 표시한다. 정지 프레임 description 과 분리된 연출 의도여서 별도 블록으로 보여주고,
+ * 값이 하나도 없으면(서사 모드 등) 아무것도 렌더하지 않아 기존 카드 모습을 유지. */
+const MotionNotes = ({
+  motionIn,
+  motionOut,
+  transitionToNext,
+}: {
+  motionIn?: string | null;
+  motionOut?: string | null;
+  transitionToNext?: string | null;
+}) => {
+  const rows: Array<{ label: string; value: string }> = [];
+  if (motionIn?.trim()) rows.push({ label: "IN", value: motionIn.trim() });
+  if (motionOut?.trim()) rows.push({ label: "OUT", value: motionOut.trim() });
+  if (transitionToNext?.trim()) rows.push({ label: "TR→", value: transitionToNext.trim() });
+  if (rows.length === 0) return null;
+  return (
+    <div style={{ borderTop: DIV_LINE, paddingTop: 6, marginTop: 6 }} className="space-y-0.5">
+      {rows.map((r) => (
+        <div key={r.label} className="flex items-baseline gap-1.5">
+          <span
+            className="font-mono text-micro font-bold shrink-0"
+            style={{ color: KR, minWidth: 26 }}
+          >
+            {r.label}
+          </span>
+          <span className="text-2xs leading-snug text-muted-foreground">{r.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
 /* ━━━━━ TagChip ━━━━━
  * 콘티탭 씬카드(`contiInternals.TagChip`)와 동일 스타일로 통일:
  *   · 대문자 강제(textTransform: uppercase) 제거 — 에셋 등록 시 대소문자
@@ -1141,6 +1176,11 @@ export const EditablePendingSceneCard = React.memo(function EditablePendingScene
             else update({ [k]: v });
           }}
         />
+        <MotionNotes
+          motionIn={local.motion_in}
+          motionOut={local.motion_out}
+          transitionToNext={local.transition_to_next}
+        />
       </div>
     </div>
   );
@@ -1549,6 +1589,11 @@ export const SortableSceneCard = React.memo(function SortableSceneCard({
               else if (k === "duration_sec") onUpdate(scene.id, { duration_sec: v ? parseFloat(v) : null });
               else onUpdate(scene.id, { [k]: v });
             }}
+          />
+          <MotionNotes
+            motionIn={scene.motion_in}
+            motionOut={scene.motion_out}
+            transitionToNext={scene.transition_to_next}
           />
         </div>
       </div>

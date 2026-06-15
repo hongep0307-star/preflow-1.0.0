@@ -1,6 +1,7 @@
 import { KNOWLEDGE_SCENE_DESIGN, KNOWLEDGE_GENRE_CONVENTIONS } from "@/lib/directorKnowledgeBase";
+import { KNOWLEDGE_TRANSITION_GRAMMAR } from "@/lib/transitionGrammar";
 import { buildHookExecutionGuide } from "@/lib/hookLibrary";
-import { briefFieldToString, type Asset, type Analysis } from "./agentTypes";
+import { briefFieldToString, type Asset, type Analysis, type DirectionMode } from "./agentTypes";
 
 export const FORMAT_CONTEXT: Record<string, string> = {
   vertical: "세로형(9:16) 영상. 모바일 퍼스트 플랫폼.",
@@ -186,8 +187,9 @@ PHASE 2 — Shot 디벨롭
 \`\`\`
 
 \`\`\`scene
-{ "scene_number": 1, "sequence": 1, "title": "", "description": "", "camera_angle": "", "location": "", "mood": "", "duration_sec": 8, "tagged_assets": [], "is_highlight": false, "highlight_kind": null, "highlight_reason": null }
+{ "scene_number": 1, "sequence": 1, "title": "", "description": "", "camera_angle": "", "location": "", "mood": "", "duration_sec": 8, "tagged_assets": [], "is_highlight": false, "highlight_kind": null, "highlight_reason": null, "motion_in": null, "motion_out": null, "transition_to_next": null }
 \`\`\`
+- motion_in / motion_out / transition_to_next 는 **연출 모드가 모션(또는 하이브리드)일 때만** 채운다. 서사 모드에서는 항상 null 로 둔다. 작성 규칙은 아래 [연출 모드] directive 를 따른다.
 
 [컷 간 연속성 규칙 — Shot Continuity — 절대 준수]
 - 스토리보드는 독립된 이미지 묶음이 아니라 **하나의 흐름**이다. 이전 컷과 현재 컷의 공간·인물·감정 연결을 항상 의식하며 설계할 것. 각 컷을 따로따로 최적화하면 스토리가 끊긴다.
@@ -243,6 +245,70 @@ PHASE 2 — Shot 디벨롭
 - 각 Shot의 tagged_assets 배열에는 그 Shot에서 등장한 모든 등록 태그를 **중복 없이 전부 포함**할 것. 등장했는데 배열에서 빠뜨리는 것은 오류다.
 - 등록되지 않은 임의의 태그는 **절대 사용 금지**. tagged_assets에는 오직 라이브러리에 있는 tag_name만 올릴 수 있다.
 - 해당 Shot에 등장하는 등록 에셋이 하나도 없을 때만 tagged_assets: [].`;
+
+// ── PHASE 0.5 — 연출 방향 선제안(게이팅) ──────────────────────────────
+// 브리프로 에이전트 진입 시, storylines 보다 먼저 "연출 방향"을 선제안한다.
+// 사용자가 카드 클릭 또는 채팅으로 방향을 확정한 다음 턴부터 Phase 1 로 진행.
+export const DIRECTION_PHASE_RULES = `PHASE 0.5 — 연출 방향 선제안 (storylines 보다 먼저)
+
+[direction 펜스 — 진입 첫 응답 전용]
+- 컨텍스트에 \`[현재 연출 모드]\` 가 아직 없고(=미확정) 사용자가 브리프 기반으로 처음 진입하면, **첫 응답에서 반드시 \`\`\`direction 펜스 1개만** 출력한다. 이때 \`\`\`storylines / \`\`\`scene 블록은 절대 출력하지 않는다.
+- 형식(유효 JSON):
+\`\`\`direction
+{ "options": [
+    { "mode": "narrative", "title": "서사 중심", "reason": "왜 이 광고에 서사가 맞는지 1줄" },
+    { "mode": "motion", "title": "모션 연출 중심", "reason": "왜 모션/트랜지션이 맞는지 1줄" },
+    { "mode": "hybrid", "title": "하이브리드", "reason": "왜 절충이 맞는지 1줄" }
+  ],
+  "recommended": "motion" }
+\`\`\`
+- 3개 옵션(narrative/motion/hybrid)을 모두 포함하고, 그중 하나를 \`recommended\` 로 지정한다.
+- 추천 근거는 브리프 분석으로 도출한다: brand_film·서사 구조(narrative)·감정 비트가 강하면 narrative 가중; 빠른 편집 리듬(pacing.edit_rhythm=fast)·짧은 길이·hook 중심·퍼포먼스/제품 광고·강한 비주얼 방향(visual_direction.editing)이면 motion 가중; 둘 다 강하면 hybrid.
+- 본문(펜스 밖)에는 추천 이유를 2~3문장으로 짧게 덧붙인다. 사용자가 카드로 고르거나 자유 채팅으로 의도를 말할 수 있음을 한 줄 안내한다.
+
+[방향 확정 처리]
+- 사용자가 자유 채팅으로 방향 의도를 표현하면(예: "모션 위주로", "스토리 중심으로 가자", "트랜지션 화려하게"), 그 의도를 해석해 **\`\`\`direction 펜스에 \`confirmed\` 필드로 확정**한다:
+\`\`\`direction
+{ "confirmed": "motion" }
+\`\`\`
+  그리고 같은 응답에서 곧바로 Phase 1(storylines)로 진행한다.
+- 사용자가 카드 버튼으로 확정한 경우(컨텍스트에 \`[현재 연출 모드]\` 가 이미 존재)에는 direction 펜스를 다시 출력하지 말고 곧바로 Phase 1 로 진행한다.
+- 모드가 이미 확정된 대화에서는 사용자가 명시적으로 "방향 다시 정하자" 라고 요청하지 않는 한 direction 펜스를 재출력하지 않는다.`;
+
+/** 모드별 기획 directive — buildSystemPrompt 가 활성 모드에 맞춰 주입. */
+export const buildDirectionDirective = (mode: "narrative" | "motion" | "hybrid"): string => {
+  if (mode === "narrative") {
+    return `[현재 연출 모드] 서사 중심
+- 기존 디렉터 원칙대로 스토리 구조·감정 곡선·연속성을 우선한다.
+- 모든 scene 의 motion_in / motion_out / transition_to_next 는 null 로 둔다.`;
+  }
+  if (mode === "motion") {
+    return `[현재 연출 모드] 모션 연출 중심
+- 우선순위 재배열: (1) 컷↔컷 시각 에너지 전환, (2) 트랜지션/그래픽 매치 설계, (3) 리듬/페이싱, (4) 서사 완결성. 인접 컷을 A→B "키네틱 페어" 로 설계한다(셰이프/컬러/구도가 컷을 가로질러 이어지게).
+- description 은 여전히 **단일 정지 프레임 상태문**으로 유지(이미지 생성 안전). 움직임/전환 의도는 description 이 아니라 아래 전용 필드에만 적는다.
+- motion_in: 이 컷이 화면에 어떻게 들어오는지(예: "좌측에서 슬라이드 인", "전 컷 실루엣에서 모프"). motion_out: 이 컷이 다음으로 어떻게 빠지는지(예: "우측으로 휩팬 이탈").
+- transition_to_next: 다음 컷으로의 추천 트랜지션 **기법 키 1개**. 반드시 모션 가능 기법에서만 고른다(아래 TRANSITION TECHNIQUE LIBRARY 에서 medium 이 live 가 아닌 것: WHIP_PAN, ZOOM_PUNCH, GLITCH, DATAMOSH, CHROMATIC_SPLIT, VHS_WARP, MORPH, LIQUID_WARP, SHATTER, PRISM, SHAPE_WIPE, IRIS_WIPE, LAYER_SLIDE, LAYER_PUSH, KINETIC_TYPO, GRAPHIC_MATCH). 매 컷에 억지로 넣지 말고 전환이 의미있는 경계에만.
+- 마지막 컷의 transition_to_next 는 null.`;
+  }
+  return `[현재 연출 모드] 하이브리드
+- 서사 척추(스토리/감정 흐름)는 유지하되, 컷 실행은 모션 forward 로 — 시각 에너지·트랜지션을 적극 활용한다.
+- sequence 그룹별로 강약을 둔다: Hook/전환부는 모션을 강하게(transition_to_next + motion_in/out 적극 사용), 서사 전개부는 차분하게(필요 없으면 null).
+- 모션 필드를 채울 때의 작성 규칙은 모션 모드와 동일(정지 프레임 description 유지, transition_to_next 는 모션 가능 기법 키만).`;
+};
+
+/** 매 user 메시지 직전에 prepend 하는 모드 리마인더(순응도 강화, DB/화면 미저장). */
+export const buildDirectionReminder = (
+  mode: "narrative" | "motion" | "hybrid" | null,
+  lang: "ko" | "en" = "ko",
+): string => {
+  if (!mode) return "";
+  if (lang === "en") {
+    const label = mode === "narrative" ? "Narrative-driven" : mode === "motion" ? "Motion-driven" : "Hybrid";
+    return `[ACTIVE DIRECTION MODE] ${label}. Follow the [현재 연출 모드] directive in the system prompt for cut design and motion/transition fields.`;
+  }
+  const label = mode === "narrative" ? "서사 중심" : mode === "motion" ? "모션 연출 중심" : "하이브리드";
+  return `[현재 연출 모드] ${label}. 시스템 프롬프트의 [현재 연출 모드] directive 에 따라 컷 설계와 motion/transition 필드를 작성할 것.`;
+};
 
 // 매 user 메시지 직전에 LLM 에게 재주지시키는 에셋 활용 체크리스트.
 // 시스템 프롬프트의 [tagged_assets 규칙] 과 별개로, 사용자 입력 바로 앞에 붙여서
@@ -654,6 +720,8 @@ export const buildSystemPrompt = (
   lang: "ko" | "en" = "ko",
   /** 디스패처 provider — OpenAI(GPT-5.x) 일 때만 추가 directive 를 붙인다. */
   provider?: "anthropic" | "openai",
+  /** 확정된 연출 방향 모드. null/undefined 면 미확정 → 진입 시 선제안 게이팅. */
+  directionMode?: DirectionMode | null,
 ) => {
   const langDirective = lang === "en" ? LANG_DIRECTIVE_EN : LANG_DIRECTIVE_KO;
   const charCtx = assets ? buildCharacterContext(assets) : "";
@@ -690,7 +758,23 @@ export const buildSystemPrompt = (
   if (analysis?.creative_gap?.recommendation) parts.push(`[디렉터 방향성]\n${analysis.creative_gap.recommendation}`);
   const ideaCtx = parts.length ? "\n\n" + parts.join("\n\n") : "";
   const providerExt = provider === "openai" ? GPT_REASONING_AND_FENCE_RULES : "";
-  return `${langDirective}${SYSTEM_PROMPT_BASE}${providerExt}${charCtx}${ideaCtx}\n\n[영상 포맷]\n${FORMAT_CONTEXT[vf] ?? FORMAT_CONTEXT.vertical}`;
+
+  // 연출 방향: PHASE 0.5 선제안 규칙은 항상 주입(게이팅 + 자유채팅 확정 처리).
+  // 모드가 확정되면 해당 모드 directive 를, 모션/하이브리드면 트랜지션 라이브러리
+  // (transition_to_next 기법 키 근거) + 모션 인지 검수 축까지 추가한다.
+  const directionBlocks: string[] = [DIRECTION_PHASE_RULES];
+  if (directionMode) {
+    directionBlocks.push(buildDirectionDirective(directionMode));
+    if (directionMode === "motion" || directionMode === "hybrid") {
+      directionBlocks.push(KNOWLEDGE_TRANSITION_GRAMMAR);
+      directionBlocks.push(
+        "[모션 인지 자가 검수] scene_audit(또는 자가 점검) 시 ABCD 와 별개로 다음도 점검한다: (a) 컷 간 시각 에너지 전환이 단조롭지 않은지, (b) 추천한 transition_to_next 기법이 두 컷 내용상 동기(motivation)가 있는지, (c) GRAPHIC_MATCH 류는 A·B 에 실제로 매칭되는 셰이프/컬러/구도가 있는지.",
+      );
+    }
+  }
+  const directionCtx = "\n\n" + directionBlocks.filter(Boolean).join("\n\n");
+
+  return `${langDirective}${SYSTEM_PROMPT_BASE}${directionCtx}${providerExt}${charCtx}${ideaCtx}\n\n[영상 포맷]\n${FORMAT_CONTEXT[vf] ?? FORMAT_CONTEXT.vertical}`;
 };
 
 export const buildBriefContextString = (a: Analysis, lang: "ko" | "en" = "ko"): string => {

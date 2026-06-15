@@ -147,6 +147,7 @@ Rules:
 ═══ UNIVERSAL RULES ═══
 - Keep the prompt FOCUSED (up to ~14 sentences including PRESERVE and TAG_IDENTITY blocks).
 - The FIRST sentence must be the primary action on ${hasMask ? "the masked region" : "the edit target referenced by the user"}.
+- The edit must fill the ENTIRE ${hasMask ? "masked region" : "edit target"} with photorealistic content that seamlessly continues the surrounding skin, hair, and background — matching neighboring texture, color, lighting, and grain. The result must NEVER contain flat white, gray, blurred, smeared, or empty patches anywhere in the edited area. ${hasMask ? "Where the brush extends beyond the actual edit target, reconstruct the natural surface underneath (skin, background) rather than leaving a blank fill." : ""}
 - Never introduce creative additions the user didn't ask for.
 - Always end with: Preserve all ${hasMask ? "unmasked" : "non-target"} content exactly as-is — same people, same background, same lighting, same composition. Match the tag identity exactly ${hasMask ? "inside the masked region" : "on the targeted object"}.
 ${assetDescriptions ? `\nAdditional asset notes (supplementary — the TAG reference image is authoritative):\n${assetDescriptions}` : ""}${hasMask ? "\n[User painted a brush mask on the target area.]" : "\n[No brush mask. Full-image edit.]"}

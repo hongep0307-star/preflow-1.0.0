@@ -116,12 +116,19 @@ function createTables(d: Database.Database) {
       last_visited_at TEXT,
       updated_at TEXT,
       deleted_at TEXT,
+      direction_mode TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     )
   `);
 
   try {
     d.exec(`ALTER TABLE projects ADD COLUMN thumbnail_crop TEXT`);
+  } catch (_) { /* column already exists */ }
+
+  // direction_mode: 에이전트 진입 시 확정한 연출 방향("narrative"|"motion"|"hybrid").
+  // 미설정(NULL)이면 진입 시 선제안 게이팅이 발동한다. 레거시 DB 호환 idempotent ALTER.
+  try {
+    d.exec(`ALTER TABLE projects ADD COLUMN direction_mode TEXT`);
   } catch (_) { /* column already exists */ }
 
   // deleted_at: 프로젝트 휴지통(soft delete) 의 데이터 소스. NULL = 정상,
@@ -275,6 +282,9 @@ function createTables(d: Database.Database) {
       highlight_reason TEXT,
       transition_type TEXT,
       sketches TEXT DEFAULT '[]',
+      motion_in TEXT,
+      motion_out TEXT,
+      transition_to_next TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     )
@@ -318,6 +328,20 @@ function createTables(d: Database.Database) {
   // 저장하지 않아 DB 비대화를 피함). 씬 행 lifecycle 에 묶임(FK cascade).
   try {
     d.exec(`ALTER TABLE scenes ADD COLUMN camera_variation_grid TEXT`);
+  } catch (_) { /* column already exists */ }
+
+  // 모션(연출) 모드 전용 컷 필드. motion_in/out 은 컷 진입/이탈 키네틱 노트로,
+  // 정지 프레임 description 과 분리해 이미지 생성 프롬프트엔 넣지 않는다.
+  // transition_to_next 는 다음 컷으로의 추천 트랜지션 기법 키(또는 짧은 의도).
+  // 레거시 로컬 DB 호환용 idempotent ALTER.
+  try {
+    d.exec(`ALTER TABLE scenes ADD COLUMN motion_in TEXT`);
+  } catch (_) { /* column already exists */ }
+  try {
+    d.exec(`ALTER TABLE scenes ADD COLUMN motion_out TEXT`);
+  } catch (_) { /* column already exists */ }
+  try {
+    d.exec(`ALTER TABLE scenes ADD COLUMN transition_to_next TEXT`);
   } catch (_) { /* column already exists */ }
 
   d.exec(`

@@ -11,6 +11,7 @@ import {
   Sun,
   ChevronRight,
   Move3d,
+  Wand2,
 } from "lucide-react";
 import { DotGrid3x3 } from "@/components/icons/DotGrid3x3";
 import { KR, KR_BG, ACFG, ASSET_ICON, type Asset } from "./contiTypes";
@@ -1178,6 +1179,7 @@ export const SidePanel = ({
   onRelight,
   onCameraVariations,
   onChangeAngle,
+  onRefineCut,
 }: {
   hasImage: boolean;
   openLeft: boolean;
@@ -1200,6 +1202,8 @@ export const SidePanel = ({
   /** Change Angle 모달 열기. hasImage 일 때만 활성.
    *  원본 이미지를 NB2 inpaint 경로로 보내 정체성은 유지하고 카메라 좌표(yaw/pitch/zoom)만 조정. */
   onChangeAngle?: () => void;
+  /** 현재 컷을 gpt-image-2 로 업스케일(디테일/해상도 향상). hasImage 일 때만 활성. */
+  onRefineCut?: () => void;
 }) => {
   const t = useT();
   const [hovKey, setHovKey] = useState<string>("");
@@ -1225,6 +1229,16 @@ export const SidePanel = ({
   // 항목 순서 규칙: 사용 가능한 액션을 위로, 비활성(Unavailable) 은 맨 아래로
   // 모아 시각적으로 덜 거슬리도록 한다.
   const variantsChildren: SidePanelLeaf[] = [];
+  // Refine — on-demand gpt-image-2 upscale (detail/resolution) of the current
+  // cut. Listed first since it's the most common touch-up after applying a cut.
+  if (hasImage && onRefineCut)
+    variantsChildren.push({
+      kind: "leaf",
+      icon: <Wand2 className="w-3.5 h-3.5" />,
+      label: t("conti.refine"),
+      fn: onRefineCut,
+      danger: false,
+    });
   if (hasImage && onRelight)
     variantsChildren.push({
       kind: "leaf",

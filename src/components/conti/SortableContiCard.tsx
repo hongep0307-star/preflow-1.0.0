@@ -16,6 +16,7 @@ import {
   Loader2,
   ClipboardPaste,
   Copy,
+  Wand2,
 } from "lucide-react";
 import { PhotoStar } from "@/components/icons/PhotoStar";
 import { DotGrid3x3 } from "@/components/icons/DotGrid3x3";
@@ -43,6 +44,7 @@ import {
   TRANSITION_CATEGORIES,
   TRANSITION_MAP,
   normalizeTransitionKey,
+  transitionDeliverable,
   type TransitionKey,
   type TransitionCategory,
   type TransitionSpec,
@@ -143,6 +145,7 @@ const TRANSITION_CATEGORY_KO: Record<TransitionCategory, string> = {
   "Geometric / Morph": "기하/변형",
   Environmental: "환경 효과",
   Temporal: "시간 효과",
+  "Graphic / Motion": "그래픽/모션",
 };
 
 const TRANSITION_UI_KO: Record<TransitionKey, { label: string; tagline: string; guide: string }> = {
@@ -165,6 +168,12 @@ const TRANSITION_UI_KO: Record<TransitionKey, { label: string; tagline: string; 
   SMOKE_VEIL: { label: "스모크 베일", tagline: "연무가 화면을 덮는 순간", guide: "A컷을 연기나 먼지가 덮으며 전환을 숨기는 순간입니다. B컷은 연무 너머 희미한 색감만 허용합니다." },
   WATER_RIPPLE: { label: "물결 리플", tagline: "수면처럼 번지는 왜곡", guide: "A컷이 물결에 비친 것처럼 퍼지고 흔들리는 순간입니다. 형태는 유지하되 표면 왜곡을 강하게 보여줍니다." },
   TIME_FREEZE: { label: "타임 프리즈", tagline: "시간이 멈춘 잔상", guide: "A컷의 동작이 멈추고 잔상/입자가 남는 순간입니다. B컷보다 멈춘 시간감과 잔상 표현이 중심입니다." },
+  SHAPE_WIPE: { label: "셰이프 와이프", tagline: "도형 마스크로 A→B 전환", guide: "도형(원/바/대각/브랜드 마크)이 화면을 쓸며 그 안으로 B컷이 드러나고 A컷은 밀려납니다. 정지 한 장 대신 A·B 컷 썸네일과 연출 노트로 표시합니다(생성 없음)." },
+  IRIS_WIPE: { label: "아이리스 와이프", tagline: "원형 열림/닫힘 전환", guide: "A컷의 한 점에서 원형 아이리스가 닫히고 B컷에서 열립니다. A·B의 초점 위치가 같을 때 가장 자연스럽습니다. 노트+페어로 표시(생성 없음)." },
+  LAYER_SLIDE: { label: "레이어 슬라이드", tagline: "B컷이 위로 슬라이드", guide: "B컷이 가장자리에서 레이어로 들어와 A컷을 덮습니다(이징/오버슛). 노트+페어로 표시(생성 없음)." },
+  LAYER_PUSH: { label: "레이어 푸시", tagline: "A컷이 B컷을 밀어냄", guide: "A컷이 한쪽으로 밀려나며 반대쪽에서 B컷이 들어와 패널처럼 맞물립니다(겹침 없음). 노트+페어로 표시(생성 없음)." },
+  KINETIC_TYPO: { label: "키네틱 타이포", tagline: "타이포가 전환을 이끔", guide: "핵심 단어/숫자/CTA가 화면을 가로지르며 A→B를 마스크/와이프합니다. 타이포 자체가 전환을 운반합니다. 노트+페어로 표시(생성 없음)." },
+  GRAPHIC_MATCH: { label: "그래픽 매치", tagline: "셰이프/컬러 매치 컷", guide: "A컷의 도형/선/색/구도가 B컷의 대응 요소와 정렬되어 컷을 가로질러 연속성이 읽히는 매치 컷입니다. 노트+페어(자동 정렬 크롭)로 표시(생성 없음)." },
 };
 
 const getTransitionUi = (spec: TransitionSpec, lang: "en" | "ko") =>
@@ -948,6 +957,7 @@ export const SortableContiCard = memo(
     onRelight,
     onCameraVariations,
     onChangeAngle,
+    onRefineCut,
     onSketches,
     onTransitionTypeChange,
     displayNumber,
@@ -956,7 +966,10 @@ export const SortableContiCard = memo(
     showGroup,
     groupColor,
     groupLabel,
+    groupIndex,
     isGroupStart,
+    onStartNewScene,
+    onMergeWithPrev,
     generatingStage,
     isEditGenerating,
     allScenes,
@@ -999,6 +1012,8 @@ export const SortableContiCard = memo(
     /** Change Angle 모달을 연다. hasImage 일 때만 제공.
      *  원본 이미지를 그대로 유지한 채 yaw/pitch/zoom 만 자연어로 매핑해 카메라 이동. */
     onChangeAngle?: () => void;
+    /** 현재 컷을 gpt-image-2 로 업스케일(디테일/해상도 향상)한다. hasImage 일 때만 제공. */
+    onRefineCut?: () => void;
     /** Open ContiStudio directly on the Sketches tab for this scene.
      *  Available regardless of hasImage — sketches are composition drafts,
      *  they're often how you GET to an image in the first place. */
@@ -1015,7 +1030,13 @@ export const SortableContiCard = memo(
     showGroup?: boolean;
     groupColor?: string;
     groupLabel?: string;
+    /** 1-based group ordinal — used to decide whether "merge with previous"
+     *  is available (only when groupIndex > 1). */
+    groupIndex?: number;
     isGroupStart?: boolean;
+    /** Manual scene-boundary controls (card "씬" badge dropdown). */
+    onStartNewScene?: () => void;
+    onMergeWithPrev?: () => void;
     generatingStage?: GeneratingStage;
     isEditGenerating?: boolean;
     allScenes?: Scene[];
@@ -1392,20 +1413,58 @@ export const SortableContiCard = memo(
                   {scene.is_final && <Check className="w-2.5 h-2.5" strokeWidth={3} />}
                   <span>#{String(displayNumber ?? scene.scene_number).padStart(2, "0")}</span>
                 </button>
-                {showGroup && groupLabel && groupColor && (
-                  <span
-                    title={t("conti.groupBadgeTip")}
-                    className="font-mono text-micro font-bold px-1.5 py-0.5 shrink-0 inline-flex items-center"
-                    style={{
-                      borderRadius: 0,
-                      border: `1px solid ${groupColor}`,
-                      background: `${groupColor}22`,
-                      color: groupColor,
-                    }}
-                  >
-                    {groupLabel}
-                  </span>
-                )}
+                {showGroup && groupLabel && groupColor && (() => {
+                  const canSplit = !isGroupStart && !!onStartNewScene;
+                  const canMerge = !!isGroupStart && (groupIndex ?? 1) > 1 && !!onMergeWithPrev;
+                  const badgeStyle: React.CSSProperties = {
+                    borderRadius: 0,
+                    border: `1px solid ${groupColor}`,
+                    background: `${groupColor}22`,
+                    color: groupColor,
+                  };
+                  // No actionable boundary change (e.g. first scene's start cut)
+                  // → keep the badge as a plain, non-interactive chip.
+                  if (!canSplit && !canMerge) {
+                    return (
+                      <span
+                        title={t("conti.groupBadgeTip")}
+                        className="font-mono text-micro font-bold px-1.5 py-0.5 shrink-0 inline-flex items-center"
+                        style={badgeStyle}
+                      >
+                        {groupLabel}
+                      </span>
+                    );
+                  }
+                  return (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={(e) => e.stopPropagation()}
+                          title={t("conti.groupBadgeTip")}
+                          className="font-mono text-micro font-bold px-1.5 py-0.5 shrink-0 inline-flex items-center gap-0.5 cursor-pointer hover:brightness-125 transition-[filter]"
+                          style={badgeStyle}
+                        >
+                          <span>{groupLabel}</span>
+                          <ChevronDown className="w-2.5 h-2.5" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" onClick={(e) => e.stopPropagation()}>
+                        {canSplit && (
+                          <DropdownMenuItem onSelect={() => onStartNewScene?.()}>
+                            {t("conti.startNewScene")}
+                          </DropdownMenuItem>
+                        )}
+                        {canMerge && (
+                          <DropdownMenuItem onSelect={() => onMergeWithPrev?.()}>
+                            {t("conti.mergeWithPrev")}
+                          </DropdownMenuItem>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  );
+                })()}
                 <button
                   type="button"
                   onPointerDown={(e) => e.stopPropagation()}
@@ -1613,6 +1672,8 @@ export const SortableContiCard = memo(
                 const idx = allScenes?.findIndex((s) => s.id === scene.id) ?? -1;
                 let prevLabel = "",
                   nextLabel = "";
+                let prevImg: string | null = null,
+                  nextImg: string | null = null;
                 if (allScenes && idx > 0) {
                   for (let i = idx - 1; i >= 0; i--) {
                     if (!allScenes[i].is_transition) {
@@ -1621,6 +1682,7 @@ export const SortableContiCard = memo(
                         if (!allScenes[j].is_transition) dn++;
                       }
                       prevLabel = `#${String(dn).padStart(2, "0")}`;
+                      prevImg = allScenes[i].conti_image_url ?? null;
                       break;
                     }
                   }
@@ -1633,85 +1695,124 @@ export const SortableContiCard = memo(
                         if (!allScenes[j].is_transition) dn++;
                       }
                       nextLabel = `#${String(dn).padStart(2, "0")}`;
+                      nextImg = allScenes[i].conti_image_url ?? null;
                       break;
                     }
                   }
                 }
+                // 기법 + 산출물 타입 결정. note_pair/note_pair_crop 은 AI 생성 없이
+                // 기존 A·B 컷 썸네일 + 기법명 + 노트만 표시(옵션2).
+                const trKey = normalizeTransitionKey(scene.transition_type);
+                const trSpec = trKey ? TRANSITION_MAP[trKey] : null;
+                const deliverable = trKey ? transitionDeliverable(trKey) : "peak_still";
+                const isNotePair = deliverable === "note_pair" || deliverable === "note_pair_crop";
+                const techLabel = trSpec?.label ?? "Transition";
+                const note = (scene.description ?? "").trim();
+                const Thumb = ({ src, label }: { src: string | null; label: string }) => (
+                  <div
+                    className="relative flex-1 h-full overflow-hidden"
+                    style={{ background: "#0c0c0c", minWidth: 0 }}
+                  >
+                    {src ? (
+                      <div
+                        className="absolute inset-0"
+                        style={{
+                          backgroundImage: `url(${src})`,
+                          backgroundSize: "cover",
+                          backgroundPosition: "center",
+                          backgroundRepeat: "no-repeat",
+                        }}
+                      />
+                    ) : (
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <span style={{ color: "#6b7280", fontSize: 12, fontWeight: 600 }}>{label}</span>
+                      </div>
+                    )}
+                  </div>
+                );
                 return (
                   <div
-                    className="absolute inset-0 flex items-center justify-center"
+                    className="absolute inset-0 flex items-stretch"
                     onPointerDown={(e) => e.stopPropagation()}
                   >
-                    <svg
-                      viewBox="0 0 300 50"
-                      width="90%"
-                      height="56"
-                      xmlns="http://www.w3.org/2000/svg"
-                      style={{ display: "block" }}
+                    <Thumb src={prevImg} label={prevLabel} />
+                    {/* 중앙 커넥터 — 기법명 + (있으면) 노트 */}
+                    <div
+                      className="flex flex-col items-center justify-center px-1.5 shrink-0"
+                      style={{
+                        minWidth: 88,
+                        maxWidth: "46%",
+                        background: "rgba(0,0,0,0.55)",
+                        borderLeft: "1px solid rgba(255,255,255,0.08)",
+                        borderRight: "1px solid rgba(255,255,255,0.08)",
+                      }}
                     >
-                      <text
-                        x="4"
-                        y="25"
-                        dominantBaseline="middle"
-                        fill="#9ca3af"
-                        fontSize="14"
-                        fontWeight="500"
-                        fontFamily="sans-serif"
+                      <span style={{ color: "#6b7280", fontSize: 11 }}>{prevLabel} →</span>
+                      <span
+                        className="text-center"
+                        style={{ color: "#e5e7eb", fontSize: 11, fontWeight: 700, lineHeight: 1.15, marginTop: 2 }}
                       >
-                        {prevLabel}
-                      </text>
-                      <line x1="36" y1="25" x2="100" y2="25" stroke="#4b5563" strokeWidth="1" />
-                      <circle cx="104" cy="25" r="3.5" fill="#4b5563" />
-                      <text
-                        x="150"
-                        y="25"
-                        dominantBaseline="middle"
-                        textAnchor="middle"
-                        fill="#9ca3af"
-                        fontSize="14"
-                        fontWeight="600"
-                        fontFamily="sans-serif"
-                      >
-                        Transition
-                      </text>
-                      <circle cx="196" cy="25" r="3.5" fill="#4b5563" />
-                      <line x1="200" y1="25" x2="260" y2="25" stroke="#4b5563" strokeWidth="1" />
-                      <polygon points="260,20 270,25 260,30" fill="#4b5563" />
-                      <text
-                        x="276"
-                        y="25"
-                        dominantBaseline="middle"
-                        fill="#9ca3af"
-                        fontSize="14"
-                        fontWeight="500"
-                        fontFamily="sans-serif"
-                      >
-                        {nextLabel}
-                      </text>
-                    </svg>
-                    {!isBusy && !imgSrc && (
-                      <div className="absolute bottom-2 right-2 flex gap-1" style={{ zIndex: 5 }}>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onGenerate();
-                          }}
-                          title={t("conti.generate")}
+                        {techLabel}
+                      </span>
+                      {isNotePair && (
+                        <span
                           style={{
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            width: 28,
-                            height: 28,
-                            borderRadius: 0,
-                            background: KR,
-                            color: "#fff",
-                            border: "none",
-                            cursor: "pointer",
+                            color: KR,
+                            fontSize: 8,
+                            fontWeight: 700,
+                            letterSpacing: "0.06em",
+                            marginTop: 2,
                           }}
                         >
-                          <Sparkles className="w-3.5 h-3.5" />
-                        </button>
+                          NOTE
+                        </span>
+                      )}
+                      {note && (
+                        <span
+                          className="text-center"
+                          style={{
+                            color: "#9ca3af",
+                            fontSize: 9,
+                            lineHeight: 1.25,
+                            marginTop: 3,
+                            display: "-webkit-box",
+                            WebkitLineClamp: 3,
+                            WebkitBoxOrient: "vertical",
+                            overflow: "hidden",
+                          }}
+                        >
+                          {note}
+                        </span>
+                      )}
+                      <span style={{ color: "#6b7280", fontSize: 11, marginTop: 2 }}>→ {nextLabel}</span>
+                    </div>
+                    <Thumb src={nextImg} label={nextLabel} />
+                    {!isBusy && !imgSrc && (
+                      <div className="absolute bottom-2 right-2 flex gap-1" style={{ zIndex: 5 }}>
+                        {/* note_pair 류는 AI 생성을 하지 않으므로 생성 버튼을 숨긴다. */}
+                        {!isNotePair && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onGenerate();
+                            }}
+                            title={t("conti.generate")}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              width: 28,
+                              height: 28,
+                              borderRadius: 0,
+                              background: KR,
+                              color: "#fff",
+                              border: "none",
+                              cursor: "pointer",
+                            }}
+                          >
+                            <Sparkles className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -2048,6 +2149,23 @@ export const SortableContiCard = memo(
                     )}
                   </button>
                 )}
+                {hasImage && onRefineCut && (
+                  <button
+                    title={t("conti.refineTitle")}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRefineCut();
+                    }}
+                    className="flex items-center justify-center w-7 h-7 rounded-none text-white/90 hover:bg-white/20"
+                    style={{
+                      background: "rgba(0,0,0,0.55)",
+                      border: "1px solid rgba(255,255,255,0.12)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <Wand2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
                 {hasImage && onUseAsStyle && (
                   <button
                     title={t("conti.useAsStyle")}
@@ -2205,6 +2323,14 @@ export const SortableContiCard = memo(
                     ? () => {
                         setMenuOpen(false);
                         onChangeAngle();
+                      }
+                    : undefined
+                }
+                onRefineCut={
+                  scene.conti_image_url && onRefineCut
+                    ? () => {
+                        setMenuOpen(false);
+                        onRefineCut();
                       }
                     : undefined
                 }

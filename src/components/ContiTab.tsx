@@ -14,6 +14,7 @@ import { supabase } from "@/lib/supabase";
 import { deleteStoredFile, deleteStoredFileIfUnreferenced, normalizeStorageUrl } from "@/lib/storageUtils";
 import { generateConti, styleTransfer, IMAGE_SIZE_MAP, buildProjectAssetsCache } from "@/lib/conti";
 import type { VideoFormat, BriefAnalysis, GeneratingStage, ProjectAssetsCache } from "@/lib/conti";
+import { computeSceneGroups, materializeSequences } from "@/lib/sceneGrouping";
 import { getImageModelDefault, getGptQualityDefault } from "@/lib/imageGenPreference";
 import { generateTransitionFrame } from "@/lib/transitions";
 import { DEFAULT_TRANSITION_KEY, TRANSITION_MAP, normalizeTransitionKey } from "@/lib/transitionGrammar";
@@ -217,6 +218,25 @@ function loadContiInfoVis(projectId: string): ContiInfoVisibility {
 function loadContiShowGroups(projectId: string): boolean {
   if (typeof window === "undefined") return false;
   return window.localStorage.getItem(contiShowGroupsKey(projectId)) === "1";
+}
+
+// Per-version "the user has manually grouped these cuts" flag. Stored in
+// localStorage (migration-free) keyed by version id. When set we (a) skip the
+// storyboard-sheet self-heal that would overwrite the user's `sequence`, and
+// (b) feed the user's sequence grouping directly into the sheet prompt instead
+// of the LLM shot plan's grouping.
+const groupingLockedKey = (versionId: string) => `conti.groupingLocked.${versionId}`;
+function loadGroupingLocked(versionId: string | null | undefined): boolean {
+  if (!versionId || typeof window === "undefined") return false;
+  return window.localStorage.getItem(groupingLockedKey(versionId)) === "1";
+}
+function saveGroupingLocked(versionId: string | null | undefined): void {
+  if (!versionId || typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(groupingLockedKey(versionId), "1");
+  } catch {
+    /* ignore quota / privacy-mode failures */
+  }
 }
 
 // When a new cut inherits a neighbour scene, carry over only its *background*
@@ -1622,7 +1642,7 @@ const InsertSceneButton = ({
   canTransition,
   groupChoice,
 }: {
-  onAddScene: (pref?: "before" | "after") => void;
+  onAddScene: (pref?: "before" | "after" | "new") => void;
   onAddTransition: () => void;
   canTransition: boolean;
   /** When the insertion point sits on a scene-group boundary, offer an
@@ -1810,6 +1830,50 @@ const InsertSceneButton = ({
               {t("conti.addScene")}
             </button>
           )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setPopOpen(false);
+              onAddScene("new");
+            }}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "6px 10px",
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              color: "rgba(255,255,255,0.85)",
+              fontSize: 12,
+              fontWeight: 500,
+              width: "100%",
+              textAlign: "left",
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.06)";
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLElement).style.background = "none";
+            }}
+          >
+            <svg
+              width={13}
+              height={13}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={{ flexShrink: 0 }}
+            >
+              <rect x="3" y="3" width="7" height="7" rx="1" />
+              <rect x="14" y="3" width="7" height="7" rx="1" />
+              <path d="M5 17h14M12 14v6" />
+            </svg>
+            {t("conti.insertAsNewScene")}
+          </button>
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -3275,6 +3339,9 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
         is_highlight: scene.is_highlight ?? false,
         highlight_kind: scene.highlight_kind ?? null,
         highlight_reason: scene.highlight_reason ?? null,
+        motion_in: scene.motion_in ?? null,
+        motion_out: scene.motion_out ?? null,
+        transition_to_next: scene.transition_to_next ?? null,
         conti_image_url: null,
         source: "conti",
       })
@@ -3374,6 +3441,9 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
         is_final: s.is_final ?? false,
         is_transition: s.is_transition ?? false,
         transition_type: s.transition_type ?? null,
+        motion_in: s.motion_in ?? null,
+        motion_out: s.motion_out ?? null,
+        transition_to_next: s.transition_to_next ?? null,
         source: "conti",
       }));
       const { error } = await supabase.from("scenes").insert(insertRows);
@@ -3485,14 +3555,18 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
     await updateVersionScenes(renumbered);
   };
 
-  const handleInsertSceneAt = async (insertIdx: number, groupPref?: "before" | "after") => {
+  const handleInsertSceneAt = async (insertIdx: number, groupPref?: "before" | "after" | "new") => {
     const snapshot = getSceneState(projectId)?.scenes ?? activeScenes;
     const nextSceneTitleNumber = snapshot.slice(0, insertIdx).filter((s) => !s.is_transition).length + 1;
     const tempNumber = 90000 + (Date.now() % 10000);
     // Inserted cut inherits a neighbouring cut's scene group. Default prefers
     // the cut *before* the insertion point (else the one after) so it stays in
     // the surrounding scene. When the insertion sits on a scene boundary the
-    // user can explicitly pick the front/back scene via `groupPref`.
+    // user can explicitly pick the front/back scene via `groupPref`. With
+    // `groupPref === "new"` the cut becomes its OWN scene (no group inherited);
+    // `materializeSequences({ newSceneAt })` below makes it a distinct group
+    // and renumbers the rest.
+    const isNewScene = groupPref === "new";
     const before = snapshot.slice(0, insertIdx).reverse().find((s) => !s.is_transition);
     const after = snapshot.slice(insertIdx).find((s) => !s.is_transition);
     // Pick the scene to join (front by default, or the user's explicit choice),
@@ -3502,11 +3576,21 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
     // that scene so the cut lands in the chosen group. With no choice (default
     // = stay in the surrounding scene), fall back front-then-back.
     const beforeHasScene = !!before && (!!before.location || before.sequence != null);
-    const source = groupPref ? (groupPref === "after" ? after : before) : beforeHasScene ? before : after;
-    const inheritedSequence =
-      (groupPref ? source?.sequence : (before?.sequence ?? after?.sequence)) ?? null;
-    const inheritedLocation = source?.location ?? null;
-    const inheritedBgTags = inheritBackgroundTagsFrom(source, assetMap);
+    const joinPref = groupPref === "before" || groupPref === "after" ? groupPref : undefined;
+    const source = isNewScene
+      ? undefined
+      : joinPref
+        ? joinPref === "after"
+          ? after
+          : before
+        : beforeHasScene
+          ? before
+          : after;
+    const inheritedSequence = isNewScene
+      ? null
+      : (joinPref ? source?.sequence : (before?.sequence ?? after?.sequence)) ?? null;
+    const inheritedLocation = isNewScene ? null : source?.location ?? null;
+    const inheritedBgTags = isNewScene ? [] : inheritBackgroundTagsFrom(source, assetMap);
     const { data, error } = await supabase
       .from("scenes")
       .insert({
@@ -3534,7 +3618,15 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
     const safeInsertIdx = Math.min(insertIdx, latest.length);
     const updated = [...latest];
     updated.splice(safeInsertIdx, 0, data as Scene);
-    const renumbered = updated.map((s, i) => ({ ...s, scene_number: i + 1 }));
+    let renumbered = updated.map((s, i) => ({ ...s, scene_number: i + 1 }));
+    // "새 씬으로 추가": make the inserted cut a distinct scene group and freeze
+    // every cut's sequence as an explicit ordinal (locks manual grouping).
+    if (isNewScene) {
+      renumbered = materializeSequences(renumbered, { newSceneAt: (data as Scene).id });
+      saveGroupingLocked(activeVersionIdRef.current);
+      // Surface the grouping so the user sees the new scene boundary land.
+      setShowGroups(true);
+    }
     const tempRenumbered = renumbered.map((s, i) => ({ ...s, scene_number: 80000 + i }));
     await Promise.all(
       tempRenumbered.map((s) => supabase.from("scenes").update({ scene_number: s.scene_number }).eq("id", s.id)),
@@ -3544,6 +3636,30 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
     );
     await updateVersionScenes(renumbered);
     toast({ title: t("conti.toast.shotInsertedPosition", { n: insertIdx + 1 }) });
+  };
+
+  // ── Manual scene-boundary controls (card "씬" dropdown) ──
+  // Both reuse `materializeSequences`: the boundary set derived from current
+  // grouping is mutated by exactly one cut, then every grouped cut's sequence
+  // is rewritten as an explicit ordinal. Persisting via updateVersionScenes is
+  // enough (sequence lives in the version JSON) and we lock the version so the
+  // storyboard-sheet self-heal won't clobber the user's choice.
+  const handleStartNewScene = async (sceneId: string) => {
+    const latest = getSceneState(projectId)?.scenes ?? activeScenes;
+    const next = materializeSequences(latest, { startAt: sceneId });
+    if (next === latest) return;
+    saveGroupingLocked(activeVersionIdRef.current);
+    await updateVersionScenes(next);
+    toast({ title: t("conti.toast.sceneSplit") });
+  };
+
+  const handleMergeWithPrev = async (sceneId: string) => {
+    const latest = getSceneState(projectId)?.scenes ?? activeScenes;
+    const next = materializeSequences(latest, { mergeAt: sceneId });
+    if (next === latest) return;
+    saveGroupingLocked(activeVersionIdRef.current);
+    await updateVersionScenes(next);
+    toast({ title: t("conti.toast.sceneMerged") });
   };
 
   const handleInsertTransitionAt = async (idx: number) => {
@@ -3834,6 +3950,73 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
         if (!(req.sceneId in prev)) return prev;
         const n = { ...prev };
         delete n[req.sceneId];
+        return n;
+      });
+    }
+  };
+
+  /**
+   * On-demand refine of an EXISTING cut: gpt-image-2 upscale (detail/resolution)
+   * + reframe to the project aspect. Mirrors the inpaint/relight background UX
+   * (editGeneratingIds + sceneStages spinner) but is non-persistent — not
+   * resumed across reload, same as the camera-variation apply. The user's
+   * manual thumbnail crop is preserved (no resetCrop); refine keeps framing.
+   */
+  const runRefineCut = async (scene: Scene) => {
+    const src = scene.conti_image_url;
+    if (!src) return;
+    const inFlight = getLoading(projectId).editGeneratingIds;
+    if (inFlight.has(scene.id)) {
+      toast({
+        title: t("conti.toast.shotStillGenerating", { n: String(scene.scene_number).padStart(2, "0") }),
+        variant: "destructive",
+      });
+      return;
+    }
+    const versionId = activeVersionIdRef.current;
+    setEditGeneratingIds((prev) => new Set(prev).add(scene.id));
+    setSceneStages((prev) => ({ ...prev, [scene.id]: "generating" }));
+    setGeneratingSceneVersionMap((prev) => ({ ...prev, [scene.id]: versionId }));
+    try {
+      const { refineExistingCut } = await import("@/lib/storyboardSheet");
+      const refined = await refineExistingCut({
+        srcUrl: src,
+        projectId,
+        sceneNumber: scene.scene_number,
+        videoFormat,
+      });
+      await applyGeneratedSceneImage(scene.id, refined, src, { versionId });
+      toast({
+        title: t("conti.toast.refined", { n: String(scene.scene_number).padStart(2, "0") }),
+        action: (
+          <ToastAction altText={t("conti.toast.viewScene")} onClick={() => scrollToScene(scene.id, scene.scene_number)}>
+            {t("conti.toast.viewScene")}
+          </ToastAction>
+        ),
+      });
+    } catch (err: any) {
+      console.error("[refineCut] failed:", err);
+      const fk = friendlyGenerationError(err);
+      toast({
+        title: t("conti.toast.refineFailed", { n: String(scene.scene_number).padStart(2, "0") }),
+        description: fk ? t(fk) : (err?.message ?? String(err)),
+        variant: "destructive",
+      });
+    } finally {
+      setEditGeneratingIds((prev) => {
+        const n = new Set(prev);
+        n.delete(scene.id);
+        return n;
+      });
+      setSceneStages((prev) => {
+        const n = { ...prev };
+        delete n[scene.id];
+        return n;
+      });
+      setGeneratingSceneVersionMap((prev) => {
+        if (!(scene.id in prev)) return prev;
+        const n = { ...prev };
+        delete n[scene.id];
         return n;
       });
     }
@@ -4539,6 +4722,9 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
         briefAnalysis: briefAnalysisRef.current,
         quality: getGptQualityDefault("storyboardSheet"),
         onStage: (stage) => setStoryboardPlanning(stage === "planning"),
+        // 사용자가 수동으로 묶었으면 시트 프롬프트의 씬 경계도 LLM 숏플랜이 아닌
+        // 사용자 sequence(continuityRanges)를 쓰게 한다.
+        respectManualGrouping: loadGroupingLocked(activeVersionIdRef.current),
       });
       console.info("[ContiTab] storyboard sheet url", res.url);
 
@@ -4575,7 +4761,13 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
       // scenes' `sequence` hint so it converges over time (and the deterministic
       // fallback / next shot plan get a better seed). Best-effort — a failure
       // here must NOT block the auto-apply below.
-      if (res.sequenceBySceneId && Object.keys(res.sequenceBySceneId).length > 0) {
+      // Guard: if the user has manually grouped this version, NEVER let the LLM
+      // shot plan overwrite their `sequence` — manual grouping is authoritative.
+      if (
+        !loadGroupingLocked(activeVersionIdRef.current) &&
+        res.sequenceBySceneId &&
+        Object.keys(res.sequenceBySceneId).length > 0
+      ) {
         const seqMap = res.sequenceBySceneId;
         try {
           await updateVersionScenes((current) =>
@@ -4892,14 +5084,25 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
     const newIdx = snapshot.findIndex((s) => s.id === over.id);
     if (oldIdx === -1 || newIdx === -1) return;
     const reordered = arrayMove(snapshot, oldIdx, newIdx).map((s, i) => ({ ...s, scene_number: i + 1 }));
+    // Drag policy: when the user has manually grouped (locked), a dropped cut
+    // JOINS the scene it lands in (attach to the previous neighbour's group)
+    // so the result is consistent regardless of the cut's stale sequence.
+    // Untouched projects keep the legacy derived behaviour (no implicit lock).
+    let finalScenes = reordered;
+    if (loadGroupingLocked(activeVersionIdRef.current)) {
+      const moved = reordered.find((s) => s.id === active.id);
+      if (moved && !moved.is_transition) {
+        finalScenes = materializeSequences(reordered, { attachToPrev: active.id as string });
+      }
+    }
     // ⚠️ 순서 중요 — 이전엔 DB write 50~200ms 를 *먼저* await 한 뒤 state 갱신해서
     // drop 직후 source 카드가 OLD 위치에 한 두 프레임 visible 로 남는 flicker 발생.
     // updateVersionScenes 내부의 setActiveScenesState 가 동기 실행되므로
     // 이걸 *제일 먼저* 호출 → UI 즉시 새 순서로 reflow. scenes 테이블 row 별
     // scene_number 업데이트는 그 다음에 (실패해도 다음 reorder 가 덮어씀).
-    await updateVersionScenes(reordered);
+    await updateVersionScenes(finalScenes);
     await Promise.all(
-      reordered.map((s) => supabase.from("scenes").update({ scene_number: s.scene_number }).eq("id", s.id)),
+      finalScenes.map((s) => supabase.from("scenes").update({ scene_number: s.scene_number }).eq("id", s.id)),
     );
   };
 
@@ -5646,7 +5849,10 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
     onRelight: () => void;
     onCameraVariations: () => void;
     onChangeAngle: () => void;
+    onRefineCut: () => void;
     onSketches: () => void;
+    onStartNewScene: () => void;
+    onMergeWithPrev: () => void;
   };
 
   const latestCardDepsRef = useRef({
@@ -5667,6 +5873,9 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
     handleRegisterSceneAsStyle,
     handleTransitionTypeChange,
     toggleSceneSelect,
+    runRefineCut,
+    handleStartNewScene,
+    handleMergeWithPrev,
   });
   // 렌더마다 최신 참조로 갱신. 단순 대입이라 사이드이펙트 없음.
   latestCardDepsRef.current = {
@@ -5687,6 +5896,9 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
     handleRegisterSceneAsStyle,
     handleTransitionTypeChange,
     toggleSceneSelect,
+    runRefineCut,
+    handleStartNewScene,
+    handleMergeWithPrev,
   };
 
   const scenesByIdRef = useRef<Map<string, Scene>>(new Map());
@@ -5777,6 +5989,10 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
         const s = getScene();
         if (s) latestCardDepsRef.current.setChangeAngleScene(s);
       },
+      onRefineCut: () => {
+        const s = getScene();
+        if (s) void latestCardDepsRef.current.runRefineCut(s);
+      },
       onSketches: () => {
         const s = getScene();
         if (!s) return;
@@ -5784,6 +6000,12 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
         r.setStudioInitialTab("sketches");
         r.setStudioVersionId(r.activeVersionIdRef.current);
         r.setStudioScene(s);
+      },
+      onStartNewScene: () => {
+        void latestCardDepsRef.current.handleStartNewScene(sceneId);
+      },
+      onMergeWithPrev: () => {
+        void latestCardDepsRef.current.handleMergeWithPrev(sceneId);
       },
     };
     cardHandlersCacheRef.current.set(sceneId, bundle);
@@ -5831,28 +6053,7 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
   //     same scene (no "pushed to next scene" jump), and
   //   · deleting such a blank cut can't suddenly merge two neighbours.
   // Only leading blanks (before any group has started) stay ungrouped.
-  const sceneGroupMap = useMemo(() => {
-    const map = new Map<string, { index: number; isStart: boolean }>();
-    let groupCounter = 0;
-    let prevKey: string | null = null;
-    for (const s of activeScenes) {
-      if (s.is_transition) continue;
-      let key: string | null = null;
-      if (s.sequence != null) key = `seq:${s.sequence}`;
-      else if (s.location?.trim()) key = `loc:${s.location.trim().toLowerCase()}`;
-      if (key == null) {
-        // Blank cut: continue the current group if one is running.
-        if (prevKey == null) continue; // leading blank → ungrouped
-        map.set(s.id, { index: groupCounter, isStart: false });
-        continue;
-      }
-      const isStart = key !== prevKey;
-      if (isStart) groupCounter += 1;
-      map.set(s.id, { index: groupCounter, isStart });
-      prevKey = key;
-    }
-    return map;
-  }, [activeScenes]);
+  const sceneGroupMap = useMemo(() => computeSceneGroups(activeScenes), [activeScenes]);
 
   const noDescriptionCount = activeScenes.filter((s) => !s.is_transition && !s.description?.trim()).length;
   const scenesWithImages = activeScenes.filter((s) => !s.is_transition && s.conti_image_url).length;
@@ -6663,6 +6864,7 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
                           onRelight={hasImg ? cardHandlers.onRelight : undefined}
                           onCameraVariations={hasImg ? cardHandlers.onCameraVariations : undefined}
                           onChangeAngle={hasImg ? cardHandlers.onChangeAngle : undefined}
+                          onRefineCut={hasImg ? cardHandlers.onRefineCut : undefined}
                           onSketches={cardHandlers.onSketches}
                           displayNumber={displayNum}
                           onTransitionTypeChange={stableHandleTransitionTypeChange}
@@ -6671,7 +6873,10 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
                           showGroup={showGroups && !!group}
                           groupColor={group ? sceneGroupColor(group.index) : undefined}
                           groupLabel={group ? `S${group.index}` : undefined}
+                          groupIndex={group?.index}
                           isGroupStart={group?.isStart}
+                          onStartNewScene={cardHandlers.onStartNewScene}
+                          onMergeWithPrev={cardHandlers.onMergeWithPrev}
                           generatingStage={versionMatches ? sceneStages[scene.id] : undefined}
                           // ── inpaint 단계 표시용: editGeneratingIds에 있으면 스피너를 "1/1"로 표시
                           // (versionMatches 로 sibling copy-version 의 동일 id 카드에는 안 뜨도록 차단)
@@ -6828,13 +7033,12 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
             void supabase.from("scenes").update({ camera_variation_grid: nextGrids }).eq("id", sid);
           }}
           onApplyTile={(tileDataUrl) => {
-            // Apply = close the popup immediately and run the refine in the
-            // BACKGROUND, with the scene card showing the standard generation
-            // overlay (editGeneratingIds → isGenerating + the 1/1 spinner) until
-            // the refined cut lands — same UX as inpaint / Change Angle, so it's
-            // always obvious which card is generating. The chosen tile is
-            // upscaled + reframed to the project's exact aspect via the shared
-            // storyboard-sheet refine pass.
+            // Apply = close the popup and paste the chosen tile INSTANTLY (no
+            // model call). The heavy gpt-image-2 refine was split out into the
+            // card's on-demand "Refine" action, so applying a cut is now near-
+            // immediate. The card still shows the standard generation overlay
+            // briefly (editGeneratingIds), which is harmless when it resolves
+            // fast. Detail/resolution upscaling is opt-in via Refine afterwards.
             const target = cameraVariationsScene;
             if (!target) return;
             void (async () => {
@@ -6842,51 +7046,33 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
               setSceneStages((prev) => ({ ...prev, [target.id]: "generating" }));
               setGeneratingSceneVersionMap((prev) => ({ ...prev, [target.id]: activeVersionIdRef.current }));
               try {
-                const { refineCameraTileGpt, centerCropToFormatDataUrl, reframeCutToFormat } =
+                const { centerCropToFormatDataUrl, HEADROOM_VERTICAL_ANCHOR } =
                   await import("@/lib/storyboardSheet");
                 const { trimWhiteBorderDataUrl, dataUrlToBase64 } = await import("@/lib/contactSheet");
+                // 1) trimWhiteBorderDataUrl: 시트 거터의 큰 흰 여백을 적응적으로 제거.
+                // 2) centerCropToFormatDataUrl(anchor=HEADROOM, overscan=1.02):
+                //    표시 비율로 상단 바이어스 크롭(인물 머리 보존) + 1% 오버스캔으로
+                //    트림이 놓친 얇은 잔여 흰 라인까지 굽는 단계에서 제거.
+                // 저해상(타일 ~512px폭) 트레이드오프는 카드 "리파인"으로 보완.
                 const trimmed = await trimWhiteBorderDataUrl(tileDataUrl);
-                let refined: string;
-                try {
-                  // 모든 비율에서 gpt-image-2 로 리파인한다. NB2(9:16/16:9/1:1만 지원)는
-                  // gpt-image 그리드 셀을 자기 비율로 강제 reframe 하면서 상하/좌우 밴드와
-                  // 줌아웃 같은 "타일 현상"을 만든다(세로뿐 아니라 가로/정사각도 동일).
-                  // gpt-image-2(refineCameraTileGpt)는 타일의 네이티브 비율에 가장 가까운
-                  // 출력 크기로 reframe 없이 업스케일하므로 모든 포맷에서 타일 현상이 없다.
-                  refined = await refineCameraTileGpt({
-                    tileDataUrl: trimmed,
+                const cropped = await centerCropToFormatDataUrl(
+                  trimmed,
+                  videoFormat,
+                  HEADROOM_VERTICAL_ANCHOR,
+                  1.02,
+                );
+                const { data } = await supabase.functions.invoke("openai-image", {
+                  body: {
+                    mode: "save_local",
+                    imageBase64: dataUrlToBase64(cropped),
                     projectId,
                     sceneNumber: target.scene_number,
-                    videoFormat,
-                  });
-                  // gpt-image 출력(3:2/2:3/1:1)은 프로젝트 표시 비율(예: 16:9)과 거의
-                  // 안 맞아서, 카드가 매번 센터 크롭 → 세로가 더 긴 컷은 인물 머리가
-                  // 잘렸다. 저장 단계에서 표시 비율로 상단 바이어스 크롭을 구워두면
-                  // 카드 추가 크롭/수동 썸네일 이동이 불필요해진다. 실패해도 원본 URL로
-                  // 그대로 폴백한다.
-                  refined = await reframeCutToFormat({
-                    srcUrl: refined,
-                    projectId,
-                    sceneNumber: target.scene_number,
-                    videoFormat,
-                  });
-                } catch (refineErr) {
-                  console.warn("[cameraVar] refine failed, falling back to center-crop:", refineErr);
-                  const cropped = await centerCropToFormatDataUrl(trimmed, videoFormat);
-                  const { data } = await supabase.functions.invoke("openai-image", {
-                    body: {
-                      mode: "save_local",
-                      imageBase64: dataUrlToBase64(cropped),
-                      projectId,
-                      sceneNumber: target.scene_number,
-                      suffix: "camvar-cut",
-                      folder: "contis",
-                    },
-                  });
-                  const fb = (data as { publicUrl?: string } | null)?.publicUrl;
-                  if (!fb) throw refineErr;
-                  refined = fb;
-                }
+                    suffix: "camvar-cut",
+                    folder: "contis",
+                  },
+                });
+                const refined = (data as { publicUrl?: string } | null)?.publicUrl;
+                if (!refined) throw new Error("apply save returned no image URL");
                 await applyGeneratedSceneImage(target.id, refined, target.conti_image_url ?? null);
                 toast({
                   title: t("conti.toast.cameraAngleUpdated", { n: String(target.scene_number).padStart(2, "0") }),

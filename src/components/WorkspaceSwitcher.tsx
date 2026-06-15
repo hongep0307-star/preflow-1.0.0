@@ -79,11 +79,14 @@ interface Props {
   variant?: Variant;
 }
 
-// 충돌 사본 경고는 세션당 한 번만 — WorkspaceSwitcher 가 여러 variant 로
-// 동시에 마운트돼도(full/compact/icon) 토스트가 중복되지 않도록 모듈 레벨
-// 가드. 페이지 hard reload(활성 전환 시) 후엔 모듈이 새로 평가되므로
-// 자연스럽게 다시 1회 평가된다.
-let conflictWarningShown = false;
+// 충돌 사본 경고는 같은 충돌에 대해 앱 세션당 한 번만 — WorkspaceSwitcher 가
+// 여러 variant 로 동시에 마운트돼도(full/compact/icon) 토스트가 중복되지
+// 않도록 가드한다. 워크스페이스 전환 시 페이지가 hard reload 되어 모듈이 새로
+// 평가되므로 모듈 변수로는 가드가 유지되지 않는다. sessionStorage 는 reload 를
+// 견디고 윈도우(앱)를 닫으면 비워지므로 "앱 실행 중 한 번"에 정확히 들어맞는다.
+// 충돌 파일 목록을 시그니처로 저장해, 전환한 워크스페이스에 *새로운* 충돌이
+// 생긴 경우엔 다시 한 번 알린다.
+const CONFLICT_WARNING_KEY = "preflow:conflictWarningSig";
 
 function useWorkspacesCache() {
   const [, force] = useState(0);
@@ -552,10 +555,21 @@ export const WorkspaceSwitcher = ({ variant = "full" }: Props) => {
   // 스페이스 캐시가 비동기로 채워지므로 구독으로 들어온 후 한 번 검사한다.
   useEffect(() => {
     const check = () => {
-      if (conflictWarningShown) return;
       const files = getCachedConflictCopies();
       if (files.length === 0) return;
-      conflictWarningShown = true;
+      const sig = files.join("|");
+      let alreadyShown: string | null = null;
+      try {
+        alreadyShown = sessionStorage.getItem(CONFLICT_WARNING_KEY);
+      } catch {
+        /* sessionStorage 접근 불가(예외) 시 가드 없이 진행 */
+      }
+      if (alreadyShown === sig) return;
+      try {
+        sessionStorage.setItem(CONFLICT_WARNING_KEY, sig);
+      } catch {
+        /* 저장 실패해도 토스트는 한 번 보여 준다 */
+      }
       const shown = files.slice(0, 3).join(", ") + (files.length > 3 ? "…" : "");
       toast({
         variant: "destructive",

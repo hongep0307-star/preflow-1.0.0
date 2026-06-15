@@ -15,6 +15,7 @@ const TABLE_COLUMNS: Record<string, ReadonlySet<string>> = {
     "id", "user_id", "title", "client", "deadline", "status", "video_format",
     "active_version_id", "folder_id", "conti_style_id", "thumbnail_url",
     "thumbnail_crop", "is_favorite", "last_visited_at", "updated_at", "deleted_at",
+    "direction_mode",
     "created_at",
   ]),
   briefs: new Set([
@@ -35,7 +36,8 @@ const TABLE_COLUMNS: Record<string, ReadonlySet<string>> = {
     "location", "mood", "duration_sec", "tagged_assets", "conti_image_url",
     "conti_image_history", "source", "conti_image_crop", "is_transition",
     "is_final", "is_highlight", "highlight_kind", "highlight_reason",
-    "transition_type", "sketches", "camera_variation_grid", "created_at",
+    "transition_type", "sketches", "camera_variation_grid",
+    "motion_in", "motion_out", "transition_to_next", "created_at",
   ]),
   assets: new Set([
     "id", "project_id", "asset_type", "tag_name", "photo_url", "ai_description",

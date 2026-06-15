@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import {
   KR,
   type Asset,
+  type DirectionMode,
   type MessageSegment,
   parseMessageSegments,
   resolveAsset,
@@ -11,6 +12,7 @@ import { TagChip } from "./AgentSceneCards";
 import { isBriefAnalysisMsg } from "./prompts";
 import { BriefAnalysisCard } from "./BriefAnalysisCard";
 import { StorylinesCard } from "./StorylinesCard";
+import { DirectionCard } from "./DirectionCard";
 import { StrategyCard } from "./StrategyCard";
 import { useT } from "@/lib/uiLanguage";
 
@@ -19,11 +21,22 @@ interface Props {
   assets: Asset[];
   onSend?: (text: string) => void;
   segments?: MessageSegment[];
+  /** Direction-mode pick handler (DirectionCard buttons). */
+  onPickDirection?: (mode: DirectionMode) => void;
+  /** Currently confirmed direction mode (for the card's selected state). */
+  activeDirectionMode?: DirectionMode | null;
 }
 
 const normalizeShotRefs = (text: string) => text.replace(/#(\d{1,2})(?!\d)/g, (_, n) => `#${String(n).padStart(2, "0")}`);
 
-export const MessageContent = ({ content, assets, onSend, segments: preSegments }: Props) => {
+export const MessageContent = ({
+  content,
+  assets,
+  onSend,
+  segments: preSegments,
+  onPickDirection,
+  activeDirectionMode,
+}: Props) => {
   const t = useT();
   if (isBriefAnalysisMsg(content)) return <BriefAnalysisCard content={content} />;
   const segments = preSegments ?? parseMessageSegments(content);
@@ -48,6 +61,18 @@ export const MessageContent = ({ content, assets, onSend, segments: preSegments 
     <div>
       {segments.map((seg, i) => {
         if (seg.type === "strategy") return <StrategyCard key={i} content={seg.content} renderText={renderWithTags} />;
+        if (seg.type === "direction") {
+          if (!seg.data) return null;
+          return (
+            <DirectionCard
+              key={i}
+              data={seg.data}
+              activeMode={activeDirectionMode}
+              onPick={(m) => onPickDirection?.(m)}
+              renderText={renderWithTags}
+            />
+          );
+        }
         if (seg.type === "storylines")
           return <StorylinesCard key={i} options={seg.options} onSelect={(t) => onSend?.(t)} renderText={renderWithTags} />;
         if (seg.type === "scene") return null;

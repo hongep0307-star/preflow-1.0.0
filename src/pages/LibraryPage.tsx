@@ -5356,6 +5356,8 @@ const LibraryPage = () => {
       } else if (
         selected
         && (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "ArrowUp" || event.key === "ArrowDown")
+        // 수식키 조합 화살표는 영상 프리뷰의 시킹/배속용으로 양보 — 순수 화살표만 항목 이동.
+        && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey
       ) {
         /* 화살표 내비게이션.
            - 큰 프리뷰: ←/→ 는 보기 페이지 이동(기존). ↑/↓ 은 무시(그리드를

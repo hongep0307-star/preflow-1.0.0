@@ -81,6 +81,7 @@ import {
   remapMessageForHistory,
   ACFG,
   ASSET_ICON,
+  type DirectionMode,
 } from "./agent/agentTypes";
 import { MoodIdeationPanel } from "./agent/MoodIdeationPanel";
 import AgentAbcdPanel from "./agent/AgentAbcdPanel";
@@ -95,6 +96,7 @@ import {
   buildSystemPrompt,
   buildBriefContextString,
   buildContinuityFixPrompt,
+  buildDirectionReminder,
   isBriefAnalysisMsg,
 } from "./agent/prompts";
 import { MessageContent } from "./agent/MessageContent";
@@ -117,6 +119,16 @@ interface Props {
    *  뒤 브리프 분석이 끝나는 케이스에서, 활성화 시점에 브리프를 재조회하기 위함. */
   isActive?: boolean;
 }
+
+/** 방향 카드 클릭 시 채팅으로 보낼 확정 문구(이 메시지가 LLM 을 Phase 1 로 넘긴다). */
+const directionConfirmMsg = (mode: DirectionMode, lang: "ko" | "en"): string => {
+  if (lang === "en") {
+    const l = mode === "narrative" ? "narrative-driven" : mode === "motion" ? "motion-driven" : "hybrid";
+    return `Let's go ${l}. Now propose the synopsis directions (storylines).`;
+  }
+  const l = mode === "narrative" ? "서사 중심" : mode === "motion" ? "모션 연출 중심" : "하이브리드";
+  return `${l}으로 진행할게요. 이제 시놉시스(storylines)를 제안해줘.`;
+};
 
 const DRAFT_REPLACE_INTENT_RE =
   /(삭제|제거|빼|빼고|줄여|축소|정리|재구성|다시\s*구성|다시\s*짜|교체|새로\s*짜|최종안|최종\s*컷|remove|delete|drop|omit|reduce|shorten|rework|replace|final\s+cut|final\s+shot)/i;
@@ -388,6 +400,42 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
 
   const [briefAnalysis, setBriefAnalysis] = useState<Analysis | null>(null);
   const [briefLang, setBriefLang] = useState<"ko" | "en">(lang);
+  // 연출 방향 모드(서사/모션/하이브리드). null = 미확정 → 진입 시 선제안 게이팅.
+  // ref 는 handleSend/auto-init 같은 async 클로저에서 최신값을 동기 참조하기 위함.
+  const [directionMode, setDirectionModeState] = useState<DirectionMode | null>(null);
+  const directionModeRef = useRef<DirectionMode | null>(null);
+  useEffect(() => {
+    directionModeRef.current = directionMode;
+  }, [directionMode]);
+  const persistDirectionMode = useCallback(
+    async (mode: DirectionMode) => {
+      if (directionModeRef.current === mode) return;
+      setDirectionModeState(mode);
+      directionModeRef.current = mode;
+      try {
+        await supabase.from("projects").update({ direction_mode: mode }).eq("id", projectId);
+      } catch (e) {
+        console.warn("[AgentTab] persist direction_mode failed", e);
+      }
+    },
+    [projectId],
+  );
+  /** 어시스턴트 응답 텍스트에 direction.confirmed 펜스가 있으면 모드를 확정 반영. */
+  const applyConfirmedDirection = useCallback(
+    (text: string) => {
+      try {
+        for (const seg of parseMessageSegments(text)) {
+          if (seg.type === "direction" && seg.data?.confirmed) {
+            void persistDirectionMode(seg.data.confirmed);
+            break;
+          }
+        }
+      } catch {
+        /* ignore parse issues */
+      }
+    },
+    [persistDirectionMode],
+  );
   const [isLoading, setIsLoading] = useState(false);
   const [initialLoaded, setInitialLoaded] = useState(false);
   // 브리프 재조회 트리거. (1) 분석 완료 알림 (2) 탭 활성화 시점에 증가시켜
@@ -814,6 +862,9 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
             is_highlight: s.is_highlight ?? false,
             highlight_kind: s.highlight_kind ?? null,
             highlight_reason: s.highlight_reason ?? null,
+            motion_in: s.motion_in ?? null,
+            motion_out: s.motion_out ?? null,
+            transition_to_next: s.transition_to_next ?? null,
           };
         });
       if (!newScenes.length) return;
@@ -899,10 +950,31 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
             .limit(1)
             .single();
           const initLang = ((briefRow as any)?.lang ?? "ko") as "ko" | "en";
+          // 진입 시 확정된 연출 방향 로드. 미확정(NULL)이면 첫 응답에서 방향
+          // 선제안(게이팅), 이미 확정돼 있으면 곧바로 시놉시스를 요청한다.
+          let initMode: DirectionMode | null = null;
+          try {
+            const { data: projRow } = await supabase
+              .from("projects")
+              .select("direction_mode")
+              .eq("id", projectId)
+              .single();
+            const dm = (projRow as { direction_mode?: string } | null)?.direction_mode;
+            if (dm === "narrative" || dm === "motion" || dm === "hybrid") initMode = dm;
+          } catch {
+            /* projects 미지원 구버전 — 게이팅 기본값(null) 유지 */
+          }
+          if (initMode && directionModeRef.current !== initMode) {
+            setDirectionModeState(initMode);
+            directionModeRef.current = initMode;
+          }
           const briefCtx = buildBriefContextString(analysis, initLang);
           const prefix = initLang === "en" ? "[Brief Analysis]" : "[브리프 분석 결과]";
-          const tail =
-            initLang === "en"
+          const tail = !initMode
+            ? initLang === "en"
+              ? "\n\nBefore proposing synopses, recommend a direction first: output ONLY one ```direction fence (narrative / motion / hybrid + a recommended one + a one-line reason each). Do NOT write storylines or scenes yet."
+              : "\n\n시놉시스를 짜기 전에 먼저 연출 방향을 추천해줘: ```direction 펜스 1개만 출력해(서사/모션/하이브리드 3안 + 추천 1개 + 각 1줄 근거). 아직 storylines나 씬은 짜지 마."
+            : initLang === "en"
               ? "\n\nBased on this brief, propose 2–3 synopsis directions in a storylines block. Do not write scenes yet."
               : "\n\n이 브리프를 바탕으로 방향성이 다른 시놉시스 2~3안을 storylines 블록으로 제안해주세요. 아직 씬은 짜지 마세요.";
           const autoPrompt = `${prefix}\n${briefCtx}${tail}`;
@@ -915,11 +987,12 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
             // OpenAI 1M ctx 모델 등 메타가 있으면 카탈로그 기준 max_tokens 사용,
             // 없으면 callLLM 이 카탈로그 디폴트로 폴백.
             max_tokens: agentMeta?.maxOutputTokens ?? 4096,
-            system: buildSystemPrompt(videoFormat, assets ?? undefined, analysis, initLang, agentMeta?.provider),
+            system: buildSystemPrompt(videoFormat, assets ?? undefined, analysis, initLang, agentMeta?.provider, initMode),
             messages: [{ role: "user", content: autoPrompt }],
           });
           const msg = llmResult.text;
           await supabase.from("chat_logs").insert({ project_id: projectId, role: "assistant", content: msg });
+          applyConfirmedDirection(msg);
           const extracted = extractScenesFromText(msg);
           if (extracted.length > 0) {
             if (mountedRef.current) {
@@ -1191,7 +1264,9 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
       const refContext = refCaptions.length
         ? `${briefLang === "en" ? "[Attached reference analysis]" : "[첨부 레퍼런스 분석]"}\n${refCaptions.join("\n\n")}`
         : "";
-      const prefixBlocks = [assetReminder, refContext].filter(Boolean).join("\n\n");
+      // 확정된 연출 모드 리마인더(순응도 강화, LLM 전용).
+      const directionReminder = buildDirectionReminder(directionModeRef.current, briefLang);
+      const prefixBlocks = [directionReminder, assetReminder, refContext].filter(Boolean).join("\n\n");
       const textForLLM = prefixBlocks ? `${prefixBlocks}\n${briefLang === "en" ? "[User request]" : "[사용자 요청]"}\n${text}` : text;
       // ⚠️ callLLM 디스패처(llm.ts)의 정규형 LLMImagePart 는
       //    { type:"image", mediaType, dataBase64 } 이다. (Anthropic 의
@@ -1239,6 +1314,7 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
         latestAnalysis ?? briefAnalysis,
         briefLang,
         agentMeta?.provider,
+        directionModeRef.current,
       );
       // ★ 모델 컨텍스트 윈도우에 맞춰 히스토리 소프트 트림.
       //   Claude Sonnet 4=200k, GPT-5.4=400k, GPT-5.5=1M. 작은 모델일수록
@@ -1256,6 +1332,8 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
       });
       const assistantContent = llmResult.text;
       await supabase.from("chat_logs").insert({ project_id: projectId, role: "assistant", content: assistantContent });
+      // 자유 채팅으로 방향을 정한 경우 direction.confirmed 펜스를 읽어 모드 확정.
+      applyConfirmedDirection(assistantContent);
       if (mountedRef.current) {
         setChatHistory((prev) => [
           ...prev,
@@ -1587,7 +1665,17 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
                         : { borderRadius: 0 }
                     }
                   >
-                    <MessageContent content={msg.content} assets={projectAssets} onSend={handleSend} segments={parsedSegments} />
+                    <MessageContent
+                      content={msg.content}
+                      assets={projectAssets}
+                      onSend={handleSend}
+                      segments={parsedSegments}
+                      activeDirectionMode={directionMode}
+                      onPickDirection={(m) => {
+                        void persistDirectionMode(m);
+                        void handleSend(directionConfirmMsg(m, briefLang));
+                      }}
+                    />
                   </div>
                   <div className={`text-caption text-muted-foreground mt-1 ${msg.role === "user" ? "text-right" : ""}`}>
                     {formatTime(msg.created_at)}
@@ -1657,6 +1745,44 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
         </div>
       )}
       <div className="shrink-0 border-t border-border px-3 py-2.5">
+        {directionMode && (
+          <div className="flex items-center gap-1.5 mb-2">
+            <span className="text-2xs uppercase tracking-wider text-muted-foreground/60">
+              {briefLang === "en" ? "Direction" : "연출"}
+            </span>
+            {(["narrative", "motion", "hybrid"] as DirectionMode[]).map((m) => {
+              const label =
+                briefLang === "en"
+                  ? m === "narrative" ? "Narrative" : m === "motion" ? "Motion" : "Hybrid"
+                  : m === "narrative" ? "서사" : m === "motion" ? "모션" : "하이브리드";
+              const active = directionMode === m;
+              return (
+                <button
+                  key={m}
+                  onClick={() => {
+                    if (active) return;
+                    void persistDirectionMode(m);
+                    toast({
+                      title:
+                        briefLang === "en"
+                          ? `Direction set to ${label}. It applies from your next message.`
+                          : `연출 방향을 '${label}'으로 변경했어요. 다음 메시지부터 반영됩니다.`,
+                    });
+                  }}
+                  className="text-2xs font-medium uppercase tracking-wider px-2 py-0.5 transition-opacity hover:opacity-80"
+                  style={{
+                    borderRadius: 0,
+                    border: `1px solid ${active ? KR : "rgba(255,255,255,0.12)"}`,
+                    background: active ? "rgba(249,66,58,0.12)" : "transparent",
+                    color: active ? KR : "var(--color-text-tertiary, #888)",
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        )}
         <AgentChatInput
           assets={projectAssets}
           projectId={projectId}

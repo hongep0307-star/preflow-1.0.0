@@ -407,19 +407,6 @@ export const ContiStudio = ({
   const [brushSize, setBrushSize] = useState(BRUSH_DEFAULT);
   const brushSizeRef = useRef(BRUSH_DEFAULT);
 
-  /* brush strength — 0~100%
-   * 100% = 마스크 안 100% 모델 출력으로 교체 (기존 동작과 동일)
-   * 50%  = 마스크 안 = 원본 50% + 모델 50% 블렌드 → "살짝만 수정"
-   * NB2 에 보내는 마스크도 grayscale 로 attenuate 해서 모델이 "약한 개입" 신호를 받음.
-   */
-  const STRENGTH_MIN = 10;
-  const STRENGTH_MAX = 100;
-  const STRENGTH_DEFAULT = 85;
-  const [brushStrength, setBrushStrength] = useState(STRENGTH_DEFAULT);
-  const brushStrengthRef = useRef(STRENGTH_DEFAULT);
-  useEffect(() => {
-    brushStrengthRef.current = brushStrength;
-  }, [brushStrength]);
   const toolModeRef = useRef<"brush" | "eraser">("brush");
   const [toolMode, setToolMode] = useState<"brush" | "eraser">("brush");
 
@@ -876,17 +863,6 @@ export const ContiStudio = ({
         }
         if (e.key === "e" || e.key === "E") {
           setToolMode("eraser");
-          e.preventDefault();
-          return;
-        }
-        // Shift + [ / ] : 브러시 강도 -/+
-        if (e.shiftKey && (e.key === "{" || e.key === "[")) {
-          setBrushStrength((v) => Math.max(STRENGTH_MIN, v - 5));
-          e.preventDefault();
-          return;
-        }
-        if (e.shiftKey && (e.key === "}" || e.key === "]")) {
-          setBrushStrength((v) => Math.min(STRENGTH_MAX, v + 5));
           e.preventDefault();
           return;
         }
@@ -1506,53 +1482,99 @@ export const ContiStudio = ({
 
   /* ━━━ 마스크 유틸 (페더링 / 합성) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    * 페더링: 경계의 alpha 가 부드럽게 떨어지는 soft mask 를 만들어 합성 솔기를 제거.
-   * 합성  : 원본 + 모델출력 + soft mask → 마스크 밖 픽셀이 100% 원본으로 보장됨.
+   * 합성  : 원본 + 모델출력 + soft mask → 마스크 밖 먼 영역은 원본으로 보장됨.
    *         (NB2 같은 generative 모델이 unmasked 영역까지 다시 렌더해도 영향 없음)
-   * ── feather 픽셀은 이미지 짧은 변의 ~0.5% 로 자동 스케일.
+   * ── feather 픽셀은 이미지 짧은 변의 ~0.5% 로 자동 스케일. (NB2/GPT 모델 힌트
+   *    오버레이·마젠타 마스크의 dilate 용으로만 사용 — 합성 블렌딩은 BLEND_FRACTION.)
    */
   const FEATHER_FRACTION = 0.005;
 
   const featherPxFor = (w: number, h: number) =>
     Math.max(2, Math.round(Math.min(w, h) * FEATHER_FRACTION));
 
+  /* ━━━ 합성 신뢰 띠(trust band) 반경 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   * 브러시는 "절대 경계"가 아니라 "여기를 고쳐라"는 위치 힌트로 다룬다.
+   * 합성 시 브러시 밖으로 이 반경만큼 모델 출력을 외향 dilate + feather 해서,
+   * 모델이 만든 자연스러운 전이 구간(피부톤·음영)을 살려 주변 원본과 그라데이션으로
+   * 잇는다. 페더 0.5% 대비 크게 키워(짧은 변의 ~3%) 경계 솔기를 제거한다. */
+  const BLEND_FRACTION = 0.03;
+  const blendPxFor = (w: number, h: number) =>
+    Math.max(12, Math.round(Math.min(w, h) * BLEND_FRACTION));
+
   /**
-   * mask canvas → 동일 해상도의 white-on-transparent 캔버스.
-   * 브러시가 이미 soft 엣지(alpha 그라디언트)로 칠하므로 alpha 값을 그대로 보존.
-   * strength 는 최대 alpha 를 스케일 → 50%면 mask 중심도 0.5 로 제한 → 합성 시 원본 50% 유지.
+   * 브러시 마스크 → "신뢰 띠" soft mask. 브러시를 절대 경계가 아니라 힌트로 다룬다:
+   *   1) 브러시 내부는 solid(alpha 255) — 편집 100% 적용.
+   *   2) 브러시 밖으로 blendPx 만큼 외향 dilate — 모델이 만든 자연스러운 전이
+   *      구간(halo)을 살려 주변 원본과 매끄럽게 잇는다 (= "트러스트 밴드").
+   *   3) blendPx 폭으로 feather(blur) — 경계 솔기 제거.
+   * 결과 알파: 내부 255 → halo 그라데이션 → 먼 영역 0(원본 보존).
+   *
+   * srcBBox: 마스크 소스 서브렉트(ROI). 미지정이면 전체 캔버스.
+   * targetW/H: 출력 해상도(모델 출력과 1:1 정렬).
    */
   const buildSoftMaskCanvas = (
     mc: HTMLCanvasElement,
     targetW: number,
     targetH: number,
-    featherPx: number,
-    strength01: number = 1,
+    blendPx: number,
+    srcBBox?: BBox,
   ): HTMLCanvasElement => {
-    const src = mc.getContext("2d")!.getImageData(0, 0, mc.width, mc.height);
-    const tmp = document.createElement("canvas");
-    tmp.width = mc.width;
-    tmp.height = mc.height;
-    const tctx = tmp.getContext("2d")!;
-    const tid = tctx.createImageData(mc.width, mc.height);
-    const s = Math.max(0, Math.min(1, strength01));
-    for (let i = 0; i < src.data.length; i += 4) {
-      // mask canvas 는 "쓰여짐 = 알파" 방식. R/G/B 는 항상 255 이므로 alpha 만 읽음.
-      const a = Math.round(src.data[i + 3] * s);
-      tid.data[i] = 255;
-      tid.data[i + 1] = 255;
-      tid.data[i + 2] = 255;
-      tid.data[i + 3] = a;
-    }
-    tctx.putImageData(tid, 0, 0);
+    const sx = srcBBox?.x ?? 0;
+    const sy = srcBBox?.y ?? 0;
+    const sw = srcBBox?.w ?? mc.width;
+    const sh = srcBBox?.h ?? mc.height;
+    const src = mc.getContext("2d")!.getImageData(sx, sy, sw, sh);
 
+    // 1) 브러시 alpha → solid white-alpha (내부를 꽉 채워 편집 100% 보장)
+    const solid = document.createElement("canvas");
+    solid.width = sw;
+    solid.height = sh;
+    const sctx = solid.getContext("2d")!;
+    const sid = sctx.createImageData(sw, sh);
+    for (let i = 0; i < src.data.length; i += 4) {
+      // mask canvas 는 "쓰여짐 = 알파" 방식. soft 엣지라 임계(>32)로 painted 판정.
+      const painted = src.data[i + 3] > 32;
+      sid.data[i] = 255;
+      sid.data[i + 1] = 255;
+      sid.data[i + 2] = 255;
+      sid.data[i + 3] = painted ? 255 : 0;
+    }
+    sctx.putImageData(sid, 0, 0);
+
+    // 2) target 해상도로 스케일 (모델 출력과 1:1) — 이후 dilate/feather 를
+    //    target 픽셀 기준으로 적용해 blendPx 의미를 일관되게 유지.
+    const scaled = document.createElement("canvas");
+    scaled.width = targetW;
+    scaled.height = targetH;
+    const scctx = scaled.getContext("2d")!;
+    scctx.imageSmoothingEnabled = false;
+    scctx.drawImage(solid, 0, 0, targetW, targetH);
+
+    // 3) 외향 dilate — blur 후 alpha>8 임계화로 디스크 팽창 근사(거리변환 없이).
+    const grown = document.createElement("canvas");
+    grown.width = targetW;
+    grown.height = targetH;
+    const gctx = grown.getContext("2d")!;
+    gctx.filter = `blur(${blendPx}px)`;
+    gctx.drawImage(scaled, 0, 0);
+    gctx.filter = "none";
+    const gid = gctx.getImageData(0, 0, targetW, targetH);
+    for (let i = 0; i < gid.data.length; i += 4) {
+      gid.data[i] = 255;
+      gid.data[i + 1] = 255;
+      gid.data[i + 2] = 255;
+      gid.data[i + 3] = gid.data[i + 3] > 8 ? 255 : 0;
+    }
+    gctx.putImageData(gid, 0, 0);
+
+    // 4) feather — dilate 된 solid 가장자리를 blendPx 폭으로 부드럽게.
+    //    내부는 solid 라 blur 후에도 ~255 유지, 바깥 경계만 falloff → halo 형성.
     const out = document.createElement("canvas");
     out.width = targetW;
     out.height = targetH;
     const octx = out.getContext("2d")!;
-    // 경계 솔기 제거용 추가 블러 (브러시 자체 feather 와 합쳐서 자연스러움)
-    if (featherPx > 0) {
-      octx.filter = `blur(${featherPx}px)`;
-    }
-    octx.drawImage(tmp, 0, 0, targetW, targetH);
+    octx.filter = `blur(${blendPx}px)`;
+    octx.drawImage(grown, 0, 0);
     octx.filter = "none";
     return out;
   };
@@ -1662,10 +1684,10 @@ export const ContiStudio = ({
     gctx.imageSmoothingQuality = "high";
     gctx.drawImage(genImg, 0, 0, W, H);
 
-    // 3) soft mask 생성 (strength 반영)
-    const featherPx = featherPxFor(W, H);
-    const strength01 = brushStrengthRef.current / 100;
-    const softMask = buildSoftMaskCanvas(mc, W, H, featherPx, strength01);
+    // 3) soft mask 생성 — 브러시를 절대 경계가 아니라 위치 힌트로 다루는 신뢰 띠.
+    //    브러시 밖으로 넓게 dilate + feather 해서 모델 전이 구간을 살린다.
+    const blendPx = blendPxFor(W, H);
+    const softMask = buildSoftMaskCanvas(mc, W, H, blendPx);
 
     // 4) (gen ∩ softMask) → 마스크 영역만 남긴 모델출력
     const maskedGen = document.createElement("canvas");
@@ -1885,15 +1907,13 @@ export const ContiStudio = ({
   };
 
   /**
-   * mask canvas → 그레이스케일 마스크 (흰=편집, 검=유지, 회색=부분 편집).
-   * 모델(NB2/GPT) 전송용. ROI crop 지원.
-   * brightness = alpha * strength → strength 50%이면 중심 픽셀도 ~127 회색 → 모델이
-   * "약한 개입" 신호로 인식.
+   * mask canvas → 바이너리 마스크 (흰=편집, 검=유지). 모델(NB2/GPT) 전송용 위치 힌트.
+   * ROI crop 지원. 실제 경계 블렌딩은 클라이언트 합성(buildSoftMaskCanvas)이 담당하므로
+   * 여기서는 brush alpha 를 그대로 밝기로 사용한다(별도 강도 약화 없음).
    */
   const buildBinaryMaskCanvas = (
     mc: HTMLCanvasElement,
     bb?: BBox,
-    strength01: number = 1,
   ): HTMLCanvasElement => {
     const srcX = bb?.x ?? 0;
     const srcY = bb?.y ?? 0;
@@ -1906,10 +1926,8 @@ export const ContiStudio = ({
     out.height = H;
     const ctx = out.getContext("2d")!;
     const id = ctx.createImageData(W, H);
-    const s = Math.max(0, Math.min(1, strength01));
     for (let i = 0; i < srcID.data.length; i += 4) {
-      const a = srcID.data[i + 3];
-      const v = Math.round(a * s);
+      const v = srcID.data[i + 3];
       id.data[i] = v;
       id.data[i + 1] = v;
       id.data[i + 2] = v;
@@ -2036,30 +2054,10 @@ export const ContiStudio = ({
     gctx.imageSmoothingQuality = "high";
     gctx.drawImage(genImg, 0, 0, bb.w, bb.h);
 
-    // ROI 범위의 soft mask (브러시 soft 엣지 알파 + strength 스케일 보존)
-    const featherPx = featherPxFor(bb.w, bb.h);
-    const strength01 = brushStrengthRef.current / 100;
-    const softMask = document.createElement("canvas");
-    softMask.width = bb.w;
-    softMask.height = bb.h;
-    const smctx = softMask.getContext("2d")!;
-    const srcID = mc.getContext("2d")!.getImageData(bb.x, bb.y, bb.w, bb.h);
-    const whiteAlpha = document.createElement("canvas");
-    whiteAlpha.width = bb.w;
-    whiteAlpha.height = bb.h;
-    const wctx = whiteAlpha.getContext("2d")!;
-    const wid = wctx.createImageData(bb.w, bb.h);
-    for (let i = 0; i < srcID.data.length; i += 4) {
-      const a = Math.round(srcID.data[i + 3] * strength01);
-      wid.data[i] = 255;
-      wid.data[i + 1] = 255;
-      wid.data[i + 2] = 255;
-      wid.data[i + 3] = a;
-    }
-    wctx.putImageData(wid, 0, 0);
-    smctx.filter = `blur(${featherPx}px)`;
-    smctx.drawImage(whiteAlpha, 0, 0);
-    smctx.filter = "none";
+    // ROI soft mask — 브러시 밖으로 넓은 신뢰 띠를 둬 모델 전이 구간을 살린다.
+    //    (mc 의 ROI 서브렉트를 읽어 dilate + feather; ROI 크기와 1:1)
+    const blendPx = blendPxFor(bb.w, bb.h);
+    const softMask = buildSoftMaskCanvas(mc, bb.w, bb.h, blendPx, bb);
 
     // (genROI ∩ softMask)
     const maskedGen = document.createElement("canvas");
@@ -2484,9 +2482,8 @@ export const ContiStudio = ({
           nbImageSize = gptRoiImageSize;
           maskPrefix = "";
         } else if (useROI && roi && icSnapshot && mcSnapshot) {
-          const strength01 = brushStrengthRef.current / 100;
           const roiSource = cropCanvas(icSnapshot, roi);
-          const roiMask = buildBinaryMaskCanvas(mcSnapshot, roi, strength01);
+          const roiMask = buildBinaryMaskCanvas(mcSnapshot, roi);
           const roiOverlay = buildMagentaOverlayCanvas(icSnapshot, mcSnapshot, roi);
 
           const [roiSourceUrl, roiMaskUrl, roiOverlayUrl] = await Promise.all([
@@ -2538,8 +2535,7 @@ Edit instruction (applies strictly inside the WHITE mask region):
           let binaryMaskUrl: string | null = null;
           let magentaOverlayUrl: string | null = null;
           if (!maskEmptyVal && icSnapshot && mcSnapshot) {
-            const strength01 = brushStrengthRef.current / 100;
-            const binMask = buildBinaryMaskCanvas(mcSnapshot, undefined, strength01);
+            const binMask = buildBinaryMaskCanvas(mcSnapshot, undefined);
             const magOverlay = buildMagentaOverlayCanvas(icSnapshot, mcSnapshot);
             [binaryMaskUrl, magentaOverlayUrl] = await Promise.all([
               uploadCanvasAsImage(binMask, sceneProjectId, "mask-bw"),
@@ -2624,6 +2620,22 @@ Edit instruction:
         const rawEnrichedPrompt = await buildEnrichedPrompt(imageBase64, tagImageBase64 ?? undefined);
         const enrichedPrompt = maskPrefix + rawEnrichedPrompt;
 
+        /* ━━━ GPT native-mask fill 가드레일 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+         * gpt-image edits 는 마스크 영역 중 지시가 약한 부분(브러시가 대상 객체보다
+         * 넓게 칠해진 곳, 예: 선글라스 제거인데 이마/눈썹까지 칠한 경우)을 평평한
+         * 흰색/공백으로 비워버리는 실패가 잦다. 마스크 전체를 주변과 연속되는
+         * 사실적 콘텐츠로 채우도록 강제해 흰 패치를 막는다. NB2 경로는 maskPrefix
+         * (레퍼런스 이미지 규칙)로 이미 커버하므로 GPT 경로에만 prepend 한다. */
+        const gptFillGuard = `INPAINT FILL RULES (apply to the ENTIRE editable/masked region):
+- Fill the WHOLE masked region with photorealistic content that seamlessly continues the surrounding skin, hair, and background. Match the neighboring texture, color, lighting, and film grain.
+- NEVER leave any part of the region flat white, gray, blurred, smeared, empty, or unpainted.
+- If the instruction removes or hides something, reconstruct the natural surface it was occluding (skin, background, etc.) — do not leave a blank patch.
+- Blend the edited region into the unmasked area with no visible seam.
+
+Edit instruction:
+`;
+        const gptPrompt = maskEmptyVal ? rawEnrichedPrompt : gptFillGuard + rawEnrichedPrompt;
+
         // GPT native-mask 경로는 NB2 용 마스크 오버레이/마젠타 가이드 프롬프트가
         // 불필요(혼란만 유발)하다. 실제 alpha 마스크 + 사용자 프롬프트 + 정체성
         // 레퍼런스(태그/커스텀/무드)만 보낸다. NB2 경로는 기존 동작 그대로.
@@ -2634,7 +2646,7 @@ Edit instruction:
               // 해상도 스머징 방지). 비-ROI 면 기존 전체 이미지 그대로.
               imageBase64: gptRoiImageBase64 ?? imageBase64,
               maskBase64: gptRoiMaskBase64 ?? maskB64Gpt,
-              prompt: rawEnrichedPrompt,
+              prompt: gptPrompt,
               forceGpt: false,
               gptModel: resolvedInpaintModel,
               quality: inpaintQuality,
@@ -3057,29 +3069,6 @@ Edit instruction:
                     title={t("studio.imagePixelRadiusTitle")}
                   >
                     {brushSize}px
-                  </span>
-                  <div className="w-px h-4 bg-white/10 mx-1" />
-                  <span
-                    className="text-2xs text-muted-foreground tracking-wide"
-                    title={t("studio.editStrengthTitle")}
-                  >
-                    {t("studio.strength")}
-                  </span>
-                  <input
-                    type="range"
-                    min={STRENGTH_MIN}
-                    max={STRENGTH_MAX}
-                    value={brushStrength}
-                    onChange={(e) => setBrushStrength(Number(e.target.value))}
-                    className="w-16"
-                    style={{ accentColor: KR }}
-                    title={t("studio.editStrengthValueTitle", { strength: brushStrength })}
-                  />
-                  <span
-                    className="text-caption text-muted-foreground w-9 text-right tabular-nums"
-                    title={t("studio.lowerStrengthTitle")}
-                  >
-                    {brushStrength}%
                   </span>
                   <div className="w-px h-4 bg-white/10 mx-1" />
                   <button

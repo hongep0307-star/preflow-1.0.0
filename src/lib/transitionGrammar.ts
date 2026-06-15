@@ -72,7 +72,14 @@ export type TransitionKey =
   | "SMOKE_VEIL"
   | "WATER_RIPPLE"
   // ── Temporal ───────────────────────────────────────────────────────
-  | "TIME_FREEZE";
+  | "TIME_FREEZE"
+  // ── Graphic / Motion (motion-graphics native) ───────────────────────
+  | "SHAPE_WIPE"
+  | "IRIS_WIPE"
+  | "LAYER_SLIDE"
+  | "LAYER_PUSH"
+  | "KINETIC_TYPO"
+  | "GRAPHIC_MATCH";
 
 export type TransitionCategory =
   | "Camera Movement"
@@ -80,7 +87,22 @@ export type TransitionCategory =
   | "Digital / Glitch"
   | "Geometric / Morph"
   | "Environmental"
-  | "Temporal";
+  | "Temporal"
+  | "Graphic / Motion";
+
+/** Production medium a technique fits. Motion mode filters OUT `live`-only
+ *  techniques (they assume a filmed lens/optical/environmental event). */
+export type TransitionMedium = "live" | "mograph" | "both";
+
+/** What the TR card should produce for this technique:
+ *   · "peak_still"      — a single hero frame at the technique's peak is
+ *                          meaningful → AI-generate via generateTransitionFrame.
+ *   · "note_pair"       — a single still is uninformative (temporal/layer wipe);
+ *                          show the existing A & B cut thumbnails + a direction
+ *                          note. NO AI image generation.
+ *   · "note_pair_crop"  — note_pair PLUS a deterministic focal-aligned crop of
+ *                          A & B so a graphic match visually lines up. No AI. */
+export type TransitionDeliverable = "peak_still" | "note_pair" | "note_pair_crop";
 
 /** Anchor declares where in the A→B flow the hero frame LIVES.
  *  See the file-level docblock for the full taxonomy. */
@@ -104,6 +126,14 @@ export interface TransitionSpec {
    *  subject is allowed to appear. */
   guide: string;
   category: TransitionCategory;
+  /** Production medium fit. Motion mode excludes `live`-only entries.
+   *  Optional on the entry — authoritative source is `MEDIUM_BY_KEY` below,
+   *  read via `transitionMedium(key)` (defaults to "both"). */
+  medium?: TransitionMedium;
+  /** TR-card output type — drives generate-vs-note rendering. Optional on the
+   *  entry — authoritative source is `DELIVERABLE_BY_KEY`, read via
+   *  `transitionDeliverable(key)` (defaults to "peak_still"). */
+  deliverable?: TransitionDeliverable;
 }
 
 export const TRANSITIONS: TransitionSpec[] = [
@@ -289,7 +319,141 @@ export const TRANSITIONS: TransitionSpec[] = [
       "Anchor: Shot A. A single frozen moment INSIDE Shot A — dust, water droplets, debris, or particles suspended mid-air around Shot A's subject; hair and fabric caught mid-motion; motion streaks held in place. The camera may circle the frozen subject ('bullet time') even as time has stopped. Shot B's subject is NOT in frame; the freeze is an interruption of Shot A's world, not a meeting with the next shot's world.",
     category: "Temporal",
   },
+
+  /* ── Graphic / Motion (motion-graphics native) ──
+   * These are NOT a single filmed peak moment; they are temporal/layer
+   * events whose value is the MOTION between the two cuts, so the TR card
+   * shows the existing A & B thumbnails + a direction note rather than an
+   * AI-generated bridge still (deliverable = note_pair / note_pair_crop). */
+  {
+    key: "SHAPE_WIPE",
+    label: "Shape Wipe",
+    tagline: "Geometric mask reveal A→B",
+    anchor: "technique",
+    guide:
+      "A geometric shape (circle, bar, diagonal, brand mark) sweeps across frame and Shot B is revealed inside the growing mask while Shot A is pushed out. The wipe edge / shape is the carrier of the cut. Note the shape, its direction, and which element of Shot A the shape grows from.",
+    category: "Graphic / Motion",
+    medium: "mograph",
+    deliverable: "note_pair",
+  },
+  {
+    key: "IRIS_WIPE",
+    label: "Iris / Circle Wipe",
+    tagline: "Circular open/close reveal",
+    anchor: "technique",
+    guide:
+      "A circular iris closes on a focal point of Shot A and opens onto Shot B (or vice versa). Best when A's and B's focal points sit at the same screen position so the iris feels motivated. Note the iris center and open/close direction.",
+    category: "Graphic / Motion",
+    medium: "mograph",
+    deliverable: "note_pair",
+  },
+  {
+    key: "LAYER_SLIDE",
+    label: "Layer Slide",
+    tagline: "Shot B slides over Shot A",
+    anchor: "technique",
+    guide:
+      "Shot B slides in as a layer (from an edge) and covers Shot A, optionally with parallax/offset of sub-elements and an eased overshoot. Note the slide direction and any element that motivates it (a moving subject, a swipe).",
+    category: "Graphic / Motion",
+    medium: "mograph",
+    deliverable: "note_pair",
+  },
+  {
+    key: "LAYER_PUSH",
+    label: "Layer Push",
+    tagline: "Shot A pushes Shot B in",
+    anchor: "technique",
+    guide:
+      "Shot A is pushed off-frame while Shot B pushes in from the opposite edge, the two locked together like panels (no overlap). Reads as a kinetic, rhythmic cut. Note the push axis and speed/easing.",
+    category: "Graphic / Motion",
+    medium: "mograph",
+    deliverable: "note_pair",
+  },
+  {
+    key: "KINETIC_TYPO",
+    label: "Kinetic Typography",
+    tagline: "Type-driven bridge",
+    anchor: "technique",
+    guide:
+      "Animated typography (a key word, number, or the CTA) scales/slides across the cut and masks or wipes between Shot A and Shot B — the type itself carries the transition. Note the word, its motion, and whether it masks-reveals B.",
+    category: "Graphic / Motion",
+    medium: "mograph",
+    deliverable: "note_pair",
+  },
+  {
+    key: "GRAPHIC_MATCH",
+    label: "Graphic Match",
+    tagline: "Shape/color match cut A→B",
+    anchor: "bridge",
+    guide:
+      "A seamless match cut where a shape, line, color mass, or composition in Shot A aligns with a matching element in Shot B so the eye reads continuity across the cut (e.g. A's round headlight → B's round logo). Note the matched element and where it sits in frame so A & B can be aligned.",
+    category: "Graphic / Motion",
+    medium: "mograph",
+    deliverable: "note_pair_crop",
+  },
 ];
+
+/* ── Authoritative medium / deliverable per technique ──────────────────
+ * Single source of truth (keeps the 19 legacy entries untouched). Entries
+ * may also carry inline `medium`/`deliverable`; the helpers below prefer the
+ * inline value, then this map, then a safe default. */
+const MEDIUM_BY_KEY: Partial<Record<TransitionKey, TransitionMedium>> = {
+  // Camera / optical / environmental / temporal events assume a filmed lens.
+  DOLLY_ZOOM: "live",
+  CAMERA_ROLL: "live",
+  ARC_SWEEP: "live",
+  LIGHT_LEAK: "live",
+  LENS_FLARE: "live",
+  DEFOCUS_PULL: "live",
+  SMOKE_VEIL: "live",
+  WATER_RIPPLE: "live",
+  TIME_FREEZE: "live",
+  // Equally at home in live action and motion graphics.
+  WHIP_PAN: "both",
+  ZOOM_PUNCH: "both",
+  GLITCH: "both",
+  DATAMOSH: "both",
+  CHROMATIC_SPLIT: "both",
+  VHS_WARP: "both",
+  MORPH: "both",
+  LIQUID_WARP: "both",
+  SHATTER: "both",
+  PRISM: "both",
+  // Motion-graphics native.
+  SHAPE_WIPE: "mograph",
+  IRIS_WIPE: "mograph",
+  LAYER_SLIDE: "mograph",
+  LAYER_PUSH: "mograph",
+  KINETIC_TYPO: "mograph",
+  GRAPHIC_MATCH: "mograph",
+};
+
+const DELIVERABLE_BY_KEY: Partial<Record<TransitionKey, TransitionDeliverable>> = {
+  SHAPE_WIPE: "note_pair",
+  IRIS_WIPE: "note_pair",
+  LAYER_SLIDE: "note_pair",
+  LAYER_PUSH: "note_pair",
+  KINETIC_TYPO: "note_pair",
+  GRAPHIC_MATCH: "note_pair_crop",
+  // everything else defaults to peak_still (AI-generated bridge frame).
+};
+
+/** Effective production medium for a technique (default "both").
+ *  Reads the BY_KEY maps (authoritative) so it has no init-order dependency
+ *  on TRANSITION_MAP (declared later). */
+export function transitionMedium(key: TransitionKey): TransitionMedium {
+  return MEDIUM_BY_KEY[key] ?? "both";
+}
+
+/** Effective TR-card output type for a technique (default "peak_still"). */
+export function transitionDeliverable(key: TransitionKey): TransitionDeliverable {
+  return DELIVERABLE_BY_KEY[key] ?? "peak_still";
+}
+
+/** Technique keys usable in MOTION direction mode (excludes `live`-only). */
+export const MOTION_TRANSITION_KEYS: TransitionKey[] = TRANSITIONS
+  .map((t) => t.key)
+  .filter((k) => transitionMedium(k) !== "live");
 
 /** Category display order + contents. Drives Select grouping. */
 export const TRANSITION_CATEGORIES: Array<{
@@ -303,6 +467,7 @@ export const TRANSITION_CATEGORIES: Array<{
     "Geometric / Morph",
     "Environmental",
     "Temporal",
+    "Graphic / Motion",
   ];
   return order.map((category) => ({
     category,
@@ -398,7 +563,11 @@ export const KNOWLEDGE_TRANSITION_GRAMMAR: string = (() => {
   for (const group of TRANSITION_CATEGORIES) {
     lines.push(`## ${group.category}`);
     for (const t of group.items) {
-      lines.push(`- ${t.key} (${t.label}) [${anchorLabel(t.anchor)}]: ${t.guide}`);
+      const med = transitionMedium(t.key);
+      const del = transitionDeliverable(t.key);
+      lines.push(
+        `- ${t.key} (${t.label}) [${anchorLabel(t.anchor)}] [medium=${med}] [deliverable=${del}]: ${t.guide}`,
+      );
     }
     lines.push("");
   }

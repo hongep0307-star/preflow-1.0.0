@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Film,
   Image as ImageIcon,
+  Keyboard,
   Library,
   Maximize,
   Maximize2,
@@ -18,6 +19,8 @@ import {
   VolumeX,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { isMacPlatform } from "@/lib/shortcutLabel";
 import {
   Dialog,
   DialogClose,
@@ -378,9 +381,31 @@ export function LibraryPreviewPanel({
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
         return;
       }
-      if (event.altKey) return;
       const v = videoRef.current;
       if (!v) return;
+
+      /* 좌우 시킹 — Win/Linux: Ctrl(또는 Cmd)+←/→ = 5초, Mac: Option(⌥)+←/→ = 5초.
+         Shift+←/→ = 10초(양 플랫폼 공통). 순수 ←/→ 는 LibraryPage 의 항목 이동이
+         가져가므로 여기서는 수식키 조합만 처리한다. 아래 `altKey` 조기 return 보다
+         위에 둬야 Mac 의 Option+화살표가 막히지 않는다. */
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        const fiveMod = isMacPlatform()
+          ? event.altKey && !event.ctrlKey && !event.metaKey
+          : (event.ctrlKey || event.metaKey) && !event.altKey;
+        const tenMod = event.shiftKey;
+        if (fiveMod || tenMod) {
+          event.preventDefault();
+          const skip = tenMod ? 10 : 5;
+          const cur = Number.isFinite(v.currentTime) ? v.currentTime : 0;
+          const dur = Number.isFinite(v.duration) ? v.duration : videoDuration || item.duration_sec || 0;
+          const nextRaw = event.key === "ArrowLeft" ? cur - skip : cur + skip;
+          const clamped = dur > 0 ? Math.min(dur, Math.max(0, nextRaw)) : Math.max(0, nextRaw);
+          try { v.currentTime = clamped; } catch { /* noop */ }
+          return;
+        }
+      }
+
+      if (event.altKey) return;
 
       /* Ctrl/Cmd + ArrowUp/Down → 재생 속도 조절. 그 외 Ctrl 조합은 OS / 브라
          우저 / LibraryPage 단축키 영역이라 통째로 무시(Ctrl+D 복제, Ctrl+C 복사
@@ -1510,6 +1535,57 @@ export function LibraryPreviewPanel({
           >
             <Camera className="h-3.5 w-3.5" />
           </Button>
+
+          {/* 단축키 안내 — 컨트롤 바에 숨은 키보드 단축키를 한곳에 노출한다.
+              시킹/배속 수식키는 플랫폼(Win: Ctrl, Mac: ⌥/⌘)에 맞춰 표기. */}
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                variant="ghost"
+                className="h-8 w-8 p-0"
+                style={{ borderRadius: 0 }}
+                title={t("library.preview.shortcutsBtn")}
+                aria-label={t("library.preview.shortcutsBtn")}
+              >
+                <Keyboard className="h-3.5 w-3.5" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-64 p-0" style={{ borderRadius: 0 }}>
+              <div className="border-b border-border-subtle px-3 py-2 text-caption font-semibold">
+                {t("library.preview.shortcutsTitle")}
+              </div>
+              <ul className="max-h-[60vh] overflow-auto py-1">
+                {(() => {
+                  const mac = isMacPlatform();
+                  const rows: { keys: string; label: string }[] = [
+                    { keys: "Space", label: t("library.preview.scPlayPause") },
+                    { keys: "M", label: t("library.preview.scMute") },
+                    { keys: "↑ / ↓", label: t("library.preview.scVolume") },
+                    { keys: "← / →", label: t("library.preview.scItemNav") },
+                    { keys: mac ? "⌥ ← / →" : "Ctrl ← / →", label: t("library.preview.scSeek5") },
+                    { keys: "Shift ← / →", label: t("library.preview.scSeek10") },
+                    { keys: "D / F", label: t("library.preview.scFrame") },
+                    { keys: mac ? "⌘ ↑ / ↓" : "Ctrl ↑ / ↓", label: t("library.preview.scSpeed") },
+                    { keys: "L", label: t("library.preview.scLoop") },
+                    { keys: "[ / ]", label: t("library.preview.scLoopBounds") },
+                    { keys: "N", label: t("library.preview.scNote") },
+                    { keys: "R", label: t("library.preview.scRegion") },
+                  ];
+                  return rows.map((row) => (
+                    <li
+                      key={row.label}
+                      className="flex items-center justify-between gap-3 px-3 py-1 text-caption"
+                    >
+                      <span className="text-muted-foreground">{row.label}</span>
+                      <kbd className="shrink-0 border border-border-subtle bg-muted/40 px-1.5 py-0.5 font-mono text-micro text-foreground">
+                        {row.keys}
+                      </kbd>
+                    </li>
+                  ));
+                })()}
+              </ul>
+            </PopoverContent>
+          </Popover>
 
           <Button
             variant="ghost"

@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, ExternalLink, Maximize2, ZoomIn, ZoomOut } from "lucide-react";
+import { BoxSelect, ChevronLeft, ChevronRight, ExternalLink, Maximize2, ZoomIn, ZoomOut } from "lucide-react";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useUiLanguage } from "@/lib/uiLanguage";
-import { openReferenceWithDefaultApp, type ReferenceItem } from "@/lib/referenceLibrary";
+import { RegionOverlay } from "@/components/library/RegionOverlay";
+import {
+  openReferenceWithDefaultApp,
+  type ReferenceItem,
+  type RegionRect,
+  type TimestampNote,
+} from "@/lib/referenceLibrary";
 
 /* 인앱 PDF 뷰어 — pdfjs-dist 로 한 번에 한 페이지를 캔버스에 렌더한다.
  *
@@ -32,13 +38,44 @@ type PdfDocument = Awaited<ReturnType<typeof pdfjsLib.getDocument>["promise"]>;
 
 interface PdfViewerProps {
   item: ReferenceItem;
+  /** 슬라이드 노트 — 이 자료의 timestamp_notes 전체. PdfViewer 가 현재
+   *  페이지(pageIndex)에 anchor 된 region 노트만 골라 RegionOverlay 로 표시.
+   *  미전달이면 노트 기능 자체가 비활성(영역 토글 버튼도 숨김). */
+  notes?: TimestampNote[];
+  /** 새 슬라이드 노트 저장 — 현재 페이지 번호를 함께 넘겨 부모가 pageIndex
+   *  anchor 를 박는다. */
+  onCreateRegion?: (region: RegionRect, text: string, pageIndex: number) => void;
+  onEditRegion?: (noteId: string, text: string) => void;
+  onDeleteRegion?: (noteId: string) => void;
+  /** Inspector 노트 행 클릭으로 큰 프리뷰가 열린(또는 이미 열려 있는) 직후
+   *  1회 점프할 페이지(1-based). GIF 의 initialFrameIndex 와 같은 큐잉 패턴. */
+  initialPageIndex?: number | null;
+  onInitialPageConsumed?: () => void;
 }
 
-export function PdfViewer({ item }: PdfViewerProps) {
+export function PdfViewer({
+  item,
+  notes,
+  onCreateRegion,
+  onEditRegion,
+  onDeleteRegion,
+  initialPageIndex,
+  onInitialPageConsumed,
+}: PdfViewerProps) {
   const { t } = useUiLanguage();
   const fileUrl = item.file_url ?? "";
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  /* 캔버스를 정확히 감싸는 relative 래퍼 — RegionOverlay 의 좌표 기준.
+     래퍼 크기 = 캔버스 CSS 크기(= 페이지 비율) 이므로 RegionOverlay 의
+     letterbox 계산이 전체 박스를 반환해 region [0,1] 이 페이지에 1:1 매핑된다.
+     스크롤/줌 시 캔버스와 함께 이동하므로 panX/panY/scale 전달이 불필요. */
+  const pageWrapRef = useRef<HTMLDivElement | null>(null);
+  /* 현재 렌더된 페이지의 CSS px 크기 — 래퍼 크기 + RegionOverlay naturalSize. */
+  const [pageCssSize, setPageCssSize] = useState<{ w: number; h: number } | null>(null);
+  /* 영역(슬라이드 노트) 드로잉 모드 토글. ON 이면 RegionOverlay 가 crosshair
+     드래그를 캡처하고, 드래그 팬/더블클릭 fit 은 잠시 비활성. */
+  const [regionMode, setRegionMode] = useState(false);
   /* 컨테이너 ref — 실제 가용 픽셀을 ResizeObserver 로 추적해 fit zoom 을
      계산한다. PDF 의 자연 viewport(point) 가 컨테이너에 들어가는 비율을
      골라 작은 패널에서도 거대한 여백 없이 페이지가 바로 차게 보여진다.
@@ -210,8 +247,15 @@ export function PdfViewer({ item }: PdfViewerProps) {
         canvas.height = Math.max(1, Math.round(viewport.height));
         /* CSS 픽셀 기준 크기를 별도로 박아 둬야 DPR 적용한 캔버스가 화면에
            4× 크기로 그려지지 않는다. */
-        canvas.style.width = `${Math.round(viewport.width / dpr)}px`;
-        canvas.style.height = `${Math.round(viewport.height / dpr)}px`;
+        const cssW = Math.round(viewport.width / dpr);
+        const cssH = Math.round(viewport.height / dpr);
+        canvas.style.width = `${cssW}px`;
+        canvas.style.height = `${cssH}px`;
+        /* 래퍼 + RegionOverlay 가 이 크기를 따라가도록 상태로 기록. 동일
+           값이면 setState 를 건너뛰어 불필요한 리렌더/루프를 피한다. */
+        setPageCssSize((prev) =>
+          prev && prev.w === cssW && prev.h === cssH ? prev : { w: cssW, h: cssH },
+        );
 
         /* 휠 줌 anchor 적용 — canvas 가 막 새 크기로 리사이즈된 *직후* 이 시점에
            scrollLeft/scrollTop 을 보정해 cursor 위치 아래의 content point 가
@@ -253,6 +297,38 @@ export function PdfViewer({ item }: PdfViewerProps) {
       }
     };
   }, [pdf, pageIndex, zoom]);
+
+  /* Inspector 노트 점프 — initialPageIndex 가 유효 값으로 들어오면 그 페이지로
+     1회 이동 후 onInitialPageConsumed 로 클리어. pdf 가 로드된 뒤에만 적용해
+     load effect 의 pageIndex=1 리셋과의 순서 문제를 피한다(load 완료 후 실행).
+     큰 프리뷰가 이미 열려 있어도 initialPageIndex 가 새 값으로 바뀌면 다시
+     점프한다. */
+  useEffect(() => {
+    if (!pdf) return;
+    if (initialPageIndex == null || !Number.isFinite(initialPageIndex)) return;
+    const target = Math.max(1, Math.min(pdf.numPages, Math.round(initialPageIndex)));
+    setPageIndex(target);
+    onInitialPageConsumed?.();
+  }, [pdf, initialPageIndex, onInitialPageConsumed]);
+
+  /* 현재 페이지에 anchor 된 region 노트만 오버레이에 표시. */
+  const visibleNotes = useMemo(
+    () => (notes ?? []).filter((note) => note.region && note.pageIndex === pageIndex),
+    [notes, pageIndex],
+  );
+
+  const handleRegionCreate = useCallback(
+    (region: RegionRect, text: string) => {
+      onCreateRegion?.(region, text, pageIndex);
+    },
+    [onCreateRegion, pageIndex],
+  );
+
+  /* RegionOverlay popover 닫힘 시 영역 모드 자동 OFF — 단발 드로잉(이미지
+     프리뷰와 동일 UX). */
+  const handleAfterRegion = useCallback(() => {
+    setRegionMode(false);
+  }, []);
 
   const handlePrev = useCallback(() => {
     setPageIndex((p) => Math.max(1, p - 1));
@@ -334,6 +410,9 @@ export function PdfViewer({ item }: PdfViewerProps) {
 
   const handlePanMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     if (!pdf) return;
+    /* 영역 모드 ON 이면 드래그를 RegionOverlay 의 crosshair 드로잉에 양보 —
+       여기서 팬을 시작하면 새 region 드래그가 스크롤로 새 버린다. */
+    if (regionMode) return;
     if (event.button !== 0) return;
     const el = scrollRef.current;
     if (!el) return;
@@ -349,7 +428,7 @@ export function PdfViewer({ item }: PdfViewerProps) {
       st: el.scrollTop,
     };
     setIsPanning(true);
-  }, [pdf]);
+  }, [pdf, regionMode]);
 
   useEffect(() => {
     const onMove = (event: MouseEvent) => {
@@ -384,6 +463,8 @@ export function PdfViewer({ item }: PdfViewerProps) {
      scrollLeft/Top 도 0 으로 초기화해 fit 직후 좌상단부터 보이게 한다. */
   const handleDoubleClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     if (!pdf) return;
+    /* 영역 모드 중에는 더블클릭 fit 리셋을 막아 드로잉 흐름을 방해하지 않는다. */
+    if (regionMode) return;
     const target = event.target as HTMLElement | null;
     if (target && (target.closest("button") || target.tagName === "INPUT")) return;
     event.preventDefault();
@@ -392,32 +473,65 @@ export function PdfViewer({ item }: PdfViewerProps) {
       scrollRef.current.scrollLeft = 0;
       scrollRef.current.scrollTop = 0;
     }
-  }, [handleFit, pdf]);
+  }, [handleFit, pdf, regionMode]);
 
-  /* 단축키 — ← → : 페이지 / + - : 줌. 입력 포커스 중엔 무시(다른 패널과 동일). */
+  /* 단축키 — *캡처 단계* (addEventListener 3번째 인자 true) 로 등록한다.
+     라이브러리 그리드가 화살표를 버블 전에 가로채 레퍼런스 이동에 쓰므로,
+     처리할 키는 캡처에서 먼저 잡고 stopPropagation 으로 그리드까지 내려가지
+     않게 막는다.
+
+     키 정책(영상 프리뷰와 동일한 결을 맞춤):
+       - plain ← → : *건드리지 않음* → 그리드의 레퍼런스(이전/다음 자료) 이동에
+         양보. (영상에서 plain ← → 가 레퍼런스 이동인 것과 동일.)
+       - Ctrl/Cmd + ← → : PDF 페이지 이동. (영상의 Ctrl+방향키 5초 이동과 같은
+         결.)
+       - PageUp / PageDown : 페이지 이동(레퍼런스 이동과 충돌 없음).
+       - + - : 줌.
+       - R : 슬라이드 노트 영역 토글.
+     IME(한글) 상태에서도 동작하도록 R 은 물리 키 event.code === "KeyR" 도 본다. */
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
         return;
       }
-      if (event.key === "ArrowLeft" || event.key === "PageUp") {
+      const mod = event.ctrlKey || event.metaKey;
+      const handled = () => {
         event.preventDefault();
+        event.stopPropagation();
+      };
+      if (mod && event.key === "ArrowLeft") {
+        handled();
         handlePrev();
-      } else if (event.key === "ArrowRight" || event.key === "PageDown") {
-        event.preventDefault();
+      } else if (mod && event.key === "ArrowRight") {
+        handled();
         handleNext();
-      } else if (event.key === "+" || event.key === "=") {
-        event.preventDefault();
+      } else if (event.key === "PageUp") {
+        handled();
+        handlePrev();
+      } else if (event.key === "PageDown") {
+        handled();
+        handleNext();
+      } else if (!mod && (event.key === "+" || event.key === "=")) {
+        handled();
         handleZoomIn();
-      } else if (event.key === "-" || event.key === "_") {
-        event.preventDefault();
+      } else if (!mod && (event.key === "-" || event.key === "_")) {
+        handled();
         handleZoomOut();
+      } else if (
+        (event.key === "r" || event.key === "R" || event.code === "KeyR")
+        && !mod && !event.altKey
+      ) {
+        /* R — 슬라이드 노트 영역 토글. 노트 기능이 배선된 경우에만. */
+        if (!onCreateRegion) return;
+        handled();
+        setRegionMode((v) => !v);
       }
+      /* plain ← → 는 어떤 분기에도 안 걸려 그대로 전파 → 그리드 레퍼런스 이동. */
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [handleNext, handlePrev, handleZoomIn, handleZoomOut]);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [handleNext, handlePrev, handleZoomIn, handleZoomOut, onCreateRegion]);
 
   const zoomPct = useMemo(() => Math.round(zoom * 100), [zoom]);
 
@@ -497,6 +611,31 @@ export function PdfViewer({ item }: PdfViewerProps) {
           <Maximize2 className="h-3.5 w-3.5" />
         </Button>
 
+        {/* 슬라이드 노트 영역 토글 — 노트 기능이 배선된 경우(onCreateRegion)
+            에만 노출. ON 이면 RegionOverlay 가 crosshair 드래그를 캡처해 현재
+            페이지 위에 영역 코멘트를 그린다. 이미지 프리뷰의 BoxSelect 토글과
+            동일한 시각/동작. */}
+        {onCreateRegion ? (
+          <>
+            <div className="mx-2 h-4 w-px bg-border-subtle" aria-hidden />
+            <Button
+              variant="ghost"
+              className={cn(
+                "h-7 w-7 p-0",
+                regionMode && pdf && "bg-primary/15 text-primary",
+              )}
+              style={{ borderRadius: 0 }}
+              onClick={() => setRegionMode((v) => !v)}
+              disabled={!pdf}
+              title={regionMode ? t("library.preview.regionOnPdf") : t("library.preview.regionPdf")}
+              aria-label={regionMode ? t("library.preview.regionOnPdf") : t("library.preview.regionPdf")}
+              aria-pressed={regionMode}
+            >
+              <BoxSelect className="h-3.5 w-3.5" />
+            </Button>
+          </>
+        ) : null}
+
         <div className="flex-1" />
 
         <Button
@@ -520,7 +659,7 @@ export function PdfViewer({ item }: PdfViewerProps) {
           /* Eagle 식 손바닥 커서 — PDF 가 로드돼야 grab/grabbing 으로 전환.
              에러/로딩 중에는 기본 커서로 두어 사용자가 "끌 수 있다" 는 잘못된
              신호를 받지 않게 한다. */
-          pdf && !error && (isPanning ? "cursor-grabbing" : "cursor-grab"),
+          pdf && !error && !regionMode && (isPanning ? "cursor-grabbing" : "cursor-grab"),
         )}
       >
         {/* safe center — 캔버스가 컨테이너보다 작으면 가운데, 더 크면 (확대된
@@ -551,11 +690,36 @@ export function PdfViewer({ item }: PdfViewerProps) {
               {t("library.preview.pdfLoading")}
             </div>
           ) : (
-            <canvas
-              ref={canvasRef}
-              className="shadow-lg shadow-black/40"
-              style={{ display: "block" }}
-            />
+            /* 캔버스 + RegionOverlay 래퍼 — 래퍼를 캔버스 CSS 크기에 정확히
+               맞춰(width/height) 오버레이가 페이지를 1:1 로 덮게 한다. relative
+               + lineHeight:0 로 canvas 의 inline 여백 제거. */
+            <div
+              ref={pageWrapRef}
+              className="relative shadow-lg shadow-black/40"
+              style={{
+                /* 캔버스가 display:block 이라 inline 여백이 없어 lineHeight:0 같은
+                   갭 방지 스타일이 불필요하다. 예전엔 lineHeight:0 을 뒀는데
+                   그게 자식(RegionOverlay 라벨) 으로 상속돼 라벨 strip 높이가 0 에
+                   가깝게 눌려 "텍스트 박스가 얇은" 문제가 났다. width/height 만 둔다. */
+                width: pageCssSize ? pageCssSize.w : undefined,
+                height: pageCssSize ? pageCssSize.h : undefined,
+              }}
+            >
+              <canvas ref={canvasRef} style={{ display: "block" }} />
+              {onCreateRegion ? (
+                <RegionOverlay
+                  containerRef={pageWrapRef}
+                  naturalWidth={pageCssSize?.w ?? null}
+                  naturalHeight={pageCssSize?.h ?? null}
+                  visibleNotes={visibleNotes}
+                  drawing={regionMode}
+                  onCreateRegion={handleRegionCreate}
+                  onAfterCreate={handleAfterRegion}
+                  onDeleteRegion={onDeleteRegion}
+                  onEditRegion={onEditRegion}
+                />
+              ) : null}
+            </div>
           )}
         </div>
       </div>

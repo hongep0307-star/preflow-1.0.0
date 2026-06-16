@@ -4,6 +4,7 @@ import {
   ChevronRight,
   Copy,
   Download,
+  FileText,
   FolderInput,
   FolderTree,
   Maximize2,
@@ -12,7 +13,6 @@ import {
   Pin,
   PinOff,
   Plus,
-  Rocket,
   Sparkles,
   Trash2,
 } from "lucide-react";
@@ -22,6 +22,7 @@ import {
   ContextMenuCheckboxItem,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuLabel,
   ContextMenuSeparator,
   ContextMenuSub,
   ContextMenuSubContent,
@@ -110,7 +111,10 @@ export interface FolderRowProps {
    *  의 folderAiSettings 를 구독해 즉시 sync 한다. */
   hasAiAutoClassify?: boolean;
 
-  onToggleActive: () => void;
+  /** 좌클릭/Enter 로 폴더를 활성/선택. modifier 로 다중 선택을 구분한다:
+   *  ctrl(또는 ⌘)=개별 토글, shift=범위 선택. 부모(LibrarySidebar)가
+   *  정렬 목록·앵커를 보고 최종 선택 집합을 계산한다. */
+  onToggleActive: (mods: { ctrl: boolean; shift: boolean }) => void;
   onToggleExpanded: () => void;
   onCreateSubfolder: () => void;
   onRename: () => void;
@@ -147,6 +151,15 @@ export interface FolderRowProps {
   /** 사용자가 명시적으로 색을 고르지 않았을 때의 기본 폴더 색 id
    *  (브리프 매치 폴더는 "red"). 미지정 시 카탈로그 기본값(gray). */
   defaultColorId?: string;
+
+  /** 이 행이 다중 선택(2개 이상)의 일부인지. true 면 우클릭 메뉴를 "선택 전체"
+   *  대상의 일괄 액션만 담은 컴팩트 메뉴로 바꾼다(단일 전용 항목 숨김). */
+  isMultiSelected?: boolean;
+  /** 현재 선택된 폴더 수 — 컴팩트 메뉴의 라벨/항목 표기에 사용. */
+  selectionCount?: number;
+  /** 우클릭(컨텍스트 메뉴 오픈) 직전 호출. 부모가 "선택 밖 폴더면 단일로
+   *  collapse" 규칙을 적용해 메뉴 대상과 선택을 일치시킨다. */
+  onContextMenuOpen?: () => void;
 }
 
 export function FolderRow({
@@ -182,6 +195,9 @@ export function FolderRow({
   createProjectLabel,
   compactMenu = false,
   defaultColorId,
+  isMultiSelected = false,
+  selectionCount = 1,
+  onContextMenuOpen,
 }: FolderRowProps) {
   const t = useT();
   const path = row.tag.replace(/^folder:/, "");
@@ -368,7 +384,7 @@ export function FolderRow({
   const handleRowKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      onToggleActive();
+      onToggleActive({ ctrl: event.ctrlKey || event.metaKey, shift: event.shiftKey });
     }
   };
 
@@ -383,11 +399,16 @@ export function FolderRow({
              folder-path]") 로 hover 대상을 식별. native onDragOver 가
              image-mode 에 가려도 좌표만 있으면 폴더 hover 시각이 살아 있다. */
           data-drop-folder-path={path}
+          /* 우클릭 직전 부모에 알려 "선택 밖 폴더면 단일 collapse" 규칙을 적용.
+             ContextMenuTrigger(asChild)의 onContextMenu 와 Slot 으로 합성된다. */
+          onContextMenu={() => onContextMenuOpen?.()}
           onDragOver={handleReferenceDragOver}
           onDragLeave={handleReferenceDragLeave}
           onDrop={handleReferenceDrop}
           className={cn(
-            "group relative flex w-full items-center gap-1 pr-2 text-body border-l-2 transition-colors",
+            // select-none: Shift+클릭 다중 선택 시 브라우저 기본 텍스트 선택(파란 드래그
+            // 영역)이 라벨에 걸리지 않게 한다.
+            "group relative flex w-full select-none items-center gap-1 pr-2 text-body border-l-2 transition-colors",
             isActive
               ? "border-l-primary bg-primary/10 text-foreground"
               : "border-l-transparent text-foreground/80 hover:bg-muted/40 hover:text-foreground",
@@ -521,9 +542,14 @@ export function FolderRow({
           <div
             role="button"
             tabIndex={0}
-            onClick={onToggleActive}
+            onClick={(e) => onToggleActive({ ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey })}
             onKeyDown={handleRowKeyDown}
-            className="flex min-w-0 flex-1 cursor-pointer items-center justify-between py-1 text-left"
+            className={cn(
+              "flex min-w-0 flex-1 cursor-pointer items-center justify-between py-1 text-left",
+              // 호버 시 우측에 액션 버튼 폭(24px)만큼 공간을 확보해, 긴 폴더명이
+              // 카운트/버튼과 겹치지 않게 라벨이 그만큼 더 일찍 잘리게 한다.
+              onCreateProject && "transition-[padding] duration-150 group-hover:pr-6",
+            )}
           >
             <span className="flex min-w-0 flex-1 items-center gap-1.5">
               <span className="line-clamp-1">{row.label}</span>
@@ -542,8 +568,6 @@ export function FolderRow({
                 // 합산값은 "직속 수가 아님" 시그널을 위해 살짝 흐리게.
                 // (Eagle 도 접힌 폴더에 자손 합산을 dim 처리한다.)
                 isAggregatedCount && "opacity-60",
-                // 프로젝트 생성 버튼이 있는 행은 호버 시 카운트가 좌측으로 슬라이드.
-                onCreateProject && "transition-transform duration-150 group-hover:-translate-x-[24px]",
               )}
               title={
                 isAggregatedCount
@@ -566,13 +590,29 @@ export function FolderRow({
               aria-label={createProjectLabel}
               style={{ borderRadius: 0 }}
             >
-              <Rocket className="h-3 w-3" />
+              <FileText className="h-3 w-3" />
             </button>
           ) : null}
         </div>
       </ContextMenuTrigger>
 
       <ContextMenuContent className="min-w-56 rounded-none">
+        {isMultiSelected ? (
+          /* 다중 선택 모드 — "선택 전체" 대상의 일괄 액션만 노출. 단일 전용
+             항목(이름변경/이동/아이콘/하위폴더/AI설정 등)은 의미가 모호해 숨긴다.
+             선택 밖 폴더 우클릭은 부모가 단일로 collapse 하므로 여기 안 들어온다. */
+          <>
+            <ContextMenuLabel className="text-text-tertiary">
+              {t("library.folder.nFoldersSelected", { n: selectionCount })}
+            </ContextMenuLabel>
+            <ContextMenuSeparator />
+            <ContextMenuItem onSelect={onExportAsHtml}>
+              <Download className="mr-2 h-3.5 w-3.5" />
+              {t("library.folder.exportSelectedAsHtmlItem", { n: selectionCount })}
+            </ContextMenuItem>
+          </>
+        ) : (
+        <>
         {!compactMenu ? (
           <ContextMenuItem onSelect={onCreateSubfolder}>
             <Plus className="mr-2 h-3.5 w-3.5" />
@@ -705,6 +745,8 @@ export function FolderRow({
           <Trash2 className="mr-2 h-3.5 w-3.5" />
           {t("library.folder.deleteItem")}
         </ContextMenuItem>
+        </>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   );

@@ -70,3 +70,8 @@ export const VIDEO_CONVERT_TARGET_BYTES = 290 * 1024 * 1024;
  *  하드 한도다. AI 프레임 샘플링/디코딩 자원 상한과도 연동된다.
  *  렌더러(videoFrames) 와 main(트랜스코더) 가 같은 값을 쓰도록 단일화한다. */
 export const MAX_VIDEO_DURATION_SEC = 10 * 60;
+
+/** 워크스페이스 전환(=location.reload) 으로 진행 중 영상 변환이 취소됐음을
+ *  reload 너머로 전달하는 localStorage 플래그 키. 변환 중 pagehide 에서 set,
+ *  새 페이지 마운트 시 read → 안내 토스트 → 삭제. */
+export const CONVERT_CANCELLED_FLAG = "preflow.convertCancelledByWorkspace";

@@ -61,8 +61,8 @@ export function exportPackAsHtml(opts: {
   format: HtmlExportFormat;
   /** export 한 앱의 UI 언어 — 뷰어 초기 언어 기본값. */
   language?: "ko" | "en";
-  /** 폴더 트리를 한정할 폴더 경로(선택 export 등 folder scope 가 아닐 때). */
-  folderScope?: string;
+  /** 뷰어 폴더 트리를 한정할 폴더 경로 목록(다중 폴더 선택 또는 선택 export 시). */
+  folderScope?: string[];
 }): Promise<HtmlExportResult> {
   return packPost<HtmlExportResult>("/pack/export-html", opts);
 }

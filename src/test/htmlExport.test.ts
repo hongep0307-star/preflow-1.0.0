@@ -117,4 +117,36 @@ describe("buildFolderNodes", () => {
     expect(all).toContain("test_02");
     expect(all).toContain("브리프 매치/PUBGM");
   });
+
+  it("accepts multiple scope paths (다중 폴더 선택 export)", () => {
+    /* 사이드바에서 두 폴더를 선택해 내보내면 그 두 트리만 남고 형제/타 폴더는
+     *  제외돼야 한다 (선택 폴더 외 노출 방지). */
+    const items = [
+      { tags: ["folder:test_01", "folder:브리프 매치/PUBGM"] },
+      { tags: ["folder:test_01/sub"] },
+      { tags: ["folder:test_02"] },
+      { tags: ["folder:test_03"] },
+    ];
+    const scoped = buildFolderNodes(items, ["test_01", "test_02"]);
+    expect(scoped.map((n) => n.path).sort()).toEqual(["test_01", "test_01/sub", "test_02"]);
+    expect(scoped.map((n) => n.path)).not.toContain("test_03");
+    expect(scoped.map((n) => n.path)).not.toContain("브리프 매치/PUBGM");
+  });
+
+  it("includeSubfolders=false limits to exact scope paths (하위 폴더 제외)", () => {
+    const items = [
+      { tags: ["folder:test_01"] },
+      { tags: ["folder:test_01/sub"] },
+      { tags: ["folder:test_02"] },
+    ];
+    /* 단일 + 하위 미포함 */
+    const exactSingle = buildFolderNodes(items, "test_01", false);
+    expect(exactSingle.map((n) => n.path)).toEqual(["test_01"]);
+    /* 다중 + 하위 미포함 */
+    const exactMulti = buildFolderNodes(items, ["test_01", "test_02"], false);
+    expect(exactMulti.map((n) => n.path).sort()).toEqual(["test_01", "test_02"]);
+    /* 기본값(includeSubfolders=true)이면 하위까지 포함(대조군). */
+    const withSub = buildFolderNodes(items, "test_01");
+    expect(withSub.map((n) => n.path).sort()).toEqual(["test_01", "test_01/sub"]);
+  });
 });

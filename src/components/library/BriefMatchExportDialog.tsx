@@ -11,18 +11,19 @@
  * 작업을 await 하는 동안 다이얼로그는 진행 상태("분석 중")를 표시한다.
  */
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, CalendarIcon, Image as ImageIcon, Film, Youtube as YoutubeIcon, Link as LinkIcon, FileText } from "lucide-react";
+import { Loader2, CalendarIcon, Check, Image as ImageIcon, Film, Youtube as YoutubeIcon, Link as LinkIcon, FileText } from "lucide-react";
 import { format, parse } from "date-fns";
 import { useT } from "@/lib/uiLanguage";
 import { cn } from "@/lib/utils";
 import type { ReferenceItem } from "@/lib/referenceLibrary";
+import { resolveTypeLabel } from "@/lib/linkPlatform";
 import { getCachedWorkspaces } from "@/lib/workspaceClient";
 import { listCrossWorkspaceProjectFolders } from "@/lib/crossWorkspaceLibrary";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/ui/badge";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -34,19 +35,20 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-/** 레퍼런스 kind → 코너 배지(아이콘 + 짧은 라벨). 이미지/비디오 구분을 명시. */
-function kindBadge(kind: ReferenceItem["kind"]): { Icon: typeof ImageIcon; label: string } {
+/** 레퍼런스 kind → 썸네일이 없을 때 보여줄 폴백 아이콘. 타입 라벨 자체는
+ *  앱 표준(resolveTypeLabel)을 써서 다른 화면과 표기를 통일한다. */
+function kindIcon(kind: ReferenceItem["kind"]): typeof ImageIcon {
   switch (kind) {
     case "video":
-      return { Icon: Film, label: "VIDEO" };
+      return Film;
     case "youtube":
-      return { Icon: YoutubeIcon, label: "YT" };
+      return YoutubeIcon;
     case "link":
-      return { Icon: LinkIcon, label: "URL" };
+      return LinkIcon;
     case "doc":
-      return { Icon: FileText, label: "DOC" };
+      return FileText;
     default:
-      return { Icon: ImageIcon, label: "IMG" };
+      return ImageIcon;
   }
 }
 
@@ -209,37 +211,42 @@ export function BriefMatchExportDialog({
             {members.length === 0 ? (
               <p className="text-xs text-muted-foreground">{t("briefMatch.export.noRefs")}</p>
             ) : (
-              <div className="grid grid-cols-4 gap-2 max-h-40 overflow-y-auto border border-border p-2">
+              <div className="grid grid-cols-4 gap-2 max-h-72 overflow-y-auto border border-border p-2">
                 {members.map((m) => {
                   const checked = selectedIds.has(m.id);
                   const thumb = m.thumbnail_url ?? m.file_url ?? "";
-                  const badge = kindBadge(m.kind);
+                  const Icon = kindIcon(m.kind);
                   return (
                     <button
                       type="button"
                       key={m.id}
                       onClick={() => toggleRef(m.id)}
                       className={cn(
-                        "relative aspect-square overflow-hidden border bg-muted",
-                        checked ? "border-primary ring-1 ring-primary" : "border-transparent opacity-60",
+                        "group relative aspect-square overflow-hidden border bg-surface-panel transition-all",
+                        checked
+                          ? "border-primary/80 shadow-[0_0_0_1px_hsl(var(--primary)/0.35)]"
+                          : "border-border-subtle opacity-70 hover:opacity-100 hover:border-primary/40",
                       )}
-                      title={`${m.title ?? ""} (${badge.label})`}
+                      style={{ borderRadius: 0 }}
+                      title={m.title ?? ""}
                     >
                       {thumb ? (
                         <img src={thumb} alt={m.title ?? ""} className="h-full w-full object-cover" />
                       ) : (
-                        <span className="flex h-full w-full items-center justify-center text-2xs text-muted-foreground">
-                          {badge.label}
+                        <span className="flex h-full w-full items-center justify-center">
+                          <Icon className="h-6 w-6 text-muted-foreground" />
                         </span>
                       )}
-                      <span className="absolute left-1 top-1">
-                        <Checkbox checked={checked} className="pointer-events-none h-3.5 w-3.5" />
-                      </span>
-                      {/* kind 배지 — 이미지/비디오/URL 구분 명시 */}
-                      <span className="absolute bottom-0.5 right-0.5 inline-flex items-center gap-0.5 rounded-sm bg-black/70 px-1 py-px text-nano font-medium text-white">
-                        <badge.Icon className="h-2.5 w-2.5" />
-                        {badge.label}
-                      </span>
+                      {/* 타입 라벨 — 앱 전역과 동일하게 좌상단 secondary Badge */}
+                      <Badge variant="secondary" className="absolute left-2 top-2 h-5 rounded-none px-1.5 text-micro">
+                        {resolveTypeLabel(m)}
+                      </Badge>
+                      {/* 선택 표시 — 앱 전역과 동일하게 우상단 primary 체크마크 */}
+                      {checked ? (
+                        <span className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center bg-primary text-primary-foreground">
+                          <Check className="h-3.5 w-3.5" />
+                        </span>
+                      ) : null}
                     </button>
                   );
                 })}

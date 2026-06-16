@@ -61,7 +61,7 @@ import {
 } from "@/lib/aiOutputLanguage";
 import type { LibraryFolderRow } from "@/components/library/LibrarySidebar";
 import { withReferenceVersion, type ReferenceItem } from "@/lib/referenceLibrary";
-import { docExtensionTag, docHueClasses, docPresentationOf } from "@/lib/docPresentation";
+import { docExtensionTag, docHueClasses, docPresentationOf, docSubtypeOf } from "@/lib/docPresentation";
 import { resolveTypeLabel } from "@/lib/linkPlatform";
 import { friendlyClassifyError, type ClassifyProgress, type ClassifyStage, type ReferenceAiSuggestions } from "@/lib/referenceAi";
 import type { ExtractedFrame } from "@/lib/videoFrames";
@@ -230,8 +230,9 @@ interface LibraryInspectorProps {
   onClearSourceUrl?: () => void;
   /** 타임스탬프 노트 행 클릭 시 호출 — LibraryPage 가 previewMode 를 켜고
    *  해당 anchor 로 큰 프리뷰를 자동 점프한다(이미 previewMode 면 즉시 점프).
-   *  v3 — 영상은 atSec, GIF 는 frameIndex 를 사용. 둘 중 하나만 들어옴. */
-  onJumpToTimestamp?: (atSec?: number, frameIndex?: number) => void;
+   *  v3 — 영상은 atSec, GIF 는 frameIndex, PDF 는 pageIndex 를 사용. 셋 중
+   *  하나만 들어옴. */
+  onJumpToTimestamp?: (atSec?: number, frameIndex?: number, pageIndex?: number) => void;
 }
 
 export function LibraryInspector({
@@ -1001,7 +1002,8 @@ export function LibraryInspector({
               안내 문구로 대체 — region 입력은 큰 프리뷰의 드래그를 통해서만
               들어온다. note.region 이 있는 video/gif 노트는 라벨 옆에 작은
               BoxSelect 인디케이터를 표시해 시점-only 노트와 시각 구분. */}
-          {selected.kind === "video" || selected.kind === "gif" || selected.kind === "image" || selected.kind === "webp" ? (
+          {selected.kind === "video" || selected.kind === "gif" || selected.kind === "image" || selected.kind === "webp"
+            || (selected.kind === "doc" && docSubtypeOf(selected) === "pdf") ? (
             <TimestampNotesSection
               selected={selected}
               videoRef={videoRef}
@@ -2114,9 +2116,9 @@ interface TimestampNotesSectionProps {
     regionOverride?: import("@/lib/referenceLibrary").RegionRect,
     frameIndexOverride?: number,
   ) => void;
-  /** v3 — atSec(영상) 또는 frameIndex(GIF) 둘 중 하나만 들어옴. 자료 종류에
-   *  맞춰 큰 프리뷰가 자동 점프한다. */
-  onJumpToTimestamp?: (atSec?: number, frameIndex?: number) => void;
+  /** v3 — atSec(영상)/frameIndex(GIF)/pageIndex(PDF) 중 하나만 들어옴. 자료
+   *  종류에 맞춰 큰 프리뷰가 자동 점프한다. */
+  onJumpToTimestamp?: (atSec?: number, frameIndex?: number, pageIndex?: number) => void;
   onDeleteTimestampNote?: (noteId: string) => void;
   onEditTimestampNote?: (noteId: string, text: string) => void;
 }
@@ -2165,6 +2167,9 @@ function TimestampNotesSection({
 
   const isGif = selected.kind === "gif";
   const isVideo = selected.kind === "video";
+  /* PDF 슬라이드 노트 — region + pageIndex anchored. label 은 페이지 번호(p.N),
+     클릭 시 그 페이지로 점프. */
+  const isPdf = selected.kind === "doc" && docSubtypeOf(selected) === "pdf";
   /* Phase 4 — image / static webp 분기. 이 자료의 노트는 region anchored 만
      의미가 있고 시점/프레임 개념이 없다. label 은 BoxSelect 아이콘. */
   const isStillImage = selected.kind === "image" || selected.kind === "webp";
@@ -2178,12 +2183,13 @@ function TimestampNotesSection({
      atSec 이 없는 노트는 0 으로 취급해 맨 위로 모인다. */
   const sortedNotes = useMemo(() => {
     if (isStillImage) return [...selected.timestamp_notes];
-    const sortKey = (note: { atSec?: number; frameIndex?: number }): number => {
+    const sortKey = (note: { atSec?: number; frameIndex?: number; pageIndex?: number }): number => {
+      if (isPdf) return note.pageIndex ?? 0;
       if (isGif) return note.frameIndex ?? note.atSec ?? 0;
       return note.atSec ?? 0;
     };
     return [...selected.timestamp_notes].sort((a, b) => sortKey(a) - sortKey(b));
-  }, [selected.timestamp_notes, isGif, isStillImage]);
+  }, [selected.timestamp_notes, isGif, isPdf, isStillImage]);
 
   const hoveredNote = useMemo(
     () => sortedNotes.find((note) => note.id === hoveredNoteId) ?? null,
@@ -2258,9 +2264,11 @@ function TimestampNotesSection({
        image: "Region Notes" */
   const sectionTitle = isGif
     ? t("library.inspector.frameNotes")
-    : isStillImage
-      ? t("library.inspector.regionNotes")
-      : t("library.inspector.timestampNotes");
+    : isPdf
+      ? t("library.inspector.slideNotes")
+      : isStillImage
+        ? t("library.inspector.regionNotes")
+        : t("library.inspector.timestampNotes");
 
   return (
     <div className="mt-5 border-t border-border-subtle pt-4">
@@ -2357,14 +2365,17 @@ function TimestampNotesSection({
                  자료 카드를 더블클릭해 큰 프리뷰로 진입하도록 안내(title). */
               return;
             }
-            if (isGif) onJumpToTimestamp?.(undefined, note.frameIndex);
+            if (isPdf) onJumpToTimestamp?.(undefined, undefined, note.pageIndex);
+            else if (isGif) onJumpToTimestamp?.(undefined, note.frameIndex);
             else onJumpToTimestamp?.(note.atSec);
           };
           const labelTitle = isStillImage
             ? t("library.inspector.regionNoteOpen")
-            : isGif
-              ? t("library.inspector.jumpToFrame", { n: (note.frameIndex ?? 0) + 1 })
-              : t("library.inspector.jumpToTime", { time: formatDuration(note.atSec) });
+            : isPdf
+              ? t("library.inspector.jumpToPage", { n: note.pageIndex ?? 0 })
+              : isGif
+                ? t("library.inspector.jumpToFrame", { n: (note.frameIndex ?? 0) + 1 })
+                : t("library.inspector.jumpToTime", { time: formatDuration(note.atSec) });
           return (
             <div
               key={note.id}
@@ -2391,9 +2402,11 @@ function TimestampNotesSection({
                   title={labelTitle}
                   style={{ borderRadius: 0 }}
                 >
-                  <span>{isGif
-                    ? (note.frameIndex !== undefined ? `#${note.frameIndex + 1}` : "#?")
-                    : formatDuration(note.atSec)}</span>
+                  <span>{isPdf
+                    ? (note.pageIndex !== undefined ? `p.${note.pageIndex}` : "p.?")
+                    : isGif
+                      ? (note.frameIndex !== undefined ? `#${note.frameIndex + 1}` : "#?")
+                      : formatDuration(note.atSec)}</span>
                   {hasRegion ? (
                     <BoxSelect
                       className="h-3 w-3 text-primary"

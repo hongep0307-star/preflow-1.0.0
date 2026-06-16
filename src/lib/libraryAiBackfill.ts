@@ -19,7 +19,7 @@
  *   - `LibraryInspector.onAddTag` — L1 즉시 시드 매칭으로 입력 시점 정규화.
  */
 
-import type { ReferenceItem } from "./referenceLibrary";
+import { isDocKind, type ReferenceItem } from "./referenceLibrary";
 import type { ReferenceAiSuggestions } from "./referenceAi";
 import { KOREAN_TAG_SEED } from "./koreanTagSeedDictionary";
 
@@ -141,12 +141,19 @@ function analyzeItem(item: ReferenceItem): BackfillItemReport {
   const cats = new Set<BackfillCategory>();
   const ai = (item.ai_suggestions ?? null) as Partial<ReferenceAiSuggestions> | null;
 
-  if (!ai || (!Array.isArray(ai.suggested_tags) && !Array.isArray(ai.mood_labels))) {
-    cats.add("missingAi");
-  } else {
-    if (!isValidParallel(ai.suggested_tags, ai.suggested_tags_ko)) cats.add("tagKoMismatch");
-    if (!isValidParallel(ai.mood_labels, ai.mood_labels_ko)) cats.add("moodKoMismatch");
-    if (isMissingScene(ai)) cats.add("missingScene");
+  /* doc(문서/PDF/오디오/zip)은 AI 시각 분석 대상이 아니므로 re-classify 계열
+     카테고리(missingAi/tagKoMismatch/moodKoMismatch/missingScene)에서 제외한다.
+     enqueueClassify 가 어차피 doc 를 막지만, 여기서도 빼야 정리 다이얼로그의
+     "재분석 대상 N건" 카운트가 실제와 일치한다. 사용자가 직접 단 한글 *태그*
+     정규화(userHangulTags)는 AI 분석이 아니므로 doc 에도 그대로 적용한다. */
+  if (!isDocKind(item.kind)) {
+    if (!ai || (!Array.isArray(ai.suggested_tags) && !Array.isArray(ai.mood_labels))) {
+      cats.add("missingAi");
+    } else {
+      if (!isValidParallel(ai.suggested_tags, ai.suggested_tags_ko)) cats.add("tagKoMismatch");
+      if (!isValidParallel(ai.mood_labels, ai.mood_labels_ko)) cats.add("moodKoMismatch");
+      if (isMissingScene(ai)) cats.add("missingScene");
+    }
   }
 
   const hangulTags: Array<{ ko: string; seedHit: boolean; suggestedEn?: string }> = [];

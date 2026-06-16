@@ -337,6 +337,14 @@ function createWindow() {
   // 새로고침은 자주 쓰니 webContents 레벨에서 직접 가로채 처리한다.
   // globalShortcut 이 아니라 before-input-event 라 이 윈도우에 포커스
   // 가 있을 때만 동작 — 다른 앱과 절대 충돌 안 함.
+  // 워크스페이스 전환은 location.reload() 로 렌더러를 새로 로드한다 — 이때
+  // 메인 프레임의 in-place 아닌 내비게이션이 발생한다. 진행 중이던 영상 변환은
+  // 렌더러와 함께 버려지므로, ffmpeg 자식 프로세스를 여기서 정리한다(고아 방지).
+  // 같은 문서 내 해시 라우팅(isInPlace=true) 이나 iframe 로드는 제외.
+  mainWindow.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame && !isInPlace) killAllTranscodes();
+  });
+
   mainWindow.webContents.on("before-input-event", (event, input) => {
     if (input.type !== "keyDown") return;
     const mod = process.platform === "darwin" ? input.meta : input.control;
@@ -520,6 +528,20 @@ ipcMain.on("preflow-video:transcode-cancel", (_event, id: string) => {
     activeTranscodes.delete(id);
   }
 });
+
+/** 진행 중인 모든 ffmpeg 변환을 종료한다. 워크스페이스 전환(렌더러 reload) 시
+ *  렌더러 측 변환 루프는 사라지지만 메인의 ffmpeg 자식은 살아남아 고아가 되므로,
+ *  내비게이션 시점에 호출해 정리한다. */
+function killAllTranscodes(): void {
+  for (const child of activeTranscodes.values()) {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      /* already gone */
+    }
+  }
+  activeTranscodes.clear();
+}
 
 // ── OS-level file copy ──────────────────────────────────────────────
 // 렌더러(라이브러리의 Ctrl+C) 가 호출한다. Web Clipboard API 는 image/png |

@@ -99,6 +99,7 @@ interface LibraryPreviewPanelProps {
     atOverride?: number,
     regionOverride?: import("@/lib/referenceLibrary").RegionRect,
     frameIndexOverride?: number,
+    pageIndexOverride?: number,
   ) => void;
   /** 마커 alt-click 으로 즉시 삭제. 인스펙터의 X 버튼과 동일한 핸들러를
    *  forward 받아 동작한다. */
@@ -115,6 +116,10 @@ interface LibraryPreviewPanelProps {
    *  시점에 1회 자동 점프할 프레임 인덱스. 영상의 initialSeekSec 와 같은 패턴. */
   initialFrameIndex?: number | null;
   onInitialFrameConsumed?: () => void;
+  /** PDF 용 — Inspector 슬라이드 노트 행 클릭으로 큰 프리뷰가 열린 직후
+   *  PdfViewer 가 1회 이동할 페이지(1-based). GIF 의 initialFrameIndex 와 동일 패턴. */
+  initialPageIndex?: number | null;
+  onInitialPageConsumed?: () => void;
   /** "Save loop as GIF" 다이얼로그가 변환을 끝낸 직후, GIF Blob 을 새
    *  ReferenceItem 으로 등록할 때 LibraryPage 가 처리할 콜백. Blob 을
    *  File 로 감싸 uploadReferenceFile 호출하고 upsert + toast 까지 부모가
@@ -152,6 +157,8 @@ export function LibraryPreviewPanel({
   onInitialSeekConsumed,
   initialFrameIndex,
   onInitialFrameConsumed,
+  initialPageIndex,
+  onInitialPageConsumed,
   onSaveLoopAsGif,
 }: LibraryPreviewPanelProps) {
   const { t } = useUiLanguage();
@@ -502,7 +509,10 @@ export function LibraryPreviewPanel({
      side effect 없음. */
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "r" && event.key !== "R") return;
+      /* event.code === "KeyR" 까지 확인 — 한글 IME 가 켜져 있으면 event.key 가
+         "r" 이 아니라 한글 자모로 들어와 매칭에 실패하므로, 물리 키 기준의
+         code 로 보강해 IME/레이아웃과 무관하게 토글되게 한다. */
+      if (event.key !== "r" && event.key !== "R" && event.code !== "KeyR") return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
@@ -1003,7 +1013,19 @@ export function LibraryPreviewPanel({
             (() => {
               const subtype = docSubtypeOf(item);
               if (subtype === "pdf" && item.file_url) {
-                return <PdfViewer item={item} />;
+                return (
+                  <PdfViewer
+                    item={item}
+                    notes={item.timestamp_notes}
+                    onCreateRegion={(region, text, pageIndex) =>
+                      onAddTimestampNote(text, undefined, region, undefined, pageIndex)
+                    }
+                    onEditRegion={onEditTimestampNote}
+                    onDeleteRegion={onDeleteTimestampNote}
+                    initialPageIndex={initialPageIndex}
+                    onInitialPageConsumed={onInitialPageConsumed}
+                  />
+                );
               }
               if (subtype === "audio" && item.file_url) {
                 return <AudioView item={item} />;

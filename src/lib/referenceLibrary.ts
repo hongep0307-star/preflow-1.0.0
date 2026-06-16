@@ -62,6 +62,16 @@ export function isDocKind(kind: ReferenceKind): boolean {
   return kind === "doc";
 }
 
+/** AI 분류(비전 분석) 대상 여부. doc(문서/PDF/오디오/zip 등)은 생성된 썸네일
+ *  플레이스홀더만 가지므로 시각 분석이 무의미하다(썸네일 placeholder 를 그대로
+ *  설명하는 잘못된 무드/태그가 붙어 라이브러리 검색·무드 필터를 오염시킴).
+ *  따라서 모든 분류 진입점(자동분류/우클릭/Run AI/백필 재분류)에서 일관되게
+ *  제외한다. 추후 오디오 전용 분석(음원 이해 모델)을 살리려면, 이 함수가 audio
+ *  subtype 만 통과시키도록 확장하고 별도 audio 분류 경로를 붙이면 된다. */
+export function isAiAnalyzable(item: { kind: ReferenceKind }): boolean {
+  return !isDocKind(item.kind);
+}
+
 /** 영역(region) 코멘트가 가리키는 사각형. 자연 해상도와 무관하게 비율(0~1)로
  *  저장해 어떤 디스플레이 박스에서도 동일 비율로 다시 그릴 수 있게 한다.
  *  (x, y) 는 좌상단, (w, h) 는 너비/높이. 모두 [0, 1] 로 clamp 된 값이라고
@@ -83,11 +93,16 @@ export interface TimestampNote {
    *  가 정확. 양쪽이 모두 있으면 자료 종류에 따라 우선순위가 갈린다(GIF =
    *  frameIndex, video = atSec). */
   frameIndex?: number;
+  /** PDF 자료 — 노트가 가리키는 페이지(1-based, PdfViewer 의 pageIndex 와 동일
+   *  기준). 슬라이드 노트는 region 과 함께 쓰여 "N페이지의 특정 영역" 을
+   *  표현한다. 영상/GIF/이미지에서는 undefined. */
+  pageIndex?: number;
   rangeText?: string;
   text: string;
   /** 자료 위에 드래그로 그린 영역. 시점-only 노트는 undefined.
    *  - video: atSec 시점에서만 표시.
    *  - gif:   frameIndex 프레임에서만 표시.
+   *  - pdf:   pageIndex 페이지에서만 표시.
    *  - image: 항상 표시. */
   region?: RegionRect;
 }

@@ -25,7 +25,7 @@ import {
   type ClassifyProgress,
   type ClassifyStage,
 } from "./referenceAi";
-import type { ReferenceItem } from "./referenceLibrary";
+import { isAiAnalyzable, type ReferenceItem } from "./referenceLibrary";
 import type { AiOutputLanguage } from "./aiOutputLanguage";
 
 /* 동시 실행 상한 — 자동 분류(폴더 Auto-classify) + 사용자가 직접 누른
@@ -150,6 +150,10 @@ export function enqueueClassify(
   } = {},
 ): boolean {
   if (!item || !item.id) return false;
+  /* doc(문서/PDF/오디오/zip 등)은 AI 시각 분석 대상이 아니다. 모든 진입점이
+     이 큐를 통과하므로(자동분류 import / 우클릭 / Run AI / Settings 백필 재분류)
+     여기서 한 번 막으면 일관되게 제외된다. */
+  if (!isAiAnalyzable(item)) return false;
   if (inProgress.has(item.id)) return false;
   if (queue.some((j) => j.id === item.id)) return false;
   queue.push({

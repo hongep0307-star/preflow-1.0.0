@@ -250,10 +250,12 @@ import {
   type TimestampNote,
   type UploadReferenceOptions,
 } from "@/lib/referenceLibrary";
+import { docSubtypeOf } from "@/lib/docPresentation";
 import { DEFAULT_IMAGE_SEARCH_ENGINE, type ImageSearchEngineId } from "@/lib/imageSearchEngines";
-import { REFERENCE_UPLOAD_MAX_BYTES, VIDEO_CONVERT_TARGET_BYTES } from "@shared/constants";
+import { CONVERT_CANCELLED_FLAG, REFERENCE_UPLOAD_MAX_BYTES, VIDEO_CONVERT_TARGET_BYTES } from "@shared/constants";
 import { MAX_DURATION_SEC } from "@/lib/videoFrames";
-import { probeVideoMeta, transcodeVideoFile } from "@/lib/videoTranscode";
+import { probeVideoMeta, transcodeVideoFile, TranscodeCancelledError } from "@/lib/videoTranscode";
+import { VideoConvertDialog } from "@/components/library/VideoConvertDialog";
 import { attachLibraryItemToProject, type AttachTarget } from "@/lib/attachLibraryItemToProject";
 import { appendAgentChatImages, CHAT_IMAGE_MAX, type ChatImage } from "@/components/agent/agentTypes";
 import { buildAgentAttachmentForRef } from "@/lib/agentAttach";
@@ -417,8 +419,9 @@ type HtmlExportDialogState = {
   itemCount: number;
   /** 범위 내 아이템 file_size 합(바이트) — single-html 용량 사전 표기용. */
   sizeBytes?: number;
-  /** 폴더 트리를 한정할 폴더 경로(활성 폴더에서 선택 export 시). */
-  folderScope?: string;
+  /** 뷰어 폴더 트리를 한정할 폴더 경로 목록(다중 폴더 선택 또는 활성 폴더에서
+   *  선택 export 시). 비면 항목들이 속한 모든 폴더가 트리에 노출된다. */
+  folderScope?: string[];
 } | null;
 
 type FolderEditState = {
@@ -1246,6 +1249,10 @@ const LibraryPage = () => {
      끝낸 시점에 1회 자동 점프할 프레임 인덱스. 영상의 pendingSeekSec 와 같은
      패턴 — 큐잉된 값이 소비되면 onInitialFrameConsumed() 로 null 로 클리어. */
   const [pendingFrameIndex, setPendingFrameIndex] = useState<number | null>(null);
+  /* PDF 자료의 인스펙터 슬라이드 노트 클릭 → 큰 프리뷰 → PdfViewer 가 1회
+     이동할 페이지(1-based). GIF 의 pendingFrameIndex 와 같은 큐잉 패턴 —
+     소비되면 onInitialPageConsumed() 로 null 로 클리어. */
+  const [pendingPageIndex, setPendingPageIndex] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [editTags, setEditTags] = useState("");
@@ -1275,6 +1282,29 @@ const LibraryPage = () => {
   const [savedFilters, setSavedFilters] = useState<SavedFilter[]>([]);
   const [activeSavedFilterId, setActiveSavedFilterId] = useState<string | null>(null);
   const [activeTag, setActiveTag] = useState<string | null>(null);
+  /* 사이드바 다중 폴더 선택(Ctrl/Shift) 의 단일 진실원. activeTag 는 그 중
+   *  "앵커(마지막 클릭)" 로 유지돼 캔버스/업로드/브레드크럼/recursive/드롭 등
+   *  단일 폴더 의존 기능을 그대로 보존한다. 불변식: 비면 activeTag=null,
+   *  1개 이상이면 activeTag 는 항상 selectedFolderTags 의 멤버. 모든 폴더
+   *  선택 변경은 아래 3개 헬퍼로만 일어난다(setActiveTag 직접 호출 금지). */
+  const [selectedFolderTags, setSelectedFolderTags] = useState<string[]>([]);
+  /** 전체 해제(루트/All Items 로 복귀). */
+  const resetFolderSelection = useCallback(() => {
+    setSelectedFolderTags([]);
+    setActiveTag(null);
+  }, []);
+  /** 단일 폴더(또는 비폴더 태그) 선택 — 브레드크럼/Pinned/캔버스 복귀/
+   *  recursive 토글/리네임·이동 리맵에서 사용. null 이면 전체 해제와 동일. */
+  const selectSingleFolder = useCallback((tag: string | null) => {
+    setSelectedFolderTags(tag ? [tag] : []);
+    setActiveTag(tag);
+  }, []);
+  /** 다중 선택 — 사이드바 FolderRow 클릭 핸들러 전용. anchor 는 집합의
+   *  멤버이거나(앵커) 비었을 때 null. */
+  const applyFolderSelection = useCallback((tags: string[], anchor: string | null) => {
+    setSelectedFolderTags(tags);
+    setActiveTag(anchor);
+  }, []);
   const [gridSize, setGridSize] = useState(() => Number(localStorage.getItem("preflow.library.gridSize")) || 180);
   const [viewMode, setViewMode] = useState<LibraryViewMode>("grid");
   /* Canvas 뷰는 폴더 컨텍스트(`folder:` 접두) 에서만 의미가 있다. 사용자가
@@ -1388,6 +1418,11 @@ const LibraryPage = () => {
   const [exportDialog, setExportDialog] = useState<ExportDialogState>(null);
   const [htmlExportDialog, setHtmlExportDialog] = useState<HtmlExportDialogState>(null);
   const [importPackOpen, setImportPackOpen] = useState(false);
+  /* 300MB 초과 영상 변환 — convertCandidates 가 non-null 이면 확인 다이얼로그가
+     열린다. "변환 후 업로드" 를 누르면 다이얼로그를 닫고 백그라운드(진행 토스트)
+     로 변환하므로 변환 중에도 라이브러리를 계속 쓸 수 있다. abortRef 로 취소. */
+  const [convertCandidates, setConvertCandidates] = useState<File[] | null>(null);
+  const convertAbortRef = useRef<AbortController | null>(null);
   /* Add → Choose Files / 드래그-드랍에서 미리 만든 PackPreview 를 들고 있다가
      PackImportDialog 가 열릴 때 1회 흡수. 같은 파일을 다시 픽하면 새 객체로
      교체되어 useEffect 가 다시 트리거. */
@@ -2086,85 +2121,173 @@ const LibraryPage = () => {
 
     if (mediaFiles.length === 0) return;
 
-    let successCount = 0;
-    const failures: Array<{ name: string; message: string }> = [];
-
-    // 가져오는 중 진행 표시 — 대용량 영상은 업로드/썸네일 추출에 수 초~수십 초가
-    // 걸려, 표시가 없으면 사용자가 "되는 건지" 알 수 없다. 지속 토스트(긴 duration)
-    // 로 띄우고 파일마다 진행률을 갱신, 완료/실패 시 수동 dismiss.
-    const total = mediaFiles.length;
-    const loadingToast = toast({
-      title: t("library.toast.importProgress", { done: 0, total }),
-      duration: 600_000,
-    });
-    let processed = 0;
-
-    // 300MB 초과 영상 판별 — 컨버팅 대상. (Phase 2: 확인 팝업 없이 자동 변환,
-    // Phase 3 에서 일괄 확인 다이얼로그로 대체 예정.)
+    // 사전 분류 — 300MB 초과 영상은 변환 후보, 그 외는 즉시 업로드.
     const isOversizeVideo = (f: File) =>
       (f.type.startsWith("video/") || /\.(mp4|mov|webm)$/i.test(f.name)) &&
       f.size > REFERENCE_UPLOAD_MAX_BYTES;
 
+    const directFiles: File[] = [];
+    const convertCands: File[] = [];
+    const tooLong: Array<{ name: string; durationSec: number }> = [];
     for (const file of mediaFiles) {
-      try {
-        let toUpload = file;
-        if (isOversizeVideo(file)) {
-          // 길이는 컨버팅으로 줄일 수 없으므로 5분 초과는 변환하지 않고 거부.
-          const meta = await probeVideoMeta(file);
-          if (meta.durationSec > MAX_DURATION_SEC) {
-            throw new Error(
-              `${MAX_DURATION_SEC / 60}분 이하 영상만 지원합니다 (현재 약 ${Math.ceil(meta.durationSec / 60)}분). 영상 길이는 변환으로 줄일 수 없습니다.`,
-            );
-          }
-          loadingToast.update({ title: t("library.toast.convertProgress", { name: file.name, pct: 0 }) });
-          toUpload = await transcodeVideoFile({
-            file,
-            targetBytes: VIDEO_CONVERT_TARGET_BYTES,
-            durationSec: meta.durationSec,
-            onProgress: (ratio) =>
-              loadingToast.update({
-                title: t("library.toast.convertProgress", { name: file.name, pct: Math.round(ratio * 100) }),
-              }),
-          });
-        }
-        const item = await uploadReferenceFile(toUpload, uploadOptions);
-        upsertUploadedItem(item);
-        maybeAutoClassifyImport(item);
-        successCount += 1;
-      } catch (err) {
-        failures.push({
-          name: file.name,
-          message: err instanceof Error ? err.message : String(err),
-        });
+      if (!isOversizeVideo(file)) {
+        directFiles.push(file);
+        continue;
       }
-      processed += 1;
-      loadingToast.update({ title: t("library.toast.importProgress", { done: processed, total }) });
+      // 길이는 변환으로 줄일 수 없으므로 한도 초과는 변환 대상에서 제외.
+      let durationSec = 0;
+      try {
+        durationSec = (await probeVideoMeta(file)).durationSec;
+      } catch {
+        // 알 수 없으면(<video>.duration Infinity 등) 변환 시도 — main(ffmpeg)이 길이 재검증.
+        durationSec = 0;
+      }
+      if (durationSec > MAX_DURATION_SEC) tooLong.push({ name: file.name, durationSec });
+      else convertCands.push(file);
     }
 
-    loadingToast.dismiss();
-
-    if (successCount > 0) {
+    // 길이 초과 — 변환 불가, 전용 toast.
+    for (const tl of tooLong) {
       toast({
-        title: uploadFolderLabel ? t("library.toast.savedTo", { folder: uploadFolderLabel }) : t("library.toast.referenceSaved"),
-        description: t("library.toast.nItemsAdded", { n: successCount, s: successCount > 1 ? "s" : "" }),
+        variant: "destructive",
+        title: t("library.toast.videoTooLong"),
+        description: t("library.toast.videoTooLongDesc", {
+          limit: MAX_DURATION_SEC / 60,
+          min: Math.ceil(tl.durationSec / 60),
+        }),
       });
     }
-    // 실패는 항목별로 별도 토스트 — 어떤 파일이 왜 실패했는지 사용자가
-    // 즉시 식별할 수 있도록. 대량 실패 시엔 화면을 가릴 수 있어 최대 3 개만.
+
+    // 바로 업로드 가능한 파일(≤300MB 또는 비영상) — 진행 토스트와 함께.
+    if (directFiles.length > 0) {
+      let successCount = 0;
+      const failures: Array<{ name: string; message: string }> = [];
+      const total = directFiles.length;
+      const loadingToast = toast({
+        title: t("library.toast.importProgress", { done: 0, total }),
+        duration: 600_000,
+      });
+      let processed = 0;
+      for (const file of directFiles) {
+        try {
+          const item = await uploadReferenceFile(file, uploadOptions);
+          upsertUploadedItem(item);
+          maybeAutoClassifyImport(item);
+          successCount += 1;
+        } catch (err) {
+          failures.push({ name: file.name, message: err instanceof Error ? err.message : String(err) });
+        }
+        processed += 1;
+        loadingToast.update({ title: t("library.toast.importProgress", { done: processed, total }) });
+      }
+      loadingToast.dismiss();
+      if (successCount > 0) {
+        toast({
+          title: uploadFolderLabel ? t("library.toast.savedTo", { folder: uploadFolderLabel }) : t("library.toast.referenceSaved"),
+          description: t("library.toast.nItemsAdded", { n: successCount, s: successCount > 1 ? "s" : "" }),
+        });
+      }
+      for (const fail of failures.slice(0, 3)) {
+        toast({ variant: "destructive", title: t("library.toast.failedName", { name: fail.name }), description: fail.message });
+      }
+      if (failures.length > 3) {
+        toast({
+          variant: "destructive",
+          title: t("library.toast.moreFailures", { n: failures.length - 3 }),
+          description: t("library.toast.seeConsole"),
+        });
+        for (const fail of failures.slice(3)) {
+          console.warn("[library] upload failed", fail.name, fail.message);
+        }
+      }
+    }
+
+    // 300MB 초과 영상 — 다중 드랍이어도 한 번만 확인 다이얼로그를 띄운다.
+    if (convertCands.length > 0) {
+      setConvertCandidates(convertCands);
+    }
+  }, [handlePackFile, maybeAutoClassifyImport, toast, uploadFolderLabel, uploadOptions, upsertUploadedItem, t]);
+
+  /* 확인 다이얼로그에서 "변환 후 업로드" 를 누르면 호출 — 후보를 순차 변환해
+     업로드한다. ffmpeg 부하 때문에 병렬이 아닌 1개씩. 진행 표시는 *비차단
+     토스트* 로 띄워 변환 중에도 라이브러리를 계속 쓸 수 있게 하고, 토스트의
+     "취소" 액션으로 큐 전체를 중단한다(AbortController). */
+  const runVideoConversions = useCallback(async (files: File[]) => {
+    if (files.length === 0) return;
+    const abort = new AbortController();
+    convertAbortRef.current = abort;
+    const total = files.length;
+
+    const progressToast = toast({
+      title: t("library.videoConvert.running", { name: files[0].name, index: 1, total, pct: 0 }),
+      duration: 600_000,
+      action: (
+        <ToastAction altText={t("library.videoConvert.cancel")} onClick={() => convertAbortRef.current?.abort()}>
+          {t("library.videoConvert.cancel")}
+        </ToastAction>
+      ),
+    });
+
+    let succeeded = 0;
+    const failures: Array<{ name: string; message: string }> = [];
+    for (let i = 0; i < files.length; i++) {
+      if (abort.signal.aborted) break;
+      const file = files[i];
+      const setTitle = (pct: number) =>
+        progressToast.update({
+          title: t("library.videoConvert.running", { name: file.name, index: i + 1, total, pct }),
+        });
+      setTitle(0);
+      try {
+        const converted = await transcodeVideoFile({
+          file,
+          targetBytes: VIDEO_CONVERT_TARGET_BYTES,
+          signal: abort.signal,
+          onProgress: (ratio) => setTitle(Math.round(ratio * 100)),
+        });
+        const item = await uploadReferenceFile(converted, uploadOptions);
+        upsertUploadedItem(item);
+        maybeAutoClassifyImport(item);
+        succeeded += 1;
+      } catch (err) {
+        if (err instanceof TranscodeCancelledError || abort.signal.aborted) break;
+        failures.push({ name: file.name, message: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    const aborted = abort.signal.aborted;
+    convertAbortRef.current = null;
+    progressToast.dismiss();
+
+    if (succeeded > 0) {
+      toast({
+        title: uploadFolderLabel ? t("library.toast.savedTo", { folder: uploadFolderLabel }) : t("library.toast.referenceSaved"),
+        description: t("library.toast.nItemsAdded", { n: succeeded, s: succeeded > 1 ? "s" : "" }),
+      });
+    }
     for (const fail of failures.slice(0, 3)) {
       toast({ variant: "destructive", title: t("library.toast.failedName", { name: fail.name }), description: fail.message });
     }
-    if (failures.length > 3) {
-      toast({
-        variant: "destructive",
-        title: t("library.toast.moreFailures", { n: failures.length - 3 }),
-        description: t("library.toast.seeConsole"),
-      });
-      for (const fail of failures.slice(3)) {
-        console.warn("[library] upload failed", fail.name, fail.message);
-      }
+    if (aborted) {
+      toast({ title: t("library.toast.convertCancelled") });
     }
-  }, [handlePackFile, maybeAutoClassifyImport, toast, uploadFolderLabel, uploadOptions, upsertUploadedItem, t]);
+  }, [maybeAutoClassifyImport, toast, uploadFolderLabel, uploadOptions, upsertUploadedItem, t]);
+
+  /* 워크스페이스 전환(=location.reload) 직전 — 변환 진행 중이면 reload 너머로
+     "취소됨" 안내를 전달하기 위해 localStorage 플래그를 남긴다. ffmpeg 프로세스
+     자체는 메인의 did-start-navigation 훅이 정리한다. 새 페이지(App)가 마운트
+     시 이 플래그를 읽어 토스트를 띄운다. */
+  useEffect(() => {
+    const onPageHide = () => {
+      if (!convertAbortRef.current) return;
+      try {
+        localStorage.setItem(CONVERT_CANCELLED_FLAG, "1");
+      } catch {
+        /* localStorage 불가 환경 — 토스트 안내만 생략(변환 정리는 메인이 수행) */
+      }
+    };
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
+  }, []);
 
   const handleUrlSubmit = useCallback(async (event?: FormEvent) => {
     event?.preventDefault();
@@ -2644,14 +2767,20 @@ const LibraryPage = () => {
       if (quickFilter === "variations" && !item.variation_of) return false;
       if (quickFilter === "duplicates" && (!item.content_hash || items.filter((row) => row.content_hash === item.content_hash && !row.deleted_at).length < 2)) return false;
 
-      // 사이드바의 단일 activeTag — 폴더 활성 + recursive 토글 케이스 포함.
+      // 사이드바 폴더 선택(단일/다중) — 다중이면 선택 폴더들의 합집합.
       // 툴바의 tagsFilter / foldersFilter 와 AND 결합으로 적용된다.
-      if (activeTag) {
-        if (activeTag.startsWith("folder:") && recursiveActiveFolder) {
-          const matched = item.tags.some((tag) => tag === activeTag || tag.startsWith(`${activeTag}/`));
+      if (selectedFolderTags.length > 0) {
+        const only = selectedFolderTags.length === 1 ? selectedFolderTags[0] : null;
+        if (only && only.startsWith("folder:") && recursiveActiveFolder) {
+          // 단일 폴더 + recursive 토글: 하위 폴더 항목까지 포함.
+          const matched = item.tags.some((tag) => tag === only || tag.startsWith(`${only}/`));
           if (!matched) return false;
-        } else if (!item.tags.includes(activeTag)) {
-          return false;
+        } else if (only && !only.startsWith("folder:")) {
+          // 비폴더 태그가 단일로 들어온 경로 보존(정확 일치).
+          if (!item.tags.includes(only)) return false;
+        } else {
+          // 다중(또는 recursive off 단일): 선택 폴더에 직접 소속된 항목의 합집합.
+          if (!selectedFolderTags.some((tag) => item.tags.includes(tag))) return false;
         }
       }
       if (activeSavedFilter && !matchesSavedFilter(item, activeSavedFilter)) return false;
@@ -2982,6 +3111,7 @@ const LibraryPage = () => {
   }, [
     activeSavedFilter,
     activeTag,
+    selectedFolderTags,
     colorFilter,
     foldersFilter,
     freshlyUploadedAt,
@@ -3112,7 +3242,7 @@ const LibraryPage = () => {
     [selected, usageLocations],
   );
   const selectedRegularTags = selected?.tags.filter((tag) => !tag.startsWith("folder:")) ?? [];
-  const selectedFolderTags = selected?.tags.filter((tag) => tag.startsWith("folder:")) ?? [];
+  const selectedItemFolderTags = selected?.tags.filter((tag) => tag.startsWith("folder:")) ?? [];
   const activeItems = useMemo(() => items.filter((item) => !item.deleted_at), [items]);
   const counts = useMemo(() => {
     /* resolveDisplayKind 로 정규화 — animated WebP (kind=gif & mime=image/webp)
@@ -3428,12 +3558,12 @@ const LibraryPage = () => {
     /* 필터가 자료를 가리는 경우 사용자가 자료를 못 본다 → 안전하게 "all" 로
        리셋. 폴더/태그 필터도 같은 이유로 해제. */
     setQuickFilter("all");
-    setActiveTag(null);
+    resetFolderSelection();
     setActiveSavedFilterId(null);
     setSelectedId(found.id);
     setSelectedIds(new Set([found.id]));
     setLastSelectedId(found.id);
-  }, [focusRefId, items]);
+  }, [focusRefId, items, resetFolderSelection]);
 
   /** Toolbar 우측 칩에 표시할 현재 활성 프로젝트.
    *
@@ -5513,9 +5643,19 @@ const LibraryPage = () => {
       atOverride?: number,
       regionOverride?: RegionRect,
       frameIndexOverride?: number,
+      pageIndexOverride?: number,
     ) => {
       if (!selected) return;
-      if (selected.kind !== "video" && selected.kind !== "gif" && selected.kind !== "image" && selected.kind !== "webp") return;
+      /* PDF doc 자료는 슬라이드 노트(pageIndex + region) 를 지원. 그 외 doc
+         (audio/html/문서 등) 은 노트 개념이 없어 제외. */
+      const isPdfDoc = selected.kind === "doc" && docSubtypeOf(selected) === "pdf";
+      if (
+        selected.kind !== "video"
+        && selected.kind !== "gif"
+        && selected.kind !== "image"
+        && selected.kind !== "webp"
+        && !isPdfDoc
+      ) return;
       const rawText = textOverride !== undefined ? textOverride : timestampText;
       const text = rawText.trim();
       if (!text) return;
@@ -5531,10 +5671,14 @@ const LibraryPage = () => {
       const frameIndex = selected.kind === "gif" && Number.isFinite(frameIndexOverride)
         ? (frameIndexOverride as number)
         : undefined;
+      const pageIndex = isPdfDoc && Number.isFinite(pageIndexOverride)
+        ? (pageIndexOverride as number)
+        : undefined;
       const note: TimestampNote = {
         id: crypto.randomUUID().replace(/-/g, ""),
         atSec,
         frameIndex,
+        pageIndex,
         text,
         region: regionOverride,
       };
@@ -5897,7 +6041,7 @@ const LibraryPage = () => {
     setQuery("");
     setQuickFilter("all");
     setActiveSavedFilterId(null);
-    setActiveTag(null);
+    resetFolderSelection();
     setTypesFilter(emptyMulti());
     setLinkPlatformsFilter(emptyMulti());
     setTagsFilter(emptyMulti());
@@ -5908,7 +6052,7 @@ const LibraryPage = () => {
     setNoteFilterState(EMPTY_NOTE_FILTER);
     setColorFilter(null);
     setMoodFilter(null);
-  }, []);
+  }, [resetFolderSelection]);
 
   const handleSelectGridItem = useCallback((id: string, event?: MouseEvent<HTMLElement>) => {
     const isContextMenu = event?.type === "contextmenu";
@@ -5986,7 +6130,15 @@ const LibraryPage = () => {
      GifFramePlayer 가 디코드 완료 시점에 그 프레임으로 1회 점프한다. 큰
      프리뷰가 이미 열려 있어도 GifFramePlayer 의 initialFrameIndex 갱신을
      통해 같은 경로로 점프(별도의 imperative ref 가 없어 큐잉 방식이 더 단순). */
-  const handleJumpToTimestamp = useCallback((atSec?: number, frameIndex?: number) => {
+  const handleJumpToTimestamp = useCallback((atSec?: number, frameIndex?: number, pageIndex?: number) => {
+    // PDF 슬라이드 노트 — pageIndex 우선. 큰 프리뷰가 닫혀 있으면 켜고,
+    // pendingPageIndex 를 세팅해 PdfViewer 의 initialPageIndex 가 갱신되어
+    // 해당 페이지로 1회 이동한다(consumed 시 즉시 null 로 되돌림).
+    if (Number.isFinite(pageIndex)) {
+      setPendingPageIndex(pageIndex as number);
+      if (!previewMode) setPreviewMode(true);
+      return;
+    }
     // GIF 노트 — frameIndex 우선. 큰 프리뷰가 닫혀 있으면 켜기. 켜져 있어도
     // pendingFrameIndex 를 세팅해 GifFramePlayer 의 initialFrameIndex 가 새
     // 값으로 갱신되도록 한다(consumed 시 즉시 null 로 되돌림).
@@ -6047,6 +6199,17 @@ const LibraryPage = () => {
       .reduce((acc, item) => acc + (item.file_size ?? 0), 0);
   }, [activeItems]);
 
+  /* 선택한 폴더들에 *직접* 소속된(옵션 A — 하위폴더 미포함) 아이템 id 의
+   *  합집합. 폴더 우클릭 다중 export(옵션 2) 가 scope="selected" 로 변환할 때
+   *  사용한다. tag 는 "folder:" 접두 풀 태그. */
+  const unionIdsForFolders = useCallback((tags: string[]): string[] => {
+    if (tags.length === 0) return [];
+    const tagSet = new Set(tags);
+    return activeItems
+      .filter((item) => item.tags.some((candidate) => tagSet.has(candidate)))
+      .map((item) => item.id);
+  }, [activeItems]);
+
   const handleCreateFolder = useCallback((parentPath?: string) => {
     setFolderEdit({ mode: "create", parentPath: parentPath ?? null });
   }, []);
@@ -6087,12 +6250,19 @@ const LibraryPage = () => {
       cascadeRenameBriefMatchEntries(oldPath, newPath);
       setUserFolderPaths(getUserFolderPaths());
       setItems((current) => current.map((item) => result.items.find((updated) => updated.id === item.id) ?? item));
-      if (activeTag === folderTag(oldPath)) setActiveTag(folderTag(newPath));
+      // 선택 집합/앵커의 경로도 oldPath→newPath 로 치환(자손 포함).
+      {
+        const oldTag = folderTag(oldPath);
+        const newTag = folderTag(newPath);
+        const remap = (tag: string) =>
+          tag === oldTag ? newTag : tag.startsWith(`${oldTag}/`) ? newTag + tag.slice(oldTag.length) : tag;
+        applyFolderSelection(selectedFolderTags.map(remap), activeTag ? remap(activeTag) : null);
+      }
       toast({ title: t("library.toast.folderRenamed"), description: t("library.toast.refsUpdated", { n: result.updated }) });
     } catch (err) {
       toast({ variant: "destructive", title: t("library.toast.renameFailed"), description: err instanceof Error ? err.message : String(err) });
     }
-  }, [activeTag, folderEdit, toast, t]);
+  }, [activeTag, selectedFolderTags, applyFolderSelection, folderEdit, toast, t]);
 
   const handleDeleteFolder = useCallback((row: LibraryFolderRow) => {
     setFolderDeleteTarget(row);
@@ -6116,7 +6286,12 @@ const LibraryPage = () => {
       cascadeDeleteCanvasLayout(folderPath);
       setUserFolderPaths(getUserFolderPaths());
       setItems((current) => current.map((item) => result.items.find((updated) => updated.id === item.id) ?? item));
-      if (activeTag === row.tag || activeTag?.startsWith(`${row.tag}/`)) setActiveTag(null);
+      // 선택 집합에서 삭제된 폴더(및 자손)를 제거하고, 앵커가 영향받으면 남은 첫 폴더로.
+      {
+        const remaining = selectedFolderTags.filter((t) => t !== row.tag && !t.startsWith(`${row.tag}/`));
+        const anchorAffected = activeTag === row.tag || (activeTag?.startsWith(`${row.tag}/`) ?? false);
+        applyFolderSelection(remaining, anchorAffected ? (remaining[0] ?? null) : activeTag);
+      }
       toast({
         title: opts.mode === "trashItems" ? t("library.toast.folderMovedToTrash") : t("library.toast.folderRemoved"),
         description: t("library.toast.refsAffected", { n: result.affected }),
@@ -6124,7 +6299,7 @@ const LibraryPage = () => {
     } catch (err) {
       toast({ variant: "destructive", title: t("library.toast.deleteFolderFailed"), description: err instanceof Error ? err.message : String(err) });
     }
-  }, [activeTag, folderDeleteTarget, toast, t]);
+  }, [activeTag, selectedFolderTags, applyFolderSelection, folderDeleteTarget, toast, t]);
 
   // 폴더 자체 이동(rename) — 사이드바 우클릭 → "Move folder...".
   // 같은 FolderPickerDialog 를 destination 선택 UI 로 재사용. 자기
@@ -6197,7 +6372,14 @@ const LibraryPage = () => {
         setItems((current) =>
           current.map((item) => result.items.find((updated) => updated.id === item.id) ?? item),
         );
-        if (activeTag === folderTag(oldPath)) setActiveTag(folderTag(newPath));
+        // 선택 집합/앵커의 경로도 oldPath→newPath 로 치환(자손 포함).
+        {
+          const oldTag = folderTag(oldPath);
+          const newTag = folderTag(newPath);
+          const remap = (tag: string) =>
+            tag === oldTag ? newTag : tag.startsWith(`${oldTag}/`) ? newTag + tag.slice(oldTag.length) : tag;
+          applyFolderSelection(selectedFolderTags.map(remap), activeTag ? remap(activeTag) : null);
+        }
         toast({
           title: t("library.toast.folderMoved"),
           description: t("library.toast.folderMovedDesc", {
@@ -6214,7 +6396,7 @@ const LibraryPage = () => {
         });
       }
     },
-    [activeTag, folderHasChildren, toast, t],
+    [activeTag, selectedFolderTags, applyFolderSelection, folderHasChildren, toast, t],
   );
 
   const confirmMoveFolder = useCallback(
@@ -6788,6 +6970,21 @@ const LibraryPage = () => {
    *  dialog state 슬롯(htmlExportDialog)을 채운다. projectLinked scope 는
    *  viewer 공유 시나리오에서 의미가 없어 진입점도 만들지 않는다. */
   const handleExportFolderAsHtml = useCallback((row: LibraryFolderRow) => {
+    // 옵션 2: 우클릭한 폴더가 다중 선택(2개 이상)에 포함돼 있으면, 선택 폴더
+    // 전체를 scope="selected"(합집합 ids) + folderScope(선택 폴더만) 로 내보낸다.
+    // 그래야 뷰어 트리에 선택한 폴더만 남고 엮인 다른 폴더가 섞이지 않는다.
+    if (selectedFolderTags.length > 1 && selectedFolderTags.includes(row.tag)) {
+      const ids = unionIdsForFolders(selectedFolderTags);
+      setHtmlExportDialog({
+        scope: "selected",
+        scopeLabel: selectedFolderTags.map((t) => t.replace(/^folder:/, "")).join(", "),
+        ids,
+        itemCount: ids.length,
+        sizeBytes: sizeBytesForIds(ids),
+        folderScope: selectedFolderTags,
+      });
+      return;
+    }
     setHtmlExportDialog({
       scope: "folder",
       scopeLabel: row.tag.replace(/^folder:/, ""),
@@ -6795,7 +6992,7 @@ const LibraryPage = () => {
       itemCount: folderCount(row.tag),
       sizeBytes: folderSizeBytes(row.tag),
     });
-  }, [folderCount, folderSizeBytes]);
+  }, [folderCount, folderSizeBytes, selectedFolderTags, unionIdsForFolders, sizeBytesForIds]);
 
   const handleExportSelected = useCallback((item?: ReferenceItem) => {
     const ids = item ? selectedIdsForItem(item) : selectedItems.map((row) => row.id);
@@ -6815,12 +7012,14 @@ const LibraryPage = () => {
       ids,
       itemCount: ids.length,
       sizeBytes: sizeBytesForIds(ids),
-      /* 활성 폴더에서 선택해 내보내면 뷰어 폴더 트리를 그 폴더 하위로만
-       *  한정한다(자료가 다른 폴더에도 태깅돼 있어도 사이드/형제 폴더가
-       *  섞이지 않게). 폴더가 활성 아니면 undefined → 항목들의 폴더 전체. */
-      folderScope: activeTag?.startsWith("folder:") ? activeTag : undefined,
+      /* 선택한 폴더(들)에서 내보내면 뷰어 폴더 트리를 그 폴더(들)로만 한정한다
+       *  (자료가 다른 폴더에도 태깅돼 있어도 사이드/형제 폴더가 섞이지 않게).
+       *  폴더 선택이 없으면 undefined → 항목들의 폴더 전체. */
+      folderScope: selectedFolderTags.some((t) => t.startsWith("folder:"))
+        ? selectedFolderTags.filter((t) => t.startsWith("folder:"))
+        : undefined,
     });
-  }, [activeTag, selectedIdsForItem, selectedItems, sizeBytesForIds, t]);
+  }, [selectedFolderTags, selectedIdsForItem, selectedItems, sizeBytesForIds, t]);
 
   const handleExportFiltered = useCallback(() => {
     openExportDialog({
@@ -6881,7 +7080,7 @@ const LibraryPage = () => {
             <button
               type="button"
               onClick={() => {
-                setActiveTag(null);
+                resetFolderSelection();
                 setQuickFilter("all");
                 setActiveSavedFilterId(null);
               }}
@@ -6906,7 +7105,7 @@ const LibraryPage = () => {
                     <button
                       type="button"
                       onClick={() => {
-                        setActiveTag(seg.folderTag);
+                        selectSingleFolder(seg.folderTag);
                         setQuickFilter("all");
                         setActiveSavedFilterId(null);
                       }}
@@ -7146,22 +7345,31 @@ const LibraryPage = () => {
           // 의도한 대로 그 메뉴로 컨텍스트가 넘어간다.
           onQuickFilterChange={(filter) => {
             setQuickFilter(filter);
-            setActiveTag(null);
+            resetFolderSelection();
           }}
           savedFilters={savedFilters}
           activeSavedFilterId={activeSavedFilterId}
           onSavedFilterChange={(id) => {
             setActiveSavedFilterId(id);
-            setActiveTag(null);
+            resetFolderSelection();
           }}
           folderRows={regularFolders}
           activeTag={activeTag}
+          selectedFolderTags={selectedFolderTags}
+          anchorTag={activeTag}
           // 폴더를 선택하면 Quick Filter / Smart Folder 도 기본값으로
           // 리셋 — 사이드바 전체가 "한 번에 한 가지 주 필터" 로 보이게.
           // null(= 같은 폴더 다시 눌러서 해제) 케이스도 동일하게
           // 기본값으로 두면, 다음에 어디 들어가든 일관된 출발점.
+          // 단일 선택용(Pinned 단축/내부 fallback) — 다중 선택은 onFolderSelectionChange.
           onTagChange={(tag) => {
-            setActiveTag(tag);
+            selectSingleFolder(tag);
+            setQuickFilter("all");
+            setActiveSavedFilterId(null);
+          }}
+          // Ctrl/Shift 다중 선택 — 사이드바가 모디파이어→집합을 계산해 넘긴다.
+          onFolderSelectionChange={(tags, anchor) => {
+            applyFolderSelection(tags, anchor);
             setQuickFilter("all");
             setActiveSavedFilterId(null);
           }}
@@ -7170,7 +7378,7 @@ const LibraryPage = () => {
             // 활성 폴더가 이 행과 다르면 먼저 활성화한 뒤 토글이
             // 의미 있게 켜진다. 같은 폴더면 단순 토글.
             if (activeTag !== row.tag) {
-              setActiveTag(row.tag);
+              selectSingleFolder(row.tag);
               setRecursiveActiveFolder(true);
             } else {
               setRecursiveActiveFolder((prev) => !prev);
@@ -7240,7 +7448,7 @@ const LibraryPage = () => {
             // 매칭된 레퍼런스가 담긴 폴더로 이동 → 결과를 폴더 내용으로 표시.
             // 휘발성 AI 필터를 쓰지 않으므로 다른 레퍼런스도 폴더에서 나가면 바로 보인다.
             setMoodFilter(null);
-            setActiveTag(folderTag(path));
+            selectSingleFolder(folderTag(path));
             setQuickFilter("all");
             setActiveSavedFilterId(null);
           }}
@@ -7355,6 +7563,8 @@ const LibraryPage = () => {
                 onInitialSeekConsumed={() => setPendingSeekSec(null)}
                 initialFrameIndex={pendingFrameIndex}
                 onInitialFrameConsumed={() => setPendingFrameIndex(null)}
+                initialPageIndex={pendingPageIndex}
+                onInitialPageConsumed={() => setPendingPageIndex(null)}
               />
             ) : viewMode === "canvas" && activeTag?.startsWith("folder:") ? (
               /* Canvas 뷰 — 같은 filteredItems 를 받지만 grid/list 와 달리
@@ -7711,6 +7921,17 @@ const LibraryPage = () => {
           folderScope={htmlExportDialog.folderScope}
         />
       ) : null}
+      <VideoConvertDialog
+        open={convertCandidates != null}
+        files={convertCandidates ?? []}
+        targetBytes={VIDEO_CONVERT_TARGET_BYTES}
+        onConfirm={() => {
+          const files = convertCandidates ?? [];
+          setConvertCandidates(null);
+          void runVideoConversions(files);
+        }}
+        onCancel={() => setConvertCandidates(null)}
+      />
       <PackImportDialog
         open={importPackOpen}
         onOpenChange={(next) => {

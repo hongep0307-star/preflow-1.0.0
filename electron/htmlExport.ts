@@ -39,10 +39,11 @@ interface ExportHtmlRequest {
   format?: "zip" | "single-html";
   /** export 한 앱의 UI 언어 — 뷰어 초기 언어 기본값으로 직렬화. */
   language?: "ko" | "en";
-  /** 폴더 트리를 한정할 폴더 경로("folder:" 접두 유무 무관). folder scope 가
-   *  아닌데도(예: 활성 폴더에서 선택 export) 폴더 트리를 그 폴더 하위로만
-   *  보이게 하고 싶을 때 사용. folder scope 면 folderTag 가 우선. */
-  folderScope?: string;
+  /** 뷰어 폴더 트리를 한정할 폴더 경로 목록("folder:" 접두 유무 무관). folder
+   *  scope 가 아닌데도(예: 다중 폴더 선택 / 활성 폴더에서 선택 export) 트리를
+   *  그 폴더(들)로만 보이게 하고 싶을 때 사용. folder scope 면 folderTag 가
+   *  우선. (하위호환: 단일 string 도 허용.) */
+  folderScope?: string | string[];
 }
 
 interface ReferenceRow {
@@ -539,15 +540,19 @@ export async function exportLibraryAsHtml(req: ExportHtmlRequest): Promise<Expor
   const rows = resolveRows(req);
 
   const scopeLabel = req.folderTag?.replace(/^folder:/, "") || req.scope;
-  /* 폴더 범위 export 면 폴더 트리를 그 폴더 하위로만 한정한다. 한 자료가
+  /* 폴더 범위 export 면 폴더 트리를 그 폴더(들) 하위로만 한정한다. 한 자료가
    *  여러 폴더에 태깅돼 있어도(예: test_01 자료가 test_02/브리프매치에도
-   *  속함) 내보낸 폴더 밖의 유령 폴더가 트리에 섞이지 않게 한다. */
-  const folderScopePath =
+   *  속함) 내보낸 폴더 밖의 유령 폴더가 트리에 섞이지 않게 한다.
+   *  folder scope 면 folderTag 우선, 아니면 folderScope(단일 string 또는
+   *  다중 string[]) 를 정규화해 배열로 만든다. */
+  const folderScopePaths: string[] =
     req.scope === "folder" && req.folderTag
-      ? req.folderTag.replace(/^folder:/, "")
+      ? [req.folderTag.replace(/^folder:/, "")]
       : req.folderScope
-        ? req.folderScope.replace(/^folder:/, "")
-        : undefined;
+        ? (Array.isArray(req.folderScope) ? req.folderScope : [req.folderScope]).map((s) =>
+            s.replace(/^folder:/, ""),
+          )
+        : [];
   const today = new Date().toISOString().slice(0, 10);
   const baseName = sanitizeName(req.suggestedName || `${scopeLabel}-${today}`);
   const extension = format === "zip" ? "zip" : "html";
@@ -629,7 +634,7 @@ export async function exportLibraryAsHtml(req: ExportHtmlRequest): Promise<Expor
       generated_at: new Date().toISOString(),
       item_count: items.length,
       items,
-      folders: buildFolderNodes(items, folderScopePath),
+      folders: buildFolderNodes(items, folderScopePaths, req.includeSubfolders),
       source_language: req.language === "ko" || req.language === "en" ? req.language : undefined,
     };
     const finalHtml = buildViewerHtml(bundle.html, viewerData);
@@ -678,7 +683,7 @@ export async function exportLibraryAsHtml(req: ExportHtmlRequest): Promise<Expor
       generated_at: new Date().toISOString(),
       item_count: items.length,
       items,
-      folders: buildFolderNodes(items, folderScopePath),
+      folders: buildFolderNodes(items, folderScopePaths, req.includeSubfolders),
       source_language: req.language === "ko" || req.language === "en" ? req.language : undefined,
     };
     const finalHtml = buildViewerHtml(bundle.html, viewerData);

@@ -93,6 +93,14 @@ interface LibrarySidebarProps {
   folderRows: LibraryFolderRow[];
   activeTag: string | null;
   onTagChange: (tag: string | null) => void;
+  /** 사이드바 다중 폴더 선택(Ctrl/Shift). 일반 폴더·브리프 매치 폴더에만
+   *  적용되며, 각 FolderRow 의 활성 하이라이트는 이 집합 멤버십으로 결정된다.
+   *  빠른 필터·스마트 폴더·Pinned 단축은 영향 없음(단일 선택 유지). */
+  selectedFolderTags: string[];
+  /** Shift 범위 선택의 기준점(앵커, 보통 마지막 클릭한 폴더 태그). */
+  anchorTag: string | null;
+  /** 모디파이어를 반영해 계산된 새 선택 집합과 앵커를 부모로 올린다. */
+  onFolderSelectionChange: (tags: string[], anchor: string | null) => void;
   /** 그리드가 활성 폴더의 자식 항목까지 포함해 보고 있는지. FolderRow
    *  의 "Show subfolder content" 체크박스 표시 상태에만 사용. 활성
    *  폴더가 아닌 다른 폴더의 행에서는 항상 false 로 표시되어 토글 시
@@ -221,6 +229,9 @@ export function LibrarySidebar({
   folderRows,
   activeTag,
   onTagChange,
+  selectedFolderTags,
+  anchorTag,
+  onFolderSelectionChange,
   recursiveActiveFolder,
   onToggleRecursiveActiveFolder,
   onCreateFolder,
@@ -410,6 +421,54 @@ export function LibrarySidebar({
     [directCounts],
   );
 
+  /* ─────── 다중 폴더 선택 (Ctrl/Shift) ───────
+   * 모디파이어→선택 집합 계산은 정렬된 행 목록과 앵커를 가진 사이드바가
+   * 소유한다. section 은 클릭한 행이 속한 정렬 목록(일반 또는 브리프 매치)
+   * 으로, Shift 범위는 그 섹션 내로만 한정해 예측 가능하게 한다. */
+  const handleFolderClick = useCallback(
+    (
+      tag: string,
+      mods: { ctrl: boolean; shift: boolean },
+      section: LibraryFolderRow[],
+    ) => {
+      const tagsInSection = section.map((r) => r.tag);
+      if (mods.shift && anchorTag && tagsInSection.includes(anchorTag)) {
+        const a = tagsInSection.indexOf(anchorTag);
+        const b = tagsInSection.indexOf(tag);
+        if (b === -1) {
+          onFolderSelectionChange([tag], tag);
+          return;
+        }
+        const [lo, hi] = a < b ? [a, b] : [b, a];
+        // 범위 교체, 앵커는 방금 클릭한 tag.
+        onFolderSelectionChange(tagsInSection.slice(lo, hi + 1), tag);
+      } else if (mods.ctrl) {
+        const set = new Set(selectedFolderTags);
+        if (set.has(tag)) set.delete(tag);
+        else set.add(tag);
+        const next = [...set];
+        onFolderSelectionChange(next, next.length ? tag : null);
+      } else {
+        // 일반 클릭: 단독 선택이면 해제(기존 토글 UX), 아니면 단독 선택.
+        const isOnly = selectedFolderTags.length === 1 && selectedFolderTags[0] === tag;
+        onFolderSelectionChange(isOnly ? [] : [tag], isOnly ? null : tag);
+      }
+    },
+    [anchorTag, selectedFolderTags, onFolderSelectionChange],
+  );
+
+  /* 우클릭 시 selection 정합성 — Finder/Explorer 규칙: 선택 *밖* 폴더를 우클릭
+   * 하면 선택을 그 폴더 하나로 collapse 해 메뉴 대상과 선택을 일치시킨다. 선택
+   * *안* 폴더를 우클릭하면 다중 선택을 유지(컴팩트 일괄 메뉴가 뜬다). */
+  const handleFolderContextMenu = useCallback(
+    (tag: string) => {
+      if (!selectedFolderTags.includes(tag)) {
+        onFolderSelectionChange([tag], tag);
+      }
+    },
+    [selectedFolderTags, onFolderSelectionChange],
+  );
+
   // ─────── DnD ───────
   // DnD 컨텍스트는 LibraryPage 가 소유 — 폴더↔폴더, reference→폴더 두 가지
   // 흐름을 한 컨텍스트에서 처리해야 grid 카드를 사이드바 폴더로 떨어뜨릴
@@ -523,7 +582,7 @@ export function LibrarySidebar({
                 {briefMatchFolders!.map((row) => {
                   const path = row.tag.replace(/^folder:/, "");
                   const meta = allMeta[path] ?? {};
-                  const isActive = activeTag === row.tag;
+                  const isActive = selectedFolderTags.includes(row.tag);
                   return (
                     <FolderRow
                       key={row.tag}
@@ -532,14 +591,17 @@ export function LibrarySidebar({
                       indentDepth={0}
                       hasChildren={false}
                       meta={meta}
-                      isShowingSubfolderContent={isActive && recursiveActiveFolder}
+                      isShowingSubfolderContent={row.tag === anchorTag && recursiveActiveFolder}
                       displayCount={row.count}
                       isAggregatedCount={false}
                       activeDragId={activeDragId}
                       activeDragKind={activeDragKind}
                       isPinned={meta.pinned === true}
                       hasAiAutoClassify={folderAiAutoClassify?.has(path) ?? false}
-                      onToggleActive={() => onTagChange(isActive ? null : row.tag)}
+                      isMultiSelected={selectedFolderTags.length > 1 && isActive}
+                      selectionCount={selectedFolderTags.length}
+                      onContextMenuOpen={() => handleFolderContextMenu(row.tag)}
+                      onToggleActive={(mods) => handleFolderClick(row.tag, mods, briefMatchFolders!)}
                       onToggleExpanded={() => {}}
                       onCreateSubfolder={() => onCreateFolder?.(path)}
                       onRename={() => onRenameFolder?.(row)}
@@ -685,7 +747,7 @@ export function LibrarySidebar({
                 {sortedVisibleFolderRows.slice(0, 200).map((row) => {
                   const path = row.tag.replace(/^folder:/, "");
                   const meta = allMeta[path] ?? {};
-                  const isActive = activeTag === row.tag;
+                  const isActive = selectedFolderTags.includes(row.tag);
                   // 접혔고 자식이 있으면 합산 카운트(자기+자손).
                   // 그 외에는 직속 카운트만 (= row.count).
                   const isCollapsedAggregated =
@@ -701,14 +763,17 @@ export function LibrarySidebar({
                       indentDepth={row.depth}
                       hasChildren={parentPathsWithChildren.has(path)}
                       meta={meta}
-                      isShowingSubfolderContent={isActive && recursiveActiveFolder}
+                      isShowingSubfolderContent={row.tag === anchorTag && recursiveActiveFolder}
                       displayCount={displayCount}
                       isAggregatedCount={isCollapsedAggregated}
                       activeDragId={activeDragId}
                       activeDragKind={activeDragKind}
                       isPinned={meta.pinned === true}
                       hasAiAutoClassify={folderAiAutoClassify?.has(path) ?? false}
-                      onToggleActive={() => onTagChange(isActive ? null : row.tag)}
+                      isMultiSelected={selectedFolderTags.length > 1 && isActive}
+                      selectionCount={selectedFolderTags.length}
+                      onContextMenuOpen={() => handleFolderContextMenu(row.tag)}
+                      onToggleActive={(mods) => handleFolderClick(row.tag, mods, sortedVisibleFolderRows)}
                       onToggleExpanded={() => {
                         const current = allMeta[path]?.expanded;
                         const willExpand = current === false; // false → 펼침으로 전환

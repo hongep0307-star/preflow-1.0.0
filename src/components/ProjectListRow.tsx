@@ -202,24 +202,50 @@ export const ProjectListRow = ({
               <Check className="w-3 h-3" strokeWidth={3} />
             </button>
           )}
-          {formatLabel && (
-            <span
+          {/* 좌상단 배지 스택 — formatLabel(비율) + 즐겨찾기 토글. 그리드
+              ProjectCard 와 100% 동일한 구조/위치/시각 언어로 통일해, 그리드↔
+              리스트 전환 시 별의 위치·모양이 흔들리지 않게 한다. 비율 라벨만
+              체크박스 등장 시 translate-x-6 으로 비켜 가고, 즐겨찾기는 항상 같은
+              자리에 머문다. */}
+          <div className="absolute left-2 top-2 z-10 flex flex-col items-start gap-1 pointer-events-none">
+            {formatLabel && (
+              <span
+                className={cn(
+                  "pointer-events-auto bg-black/70 px-1.5 py-0.5 font-mono text-2xs font-semibold text-white transition-transform duration-150",
+                  !onSelectClick
+                    ? ""
+                    : selected
+                    ? "translate-x-6"
+                    : "group-hover:translate-x-6",
+                )}
+                style={{ borderRadius: 0 }}
+              >
+                {formatLabel}
+              </span>
+            )}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                void handleToggleFavorite();
+              }}
               className={cn(
-                "absolute z-10 bg-black/70 px-1.5 py-0.5 font-mono text-2xs font-semibold text-white transition-all duration-150",
-                // ProjectCard 와 동일 — 이 카드가 selected 이거나 직접 호버
-                // 중일 때만 슬라이드. selectionActive 만으로는 움직이지 않음.
-                // y(top) 는 항상 동일하게 유지 — x 만 슬라이드 (체크박스 등장
-                // 과 동시에 라벨이 위로 튀어 오르는 잡음 제거).
-                !onSelectClick
-                  ? "left-2 top-2"
-                  : selected
-                  ? "left-8 top-2"
-                  : "left-2 top-2 group-hover:left-8",
+                "pointer-events-auto flex h-5 w-5 items-center justify-center transition-opacity duration-150",
+                isFavorite
+                  ? "bg-primary/90 text-primary-foreground opacity-100 hover:bg-primary"
+                  : "border border-white/40 bg-black/55 text-white/80 opacity-0 group-hover:opacity-100 hover:bg-black/75 hover:border-white/70",
               )}
+              style={{ borderRadius: 0 }}
+              title={isFavorite ? t("dashboard.removeFromFavorites") : t("dashboard.addToFavorites")}
+              aria-pressed={isFavorite}
+              aria-label={isFavorite ? t("dashboard.removeFromFavorites") : t("dashboard.addToFavorites")}
             >
-              {formatLabel}
-            </span>
-          )}
+              <Star
+                className="h-3 w-3"
+                fill={isFavorite ? "currentColor" : "none"}
+                strokeWidth={2.5}
+              />
+            </button>
+          </div>
 
           {/* D-day 칩 — 그리드 카드와 동일하게 우상단으로 이동. 메타 영역과
               중복 표기되는 것을 막고 마감 임박을 한눈에 보여준다. */}
@@ -271,28 +297,6 @@ export const ProjectListRow = ({
             </div>
           )}
 
-          {/* 별 토글 — 그리드 ProjectCard 와 동일하게 썸네일 우하단 코너. 동일
-              시각 언어로 통일해 그리드↔리스트 전환 시 별 위치가 흔들리지 않게. */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              void handleToggleFavorite();
-            }}
-            className={cn(
-              "absolute right-1.5 bottom-1.5 z-10 flex h-7 w-7 items-center justify-center transition-all duration-150",
-              isFavorite
-                ? "text-primary opacity-100"
-                : "text-white opacity-0 group-hover:opacity-60 hover:!opacity-100",
-            )}
-            style={{
-              borderRadius: 0,
-              filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.55))",
-            }}
-            title={isFavorite ? t("dashboard.removeFromFavorites") : t("dashboard.addToFavorites")}
-            aria-pressed={isFavorite}
-          >
-            <Star className="w-4 h-4" fill={isFavorite ? "currentColor" : "none"} strokeWidth={2} />
-          </button>
         </div>
 
         {/* ── 우측 본문 — 그리드 카드 하단부와 동일한 3 단 구조(헤더/진행/메타).

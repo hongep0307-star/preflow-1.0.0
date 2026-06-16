@@ -112,15 +112,14 @@
     background: hsl(var(--foreground) / 0.2);
   }
 
-  /* Focus ring — keyboard-only (mouse clicks don't trigger).
-     얇은 무채색 outline 만 — 과거의 4px primary-red halo (box-shadow) 는
-     ESC 로 popover/dropdown 이 닫히면서 trigger 에 focus 가 복원될 때
-     화면 곳곳에 빨간 박스가 떠 시각 소음이 컸다. halo 제거 + --ring 무채색
-     화로 차분하지만 인식 가능한 키보드 인디케이터로 유지. */
+  /* Focus outline — 전역 비활성화.
+     과거엔 얇은 무채색 outline 을 키보드 인디케이터로 뒀으나, role="button"
+     행(사이드바 폴더 등)을 클릭한 뒤 Shift 등 modifier 를 누르면 브라우저가
+     :focus-visible 로 승격시켜 흰 네모 프레임이 떠 시각 소음이 컸다. 선택
+     상태는 컴포넌트별 강조(좌측 primary 바 / bg-accent / selection ring)로
+     이미 충분히 드러나므로 전역 outline 은 제거한다. */
   *:focus-visible {
-    outline: 1.5px solid hsl(var(--ring));
-    outline-offset: 2px;
-    border-radius: 2px;
+    outline: none;
   }
 
   /* Radix interactive items 는 자체 data-highlighted / focus:bg-accent 으로

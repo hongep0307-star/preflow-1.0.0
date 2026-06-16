@@ -52,8 +52,8 @@ interface HtmlExportDialogProps {
   itemCount: number;
   /** 범위 내 아이템 file_size 합(바이트) — single-html 용량 사전 표기용. */
   sizeBytes?: number;
-  /** 폴더 트리를 한정할 폴더 경로(선택 export 등 folder scope 가 아닐 때). */
-  folderScope?: string;
+  /** 뷰어 폴더 트리를 한정할 폴더 경로 목록(다중 폴더 선택 또는 선택 export 시). */
+  folderScope?: string[];
 }
 
 export function HtmlExportDialog({
@@ -107,11 +107,13 @@ export function HtmlExportDialog({
   const runExport = async () => {
     setBusy(true);
     try {
+      const hasFolderScope = (folderScope?.length ?? 0) > 0;
       const result = await exportPackAsHtml({
         scope,
         ids,
         folderTag,
-        includeSubfolders: scope === "folder" ? includeSubfolders : undefined,
+        // folder scope export 또는 다중 폴더 선택 export 에서 하위폴더 포함 여부를 전달.
+        includeSubfolders: scope === "folder" || hasFolderScope ? includeSubfolders : undefined,
         suggestedName: packName,
         title: viewerTitle,
         format,
@@ -228,7 +230,7 @@ export function HtmlExportDialog({
               </div>
             </RadioGroup>
           </div>
-          {scope === "folder" ? (
+          {scope === "folder" || (folderScope?.length ?? 0) > 0 ? (
             <label className="flex items-center gap-2 text-meta">
               {/* 다이얼로그 전체가 rounded-none 정책이라 Checkbox 의 기본
                   rounded-sm 도 0 으로 덮어쓴다. Checkbox 컴포넌트는

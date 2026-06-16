@@ -429,13 +429,48 @@ export function RegionOverlay({
             }}
             title={note.text}
           >
-            {/* 박스 위에 떠 있는 작은 라벨 — 사용자가 한눈에 어떤 코멘트인지
-                알 수 있도록. 편집 중에는 popover 가 그 자리를 차지하므로 라벨
-                숨김. -translate-y-full 로 박스 *바로 위* 에 붙임. */}
+            {/* 박스 위에 떠 있는 라벨 — 사용자가 한눈에 어떤 코멘트인지 알 수
+                있도록. 편집 중에는 popover 가 그 자리를 차지하므로 라벨 숨김.
+                -translate-y-full 로 박스 *바로 위* 에 붙임.
+                긴 코멘트가 잘리지 않도록 truncate 대신 줄바꿈(whitespace-normal
+                + break-words) 으로 전체 텍스트를 표시한다. 폰트 크기는 고정이라
+                PDF 줌/패널 리사이즈로 박스 크기가 바뀌어도 텍스트는 그대로
+                읽히고, max-w 로 가로 폭만 제한해 박스가 작아도 라벨이 과도하게
+                넓어지지 않게 한다. */}
             {!isEditing ? (
               <div
-                className="pointer-events-none absolute left-0 top-0 max-w-[240px] -translate-y-full truncate bg-primary px-1.5 py-0.5 text-2xs text-primary-foreground shadow-sm"
-                style={{ borderRadius: 0 }}
+                className={cn(
+                  "pointer-events-none absolute left-0 top-0 leading-snug bg-primary px-1.5 py-0.5 text-2xs text-primary-foreground shadow-sm",
+                  /* 기본은 박스 *바로 위*. 단 박스가 컨테이너 상단에 가까우면
+                     위로 뻗은 라벨이 스크롤 영역 밖으로 잘리므로, 그 경우
+                     translate 를 빼서 박스 *안쪽 상단* 에 붙여 항상 보이게 한다.
+                     (PDF 줌인 시 상단 영역의 라벨이 사라지던 케이스 방지.) */
+                  px.top > 44 && "-translate-y-full",
+                )}
+                /* 줄바꿈 정책은 인라인 스타일로 강제 — Tailwind 의 break-words
+                   (overflow-wrap: break-word) 는 *절대위치 요소의 폭(min-content)
+                   계산* 에 영향을 주지 않아 공백 없는 긴 문자열이 wrap 되지 않고
+                   잘리는 버그가 있다. overflow-wrap: anywhere 는 min-content 를
+                   줄여 박스가 maxWidth 로 줄어들고 텍스트가 확실히 여러 줄로
+                   풀린다. maxWidth 는 박스 폭과 240px 중 큰 값으로 둬, 넓은
+                   영역에서는 한 줄에 더 많이 보이고 좁은 영역에서도 240px 까지는
+                   확보한다. */
+                style={{
+                  borderRadius: 0,
+                  /* 영역 박스의 border-2(2px) 바깥 가장자리와 좌측 정렬을 맞춘다.
+                     absolute 자식의 left:0 은 부모 *테두리 안쪽* 기준이라, 보정이
+                     없으면 라벨이 박스 선보다 2px 안쪽으로 들어가 박스가 좌측으로
+                     튀어나와 보인다. */
+                  left: -2,
+                  maxWidth: Math.max(240, px.width),
+                  whiteSpace: "normal",
+                  overflowWrap: "anywhere",
+                  wordBreak: "break-word",
+                  /* lineHeight 를 인라인으로 못박아 라벨 strip 이 항상 텍스트를
+                     충분히 감싸게 한다. 상위 컨테이너의 lineHeight 상속이나
+                     text-2xs 의 tight line-height 로 strip 이 얇아지지 않도록. */
+                  lineHeight: 1.35,
+                }}
               >
                 {note.text}
               </div>

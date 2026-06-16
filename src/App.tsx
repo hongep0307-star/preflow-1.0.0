@@ -1,12 +1,14 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { Toaster } from '@/components/ui/toaster';
+import { toast } from '@/hooks/use-toast';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import AuroraBackground from '@/components/AuroraBackground';
 import { UiLanguageProvider, useT } from '@/lib/uiLanguage';
+import { CONVERT_CANCELLED_FLAG } from '@shared/constants';
 import { PageShell } from '@/components/PageShell';
 import Index from './pages/Index';
 import NotFound from './pages/NotFound';
@@ -89,11 +91,30 @@ const RouteSuspenseFallback = () => {
   );
 };
 
+/* 워크스페이스 전환(reload)으로 진행 중이던 영상 변환이 취소된 경우, reload 너머로
+   넘어온 localStorage 플래그를 읽어 새 워크스페이스(라이브러리/프로젝트/대시보드
+   무엇이든)에서 안내 토스트를 한 번 띄운다. */
+function WorkspaceConvertCancelNotice() {
+  const t = useT();
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(CONVERT_CANCELLED_FLAG) === "1") {
+        localStorage.removeItem(CONVERT_CANCELLED_FLAG);
+        toast({ title: t("library.toast.convertCancelledWorkspace") });
+      }
+    } catch {
+      /* localStorage 불가 — 무시 */
+    }
+  }, [t]);
+  return null;
+}
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <UiLanguageProvider>
       <TooltipProvider>
         <Toaster />
+        <WorkspaceConvertCancelNotice />
         <AuroraBackground />
         <HashRouter>
           <SettingsModalProvider>

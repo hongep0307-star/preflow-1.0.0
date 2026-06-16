@@ -2239,7 +2239,8 @@ function LibraryCard({
             ))}
           </ContextMenuSubContent>
         </ContextMenuSub>
-        <ContextMenuItem disabled={Boolean(item.deleted_at)} onSelect={() => actions.onClassify(item)}>
+        {/* doc(문서/PDF/오디오/zip)은 시각 분석 대상이 아니라 비활성. */}
+        <ContextMenuItem disabled={Boolean(item.deleted_at) || item.kind === "doc"} onSelect={() => actions.onClassify(item)}>
           <RefreshCw className="mr-2 h-3.5 w-3.5" />
           {selectedCount > 1
             ? t("library.grid.ctx.reclassifyAiN", { n: selectedCount })

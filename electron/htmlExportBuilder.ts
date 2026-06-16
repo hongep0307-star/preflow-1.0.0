@@ -40,13 +40,17 @@ export interface ViewerFolderNode {
  *  - `count`: 해당 경로에 *직접* 소속된 아이템 수(하위 미포함).
  *  - 중간(조상) 경로도 노드로 포함해 트리가 끊기지 않게 한다(직접 소속이
  *    없는 조상은 count 0).
- *  - `scopePath` 지정 시(폴더 범위 export) 그 경로와 하위 경로만 남긴다.
- *    한 자료가 여러 폴더에 태깅돼 있어도 내보낸 폴더 밖의 "유령 폴더" 가
- *    트리에 섞이지 않게 한다. ("folder:" prefix 없는 normalized path)
+ *  - `scopePath` 지정 시(폴더 범위 export) 그 경로(들)와 하위 경로만 남긴다.
+ *    단일 string 또는 다중 string[] 모두 허용. 한 자료가 여러 폴더에 태깅돼
+ *    있어도 내보낸 폴더 밖의 "유령 폴더" 가 트리에 섞이지 않게 한다.
+ *    ("folder:" prefix 없는 normalized path)
+ *  - `includeSubfolders=false` 면 scope 와 *정확히 일치하는* 경로만 남기고
+ *    하위 폴더는 제외한다(다이얼로그의 "하위 폴더 포함" 체크 해제와 매칭).
  *  순수 함수 — vitest 로 직접 검증 가능. */
 export function buildFolderNodes(
   items: Array<{ tags: string[] }>,
-  scopePath?: string,
+  scopePath?: string | string[],
+  includeSubfolders: boolean = true,
 ): ViewerFolderNode[] {
   const FOLDER_PREFIX = "folder:";
   const direct = new Map<string, number>();
@@ -65,9 +69,13 @@ export function buildFolderNodes(
       }
     }
   }
-  const scope = scopePath?.replace(/^\/+|\/+$/g, "") || "";
+  // scope 는 단일 string 또는 다중 string[] 모두 허용. 정규화 후 빈 항목 제거.
+  const scopes = (Array.isArray(scopePath) ? scopePath : scopePath != null ? [scopePath] : [])
+    .map((s) => s.replace(/^\/+|\/+$/g, ""))
+    .filter(Boolean);
   const inScope = (path: string): boolean =>
-    !scope || path === scope || path.startsWith(`${scope}/`);
+    scopes.length === 0
+      || scopes.some((s) => path === s || (includeSubfolders && path.startsWith(`${s}/`)));
   return [...allPaths]
     .filter(inScope)
     .sort((a, b) => a.localeCompare(b))

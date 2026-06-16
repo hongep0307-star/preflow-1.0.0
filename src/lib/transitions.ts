@@ -33,11 +33,13 @@
 
 import { supabase } from "./supabase";
 import { IMAGE_SIZE_MAP, type VideoFormat, type ContiModel, type BriefAnalysis } from "./conti";
+import { getGptQualityDefault } from "./imageGenPreference";
 import {
   DEFAULT_TRANSITION_KEY,
   KNOWLEDGE_TRANSITION_GRAMMAR,
   TRANSITION_MAP,
   normalizeTransitionKey,
+  isFollowIntentTransition,
   type TransitionAnchor,
   type TransitionKey,
   type TransitionSpec,
@@ -289,6 +291,21 @@ Produce a single, vivid, visual English paragraph (3–5 sentences) describing t
 
 OUTPUT FORMAT: plain English prose only — no JSON, no bullet points, no markdown, no quotes. One paragraph. End with the sentence: "Do not render any text, subtitles, logos, UI overlays, or watermarks in the frame."`;
 
+/** Appended to the system prompt when the TR card is in "follow description"
+ *  (NONE) mode — i.e. the director intentionally picked no preset technique.
+ *  It overrides the technique-centric rules above so the director's free-form
+ *  intent becomes the sole design basis (for motion-specific transitions that
+ *  don't map to any of the preset techniques). */
+const FOLLOW_INTENT_SYSTEM_OVERRIDE = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+OVERRIDE — "FOLLOW DESCRIPTION" MODE (this section supersedes the technique rules above):
+
+The director has intentionally chosen NO preset technique for this TR. There is no library technique to honor as the structural spine. Instead:
+  · The DIRECTOR'S TRANSITION INTENT below is the SINGLE, AUTHORITATIVE design basis for the frame. Realize exactly the visual event it describes — even if it is not one of the preset techniques (e.g. lights flickering off then on, a color-grade flip, a custom motif). Do NOT substitute a generic camera move (whip pan, zoom) just because the catalog defaults to one.
+  · Ignore rule #1 (technique spine). Rules about identity preservation and the brief's visual direction still apply.
+  · ANCHOR DISCIPLINE is relaxed to a soft default: keep the anchor shot's identities/environment as the base of the frame UNLESS the intent explicitly calls for both shots or a non-anchor element. Still avoid a flat crossover poster of both protagonists at equal weight unless the intent asks for it.
+  · Capture the intent at its single most expressive instant (one still frame). If the intent describes a temporal beat (e.g. "lights flicker off then on"), render the most telling moment of that beat.`;
+
 /** Resolve the effective technique for this TR. Legacy / unknown stored
  *  values normalize to `null`, and we fall back to the default at the
  *  last moment so the Claude prompt always has a concrete spec to
@@ -329,17 +346,27 @@ function buildTransitionUserMessage(opts: GenerateTransitionFrameOptions): strin
   parts.push(buildShotContextBlock(`SHOT B — Scene ${next.scene_number} (following)`, next));
   parts.push("");
 
-  const { key, spec, wasUnset } = resolveTransitionSpec(tr.transition_type);
-  parts.push(`TRANSITION TECHNIQUE: ${key} — ${spec.label}`);
-  parts.push(`ANCHOR: ${spec.anchor} — ${describeAnchorForUserMessage(spec.anchor)}`);
-  parts.push(`TECHNIQUE GUIDE: ${spec.guide}`);
-  if (wasUnset) {
+  const intent = tr.description?.trim();
+  // "설명 따름(NONE)": 프리셋 기법 뼈대를 강제하지 않고 의도 텍스트로만 생성.
+  // 단 의도가 비어 있으면 가이드 없이 생성될 수 없으므로 기본 기법으로 폴백한다.
+  const followIntent = isFollowIntentTransition(tr.transition_type) && !!intent;
+  if (followIntent) {
+    parts.push("TRANSITION TECHNIQUE: (none — no preset technique imposed)");
     parts.push(
-      "(The director has not yet picked a specific technique for this TR; the default above was applied. Still follow its guide and anchor as the structural spine of the frame.)",
+      "The director intentionally left the technique unset so the transition is driven SOLELY by the intent below. Do not force any of the preset techniques; build the bridge motion/visual exactly from the director's intent.",
     );
+  } else {
+    const { key, spec, wasUnset } = resolveTransitionSpec(tr.transition_type);
+    parts.push(`TRANSITION TECHNIQUE: ${key} — ${spec.label}`);
+    parts.push(`ANCHOR: ${spec.anchor} — ${describeAnchorForUserMessage(spec.anchor)}`);
+    parts.push(`TECHNIQUE GUIDE: ${spec.guide}`);
+    if (wasUnset) {
+      parts.push(
+        "(The director has not yet picked a specific technique for this TR; the default above was applied. Still follow its guide and anchor as the structural spine of the frame.)",
+      );
+    }
   }
 
-  const intent = tr.description?.trim();
   if (intent) {
     parts.push("");
     parts.push("DIRECTOR'S TRANSITION INTENT (highest-priority creative directive):");
@@ -347,9 +374,15 @@ function buildTransitionUserMessage(opts: GenerateTransitionFrameOptions): strin
   }
 
   parts.push("");
-  parts.push(
-    "Write ONE paragraph (3–5 sentences) describing the bridging frame. The two attached images show all the identities and materials you may draw on. Identities and environment for the rendered frame come from the ANCHOR shot; the other shot's reference image tells you what the transition is moving toward but its protagonist / product should NOT appear as a second subject in this frame. Avoid rendering both subjects at equal weight — that reads as a crossover poster, not a transition.",
-  );
+  if (followIntent) {
+    parts.push(
+      "Write ONE paragraph (3–5 sentences) describing the bridging frame that realizes the DIRECTOR'S TRANSITION INTENT above as faithfully as possible. The two attached images give you the identities, materials, and palette to draw on. Render the specific visual event the intent describes (do not substitute a generic camera move). Keep the anchoring shot's identities/environment as the base unless the intent explicitly calls for both shots; still avoid a flat side-by-side crossover of both protagonists unless the intent asks for it.",
+    );
+  } else {
+    parts.push(
+      "Write ONE paragraph (3–5 sentences) describing the bridging frame. The two attached images show all the identities and materials you may draw on. Identities and environment for the rendered frame come from the ANCHOR shot; the other shot's reference image tells you what the transition is moving toward but its protagonist / product should NOT appear as a second subject in this frame. Avoid rendering both subjects at equal weight — that reads as a crossover poster, not a transition.",
+    );
+  }
   return parts.join("\n");
 }
 
@@ -365,11 +398,17 @@ async function generateTransitionBeat(opts: GenerateTransitionFrameOptions): Pro
       source: { type: "url", url },
     }));
 
+    // "설명 따름(NONE)" + 의도가 있으면 기법 중심 규칙을 의도 중심으로 덮어쓴다.
+    const followIntent = isFollowIntentTransition(opts.tr.transition_type) && !!opts.tr.description?.trim();
+    const systemPrompt = followIntent
+      ? `${TRANSITION_SYSTEM_PROMPT}\n\n${FOLLOW_INTENT_SYSTEM_OVERRIDE}`
+      : TRANSITION_SYSTEM_PROMPT;
+
     const { data, error } = await supabase.functions.invoke("claude-proxy", {
       body: {
         model: "claude-sonnet-4-6",
         max_tokens: 800,
-        system: TRANSITION_SYSTEM_PROMPT,
+        system: systemPrompt,
         messages: [
           {
             role: "user",
@@ -412,6 +451,27 @@ function buildLegacyTransitionPrompt(
   next: TransitionAdjacentScene,
   brief: BriefAnalysis | null | undefined,
 ): string {
+  const intent = tr.description?.trim();
+  const followIntent = isFollowIntentTransition(tr.transition_type) && !!intent;
+
+  // "설명 따름(NONE)": 프리셋 기법 없이 디렉터 의도만으로 한 프레임을 만든다.
+  if (followIntent) {
+    const parts: string[] = [
+      "Create a single cinematic transition frame between two already-shot cuts, driven SOLELY by the director's transition intent below (no preset technique).",
+      "Render exactly the visual event the intent describes — do not substitute a generic camera move. Capture its single most expressive instant as one still frame.",
+    ];
+    const briefLines = buildBriefSummaryLines(brief);
+    if (briefLines.length) parts.push("", "[Project brief]", ...briefLines);
+    parts.push("", buildShotContextBlock("Shot A — previous scene", prev));
+    parts.push("", buildShotContextBlock("Shot B — next scene", next));
+    parts.push("", "[Director's transition intent — the sole design basis]", intent!);
+    parts.push(
+      "",
+      "Use the two reference images for identities, materials, and palette. Keep the anchoring shot's identities/environment as the base unless the intent explicitly calls for both shots. Avoid a flat side-by-side crossover of both protagonists unless the intent asks for it. Do not render any text, subtitles, logos, UI overlays, or watermarks.",
+    );
+    return parts.join("\n");
+  }
+
   const { key, spec } = resolveTransitionSpec(tr.transition_type);
   const parts: string[] = [
     `Create a single cinematic transition frame using the ${spec.label} technique (${key}).`,
@@ -428,8 +488,8 @@ function buildLegacyTransitionPrompt(
   parts.push("", buildShotContextBlock("Shot A — previous scene", prev));
   parts.push("", buildShotContextBlock("Shot B — next scene", next));
 
-  if (tr.description?.trim()) {
-    parts.push("", "[Director's transition intent — highest priority]", tr.description.trim());
+  if (intent) {
+    parts.push("", "[Director's transition intent — highest priority]", intent);
   }
 
   parts.push(
@@ -489,6 +549,10 @@ export async function generateTransitionFrame(opts: GenerateTransitionFrameOptio
       imageSize: IMAGE_SIZE_MAP[videoFormat],
       assetImageUrls: [prev.conti_image_url, next.conti_image_url],
       model: "gpt",
+      // 일반 컷(generateConti)과 동일하게 콘티 기능의 GPT 품질 설정을 따른다.
+      // (이게 없으면 백엔드가 전역 settings.gpt_image_quality 로 폴백해 콘티탭
+      //  품질 선택이 TR 에만 안 먹는 불일치가 생긴다.)
+      quality: getGptQualityDefault("conti"),
       timestamp: Date.now(),
       ...(jobId ? { __jobId: jobId } : {}),
     },

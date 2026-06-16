@@ -287,7 +287,10 @@ export const buildDirectionDirective = (mode: "narrative" | "motion" | "hybrid")
 - 우선순위 재배열: (1) 컷↔컷 시각 에너지 전환, (2) 트랜지션/그래픽 매치 설계, (3) 리듬/페이싱, (4) 서사 완결성. 인접 컷을 A→B "키네틱 페어" 로 설계한다(셰이프/컬러/구도가 컷을 가로질러 이어지게).
 - description 은 여전히 **단일 정지 프레임 상태문**으로 유지(이미지 생성 안전). 움직임/전환 의도는 description 이 아니라 아래 전용 필드에만 적는다.
 - motion_in: 이 컷이 화면에 어떻게 들어오는지(예: "좌측에서 슬라이드 인", "전 컷 실루엣에서 모프"). motion_out: 이 컷이 다음으로 어떻게 빠지는지(예: "우측으로 휩팬 이탈").
-- transition_to_next: 다음 컷으로의 추천 트랜지션 **기법 키 1개**. 반드시 모션 가능 기법에서만 고른다(아래 TRANSITION TECHNIQUE LIBRARY 에서 medium 이 live 가 아닌 것: WHIP_PAN, ZOOM_PUNCH, GLITCH, DATAMOSH, CHROMATIC_SPLIT, VHS_WARP, MORPH, LIQUID_WARP, SHATTER, PRISM, SHAPE_WIPE, IRIS_WIPE, LAYER_SLIDE, LAYER_PUSH, KINETIC_TYPO, GRAPHIC_MATCH). 매 컷에 억지로 넣지 말고 전환이 의미있는 경계에만.
+- transition_to_next: 다음 컷으로의 추천 트랜지션 **기법 키 1개**. 반드시 아래 라이브러리의 **정확한 영문 키**로만 적는다(한국어/자유 표현 금지): WHIP_PAN, ZOOM_PUNCH, GLITCH, DATAMOSH, CHROMATIC_SPLIT, VHS_WARP, MORPH, LIQUID_WARP, SHATTER, PRISM, SHAPE_WIPE, IRIS_WIPE, LAYER_SLIDE, LAYER_PUSH, KINETIC_TYPO, GRAPHIC_MATCH.
+- ⚠️ 트랜지션 이펙트는 **예외적으로만** 넣는다(모든 컷 간에 효과가 들어가는 게 아니다). 기본값은 null 이고, 아래 조건에 해당하는 **의미있는 경계에서만** 채운다:
+  (1) **sequence(씬 그룹) 경계** — 장소·시간·비트가 바뀌는 지점, 또는 (2) **하이라이트 컷 진입**(is_highlight 컷의 앞), 또는 (3) 두 컷 사이에 **셰이프/컬러/구도 매치**가 실제로 성립해 기법적 동기가 분명한 경우.
+- 남발 금지: 모든 컷에 기계적으로 넣지는 말되, 위 조건에 맞는 **의미있는 경계에는 적극적으로** 표기한다. 연속된 컷에 똑같은 효과를 연달아 넣는 것만 피하고, 동기가 약한 곳은 null.
 - 마지막 컷의 transition_to_next 는 null.`;
   }
   return `[현재 연출 모드] 하이브리드

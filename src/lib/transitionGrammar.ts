@@ -487,6 +487,19 @@ const VALID_KEYS = new Set<string>(TRANSITIONS.map((t) => t.key));
  *  to refine via the director's intent text. */
 export const DEFAULT_TRANSITION_KEY: TransitionKey = "WHIP_PAN";
 
+/** Sentinel stored in `transition_type` for "follow the director's intent
+ *  text — impose no preset technique". Distinct from unset/legacy (which
+ *  silently falls back to DEFAULT_TRANSITION_KEY): NONE is an explicit user
+ *  choice that tells the generator to drop the fixed technique spine and let
+ *  the free-form intent (`description`) drive the frame. Useful for
+ *  motion-specific transitions that don't map to any of the preset 19. */
+export const TRANSITION_NONE = "NONE";
+
+/** True when the stored value is the explicit "follow intent" sentinel. */
+export function isFollowIntentTransition(raw: string | null | undefined): boolean {
+  return typeof raw === "string" && raw.trim().toUpperCase() === TRANSITION_NONE;
+}
+
 /**
  * Normalizes a stored `transition_type` string into a known key, or
  * `null` if we can't confidently map it.

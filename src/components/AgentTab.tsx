@@ -26,6 +26,7 @@ import {
   Columns2,
   MessageSquare,
   SlidersHorizontal,
+  ChevronDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -119,6 +120,20 @@ interface Props {
    *  뒤 브리프 분석이 끝나는 케이스에서, 활성화 시점에 브리프를 재조회하기 위함. */
   isActive?: boolean;
 }
+
+/** 연출 모드 짧은 라벨(아코디언 헤더/버튼 공용). */
+const directionModeLabel = (mode: DirectionMode, lang: "ko" | "en"): string =>
+  lang === "en"
+    ? mode === "narrative"
+      ? "Narrative"
+      : mode === "motion"
+        ? "Motion"
+        : "Hybrid"
+    : mode === "narrative"
+      ? "서사"
+      : mode === "motion"
+        ? "모션"
+        : "하이브리드";
 
 /** 방향 카드 클릭 시 채팅으로 보낼 확정 문구(이 메시지가 LLM 을 Phase 1 로 넘긴다). */
 const directionConfirmMsg = (mode: DirectionMode, lang: "ko" | "en"): string => {
@@ -215,7 +230,7 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
   const t = useT();
   const isMobile = useIsMobile();
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [chatHistory, setChatHistory] = useState<ChatLog[]>([]);
@@ -403,6 +418,8 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
   // 연출 방향 모드(서사/모션/하이브리드). null = 미확정 → 진입 시 선제안 게이팅.
   // ref 는 handleSend/auto-init 같은 async 클로저에서 최신값을 동기 참조하기 위함.
   const [directionMode, setDirectionModeState] = useState<DirectionMode | null>(null);
+  // 연출 방향 아코디언 열림 상태(채팅 입력창 위 항상 노출되는 모드 선택기).
+  const [directionOpen, setDirectionOpen] = useState(false);
   const directionModeRef = useRef<DirectionMode | null>(null);
   useEffect(() => {
     directionModeRef.current = directionMode;
@@ -1130,20 +1147,46 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
     return unsub;
   }, [projectId, setPendingScenes]);
 
-  useEffect(() => {
-    const container = chatContainerRef.current;
-    if (!container) return;
+  // 채팅 패널은 collapse/재오픈 시 통째로 언마운트→remount 되어 스크롤 컨테이너가
+  // 새 DOM 노드로 교체된다. useRef + useEffect([]) 로는 새 노드에 리스너가 다시
+  // 안 붙고 scrollTop=0(맨 위) 으로 리셋되는 문제가 있어, callback ref 로 마운트
+  // 시점마다 (1) 스크롤 리스너 재부착 (2) 마지막 메시지로 즉시 점프 를 처리한다.
+  const scrollCleanupRef = useRef<(() => void) | null>(null);
+  const setChatContainer = useCallback((node: HTMLDivElement | null) => {
+    if (scrollCleanupRef.current) {
+      scrollCleanupRef.current();
+      scrollCleanupRef.current = null;
+    }
+    chatContainerRef.current = node;
+    if (!node) return;
     const onScroll = () => {
-      const { scrollTop, scrollHeight, clientHeight } = container;
+      const { scrollTop, scrollHeight, clientHeight } = node;
       setUserScrolledUp(scrollTop + clientHeight < scrollHeight - 100);
     };
-    container.addEventListener("scroll", onScroll);
-    return () => container.removeEventListener("scroll", onScroll);
+    node.addEventListener("scroll", onScroll);
+    scrollCleanupRef.current = () => node.removeEventListener("scroll", onScroll);
+    // 마운트 직후 바닥으로 즉시 점프 (재오픈 시 scrollTop=0 리셋 보정).
+    requestAnimationFrame(() => {
+      node.scrollTop = node.scrollHeight;
+    });
   }, []);
+
   useEffect(() => {
     if (!userScrolledUp && (isLoading || chatHistory.length > 0))
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatHistory, isLoading, userScrolledUp]);
+
+  // 탭 복귀(display:none → block) 는 컨테이너가 unmount 되지 않아 callback ref 가
+  // 안 불린다. 이 경로의 scrollTop 리셋은 별도 effect 로 보정한다. chatCollapsed
+  // 가 풀려 재오픈되는 경우는 callback ref 가 처리하므로 여기선 닫힘 상태를 스킵.
+  useEffect(() => {
+    if (!isActive || chatCollapsed) return;
+    const id = requestAnimationFrame(() => {
+      const c = chatContainerRef.current;
+      if (c) c.scrollTop = c.scrollHeight;
+    });
+    return () => cancelAnimationFrame(id);
+  }, [isActive, chatCollapsed]);
 
   useEffect(() => {
     if (prevScenesLenRef.current === null) {
@@ -1567,13 +1610,22 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
       {/* 채팅 상단: 우측 패널 탭 바와 높이 맞춤
           우측 탭 바 = outer padding(10 + 10) + tablist(padding 3×2 + border 1×2 + 탭버튼 32) = 60 */}
       <div
-        className="flex items-center justify-end shrink-0"
+        className="flex items-center justify-between gap-3 shrink-0"
         style={{
           padding: "10px 14px",
           height: 60,
           borderBottom: "1px solid hsl(var(--border))",
         }}
       >
+        <div className="flex items-center justify-center min-w-0 flex-1">
+          <span
+            className="inline-flex items-center gap-2 truncate"
+            style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.02em", color: "rgba(255,255,255,0.85)" }}
+          >
+            <MessageSquare style={{ width: 15, height: 15, color: KR, flexShrink: 0 }} />
+            {t("agent.storyboardGuide")}
+          </span>
+        </div>
         {!isMobile && (
           <button
             onClick={() => setChatCollapsed(true)}
@@ -1603,7 +1655,7 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
           </button>
         )}
       </div>
-      <div className="flex-1 overflow-y-auto p-4 space-y-4" ref={chatContainerRef}>
+      <div className="flex-1 overflow-y-auto p-4 space-y-4" ref={setChatContainer}>
         {(() => {
           const cumulativeIds = new Set<string>();
           return displayMessages.map((msg, i) => {
@@ -1698,7 +1750,7 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
                   />
                 ))}
               </div>
-              <div className="text-caption text-muted-foreground mt-1">{t("agent.craftingScenario")}</div>
+              <div className="text-meta text-muted-foreground mt-1">{t("agent.craftingScenario")}</div>
             </div>
           </div>
         )}
@@ -1745,53 +1797,86 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
         </div>
       )}
       <div className="shrink-0 border-t border-border px-3 py-2.5">
-        {directionMode && (
-          <div className="flex items-center gap-1.5 mb-2">
-            <span className="text-2xs uppercase tracking-wider text-muted-foreground/60">
-              {briefLang === "en" ? "Direction" : "연출"}
-            </span>
-            {(["narrative", "motion", "hybrid"] as DirectionMode[]).map((m) => {
-              const label =
-                briefLang === "en"
-                  ? m === "narrative" ? "Narrative" : m === "motion" ? "Motion" : "Hybrid"
-                  : m === "narrative" ? "서사" : m === "motion" ? "모션" : "하이브리드";
-              const active = directionMode === m;
-              return (
-                <button
-                  key={m}
-                  onClick={() => {
-                    if (active) return;
-                    void persistDirectionMode(m);
-                    toast({
-                      title:
-                        briefLang === "en"
-                          ? `Direction set to ${label}. It applies from your next message.`
-                          : `연출 방향을 '${label}'으로 변경했어요. 다음 메시지부터 반영됩니다.`,
-                    });
-                  }}
-                  className="text-2xs font-medium uppercase tracking-wider px-2 py-0.5 transition-opacity hover:opacity-80"
-                  style={{
-                    borderRadius: 0,
-                    border: `1px solid ${active ? KR : "rgba(255,255,255,0.12)"}`,
-                    background: active ? "rgba(249,66,58,0.12)" : "transparent",
-                    color: active ? KR : "var(--color-text-tertiary, #888)",
-                  }}
-                >
-                  {label}
-                </button>
-              );
-            })}
+        <div className="flex items-end gap-2">
+          <div className="relative shrink-0">
+            <button
+              type="button"
+              onClick={() => setDirectionOpen((o) => !o)}
+              aria-expanded={directionOpen}
+              className="flex items-center gap-2 px-3 transition-colors hover:bg-white/[0.05]"
+              style={{
+                height: 36,
+                borderRadius: 0,
+                border: `1.5px solid ${directionMode ? KR : "rgba(249,66,58,0.45)"}`,
+                background: directionMode ? "rgba(249,66,58,0.08)" : "rgba(249,66,58,0.04)",
+                boxSizing: "border-box",
+              }}
+            >
+              <Clapperboard className="w-4 h-4 shrink-0" style={{ color: KR }} />
+              <span className="hidden lg:inline text-muted-foreground" style={{ fontSize: 13 }}>
+                {t("agent.directionMode")}
+              </span>
+              <span
+                className="font-semibold whitespace-nowrap"
+                style={{ fontSize: 13, color: directionMode ? KR : "rgba(255,255,255,0.85)" }}
+              >
+                {directionMode ? directionModeLabel(directionMode, briefLang) : t("agent.directionNotSet")}
+              </span>
+              <ChevronDown
+                className="w-4 h-4 ml-0.5 shrink-0 text-muted-foreground transition-transform"
+                style={{ transform: directionOpen ? "rotate(180deg)" : "none" }}
+              />
+            </button>
+            {directionOpen && (
+              <div
+                className="absolute left-0 bottom-full mb-1.5 z-50 flex items-center gap-1.5 p-1.5 border bg-popover"
+                style={{ borderRadius: 0, borderColor: "rgba(255,255,255,0.14)" }}
+              >
+                {(["narrative", "motion", "hybrid"] as DirectionMode[]).map((m) => {
+                  const label = directionModeLabel(m, briefLang);
+                  const active = directionMode === m;
+                  return (
+                    <button
+                      key={m}
+                      onClick={() => {
+                        setDirectionOpen(false);
+                        if (active) return;
+                        void persistDirectionMode(m);
+                        toast({
+                          title:
+                            briefLang === "en"
+                              ? `Direction set to ${label}. It applies from your next message.`
+                              : `연출 방향을 '${label}'으로 변경했어요. 다음 메시지부터 반영됩니다.`,
+                        });
+                      }}
+                      className="font-medium px-3 h-7 inline-flex items-center transition-opacity hover:opacity-80 whitespace-nowrap"
+                      style={{
+                        fontSize: 13,
+                        borderRadius: 0,
+                        border: `1px solid ${active ? KR : "rgba(255,255,255,0.18)"}`,
+                        background: active ? "rgba(249,66,58,0.16)" : "transparent",
+                        color: active ? KR : "rgba(255,255,255,0.85)",
+                      }}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
-        )}
-        <AgentChatInput
-          assets={projectAssets}
-          projectId={projectId}
-          disabled={isLoading}
-          hasImages={chatImages.length > 0}
-          onSend={handleSend}
-          onAttach={() => fileInputRef.current?.click()}
-          onAttachLibrary={() => setLibraryImportOpen(true)}
-        />
+          <div className="flex-1 min-w-0">
+            <AgentChatInput
+              assets={projectAssets}
+              projectId={projectId}
+              disabled={isLoading}
+              hasImages={chatImages.length > 0}
+              onSend={handleSend}
+              onAttach={() => fileInputRef.current?.click()}
+              onAttachLibrary={() => setLibraryImportOpen(true)}
+            />
+          </div>
+        </div>
         <input
           ref={fileInputRef}
           type="file"
@@ -2569,7 +2654,7 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
         </div>
       ) : (
         <ResizablePanelGroup direction="horizontal">
-          <ResizablePanel defaultSize={38} minSize={28}>
+          <ResizablePanel defaultSize={50} minSize={28}>
             {chatPanel}
           </ResizablePanel>
           <ResizableHandle
@@ -2579,7 +2664,7 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
                 "linear-gradient(to bottom, transparent, hsl(var(--border)) 20%, hsl(var(--border)) 80%, transparent)",
             }}
           />
-          <ResizablePanel defaultSize={62} minSize={35}>
+          <ResizablePanel defaultSize={50} minSize={35}>
             {rightPanelContent}
           </ResizablePanel>
         </ResizablePanelGroup>

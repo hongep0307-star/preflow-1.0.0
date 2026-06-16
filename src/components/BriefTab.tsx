@@ -6333,7 +6333,7 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
              자료 우클릭하면 returnProjectId 가 이 프로젝트로 잡혀 즉시 attach). */}
         <button
           onClick={() => setLibraryImportOpen(true)}
-          className="w-full flex items-center justify-center gap-2 mb-2 px-3 py-1.5 border border-border-subtle text-caption font-medium text-muted-foreground hover:text-foreground hover:border-foreground/20 transition-colors"
+          className="w-full flex items-center justify-center gap-2 mb-2 px-3 py-1.5 border border-border-subtle text-meta font-medium text-muted-foreground hover:text-foreground hover:border-foreground/20 transition-colors"
           style={{ borderRadius: 0 }}
         >
           <Library className="w-3.5 h-3.5" />
@@ -6368,7 +6368,7 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
                 }
               }}
               placeholder={t("brief.youtubePlaceholder")}
-              className="flex-1 min-w-0 bg-transparent border-none outline-none text-caption text-foreground placeholder:text-muted-foreground/30"
+              className="flex-1 min-w-0 bg-transparent border-none outline-none text-meta font-[inherit] text-foreground placeholder:text-muted-foreground/40"
             />
             {refUrlInput.trim() && (
               <button
@@ -6414,7 +6414,7 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
               setRefDragOver(false);
               handleRefFileSelect(e.dataTransfer.files);
             }}
-            className="h-[60px] border border-dashed flex items-center justify-center gap-2 cursor-pointer transition-colors"
+            className="h-[60px] border border-dashed flex items-center justify-center gap-2 px-3 cursor-pointer transition-colors"
             style={{
               borderRadius: 0,
               borderColor: refDragOver ? "rgba(249,66,58,0.5)" : "rgba(255,255,255,0.1)",
@@ -6422,7 +6422,7 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
             }}
           >
             <ImagePlus className="w-4 h-4 text-muted-foreground/30 shrink-0" />
-            <p className="font-mono text-2xs text-muted-foreground/40 whitespace-nowrap">{dropHintLabel}</p>
+            <p className="font-mono text-2xs text-muted-foreground/40 text-center leading-tight min-w-0 break-keep">{dropHintLabel}</p>
           </div>
         ) : (
           <div
@@ -6476,7 +6476,7 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
         value={ideaNote}
         onChange={(e) => setIdeaNote(e.target.value.slice(0, 2000))}
         placeholder={t("brief.ideaPlaceholder")}
-        className="w-full h-[60px] border-none outline-none resize-none text-caption font-[inherit] text-foreground bg-transparent px-3 py-2 leading-relaxed placeholder:text-muted-foreground/30"
+        className="w-full h-[60px] border-none outline-none resize-none text-meta font-[inherit] text-foreground bg-transparent px-3 py-2 leading-relaxed placeholder:text-muted-foreground/40"
       />
     </div>
   );

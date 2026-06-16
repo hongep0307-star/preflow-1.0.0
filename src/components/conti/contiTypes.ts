@@ -261,6 +261,9 @@ export type ContiInfoVisibility = {
   location: boolean;
   duration: boolean;
   description: boolean;
+  // 모션 노트 묶음 — IN(motion_in)/OUT(motion_out)/TR→(transition_to_next)를
+  // 한 토글로 함께 표시한다. 프롬프트엔 쓰이지 않는 참고용이라 기본 OFF.
+  motion: boolean;
 };
 
 export const DEFAULT_CONTI_INFO_VISIBILITY: ContiInfoVisibility = {
@@ -270,6 +273,7 @@ export const DEFAULT_CONTI_INFO_VISIBILITY: ContiInfoVisibility = {
   location: true,
   duration: true,
   description: true,
+  motion: false,
 };
 
 // Render order for the info dropdown. Labels are resolved via i18n at render
@@ -281,6 +285,7 @@ export const CONTI_INFO_FIELD_ORDER: (keyof ContiInfoVisibility)[] = [
   "location",
   "duration",
   "description",
+  "motion",
 ];
 
 // ─── Scene-group (sequence) visualization palette ───

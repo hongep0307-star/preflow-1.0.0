@@ -19,6 +19,7 @@ import {
   ASSET_ICON,
 } from "./agentTypes";
 import { useT } from "@/lib/uiLanguage";
+import { normalizeTransitionKey, TRANSITION_MAP } from "@/lib/transitionGrammar";
 
 /* ━━━━━ MotionNotes ━━━━━
  * 모션 모드 컷의 키네틱 노트(motion_in/out)와 다음 컷 추천 트랜지션을 컷 카드에
@@ -36,7 +37,14 @@ const MotionNotes = ({
   const rows: Array<{ label: string; value: string }> = [];
   if (motionIn?.trim()) rows.push({ label: "IN", value: motionIn.trim() });
   if (motionOut?.trim()) rows.push({ label: "OUT", value: motionOut.trim() });
-  if (transitionToNext?.trim()) rows.push({ label: "TR→", value: transitionToNext.trim() });
+  // TR→ : 정식 기법 키로 인식되면 깔끔한 라벨로 정규화해 보여주고, 인식 안 되는
+  // 값(자유 한국어/유사어 등)이라도 비어있지 않으면 원문 그대로 폴백 표시한다.
+  // (이전엔 미인식 값을 통째로 숨겨, 기존 드래프트에서 TR 이 전부 사라지는 문제가 있었다.)
+  const trRaw = transitionToNext?.trim();
+  if (trRaw) {
+    const trKey = normalizeTransitionKey(transitionToNext);
+    rows.push({ label: "TR→", value: trKey ? TRANSITION_MAP[trKey].label : trRaw });
+  }
   if (rows.length === 0) return null;
   return (
     <div style={{ borderTop: DIV_LINE, paddingTop: 6, marginTop: 6 }} className="space-y-0.5">

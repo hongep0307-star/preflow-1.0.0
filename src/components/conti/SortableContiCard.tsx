@@ -43,7 +43,9 @@ import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip
 import {
   TRANSITION_CATEGORIES,
   TRANSITION_MAP,
+  TRANSITION_NONE,
   normalizeTransitionKey,
+  isFollowIntentTransition,
   transitionDeliverable,
   type TransitionKey,
   type TransitionCategory,
@@ -800,9 +802,10 @@ const TransitionTechniquePicker = memo(function TransitionTechniquePicker({
   onChange,
 }: {
   rawValue: string | null | undefined;
-  onChange: (newKey: TransitionKey) => void;
+  onChange: (newKey: TransitionKey | typeof TRANSITION_NONE) => void;
 }) {
   const normalized = normalizeTransitionKey(rawValue);
+  const followIntent = isFollowIntentTransition(rawValue);
   const current = normalized ? TRANSITION_MAP[normalized] : null;
   const [open, setOpen] = useState(false);
   const { language } = useUiLanguage();
@@ -833,6 +836,13 @@ const TransitionTechniquePicker = memo(function TransitionTechniquePicker({
                   {currentUi?.tagline}
                 </span>
               </span>
+            ) : followIntent ? (
+              <span className="text-body font-semibold truncate text-foreground">
+                {t("conti.transitionFollowIntent")}
+                <span className="ml-1.5 text-caption font-normal opacity-70">
+                  {t("conti.transitionFollowIntentTagline")}
+                </span>
+              </span>
             ) : (
               <span className="text-body font-semibold text-amber-500">
                 {t("conti.selectTechnique")}
@@ -849,9 +859,31 @@ const TransitionTechniquePicker = memo(function TransitionTechniquePicker({
         className="w-[280px] max-h-[420px] overflow-y-auto bg-popover border border-border-subtle text-popover-foreground rounded-none"
         onPointerDown={(e) => e.stopPropagation()}
       >
-        {TRANSITION_CATEGORIES.map((group, gi) => (
+        {/* 설명 따름(None) — 프리셋 기법을 강제하지 않고 전환 의도(설명)로만 생성. */}
+        <DropdownMenuItem
+          onSelect={() => {
+            onChange(TRANSITION_NONE);
+            setOpen(false);
+          }}
+          className="flex flex-col items-start gap-0.5 py-2 cursor-pointer data-[highlighted]:bg-foreground/5 focus:bg-foreground/5"
+          style={{
+            borderRadius: 0,
+            background: followIntent ? "hsl(var(--primary) / 0.08)" : undefined,
+          }}
+        >
+          <span
+            className="text-body font-semibold leading-tight"
+            style={{ color: followIntent ? "hsl(var(--primary))" : "hsl(var(--foreground))" }}
+          >
+            {t("conti.transitionFollowIntent")}
+          </span>
+          <span className="text-caption leading-tight opacity-70" style={{ color: "hsl(var(--muted-foreground))" }}>
+            {t("conti.transitionFollowIntentTagline")}
+          </span>
+        </DropdownMenuItem>
+        {TRANSITION_CATEGORIES.map((group) => (
           <div key={group.category}>
-            {gi > 0 && <DropdownMenuSeparator className="bg-foreground/5" />}
+            <DropdownMenuSeparator className="bg-foreground/5" />
             <DropdownMenuLabel
               className="text-2xs font-mono tracking-[0.08em] text-muted-foreground"
             >
@@ -960,6 +992,7 @@ export const SortableContiCard = memo(
     onRefineCut,
     onSketches,
     onTransitionTypeChange,
+    onInsertRecommendedTransition,
     displayNumber,
     info,
     layout = "card",
@@ -1019,6 +1052,9 @@ export const SortableContiCard = memo(
      *  they're often how you GET to an image in the first place. */
     onSketches?: () => void;
     onTransitionTypeChange?: (scene: Scene, newType: string) => void;
+    /** 이 컷의 추천 트랜지션(transition_to_next)을 다음 컷 사이의 TR 카드로 삽입.
+     *  양쪽 컷에 이미지가 있을 때만 부모가 콜백을 제공(없으면 버튼 미표시). */
+    onInsertRecommendedTransition?: () => void;
     displayNumber?: number;
     /** Per-field visibility for the text body. When every field is false the
      *  body is not rendered at all (image-only card). */
@@ -1160,6 +1196,9 @@ export const SortableContiCard = memo(
     const [localMood, setLocalMood] = useState(scene.mood ?? "");
     const [localLocation, setLocalLocation] = useState(scene.location ?? "");
     const [localDuration, setLocalDuration] = useState(scene.duration_sec != null ? String(scene.duration_sec) : "");
+    const [localTransition, setLocalTransition] = useState(scene.transition_to_next ?? "");
+    const [localMotionIn, setLocalMotionIn] = useState(scene.motion_in ?? "");
+    const [localMotionOut, setLocalMotionOut] = useState(scene.motion_out ?? "");
 
     useEffect(() => {
       setLocalTitle(scene.title ?? "");
@@ -1167,6 +1206,9 @@ export const SortableContiCard = memo(
       setLocalMood(scene.mood ?? "");
       setLocalLocation(scene.location ?? "");
       setLocalDuration(scene.duration_sec != null ? String(scene.duration_sec) : "");
+      setLocalTransition(scene.transition_to_next ?? "");
+      setLocalMotionIn(scene.motion_in ?? "");
+      setLocalMotionOut(scene.motion_out ?? "");
     }, [scene]);
 
     useEffect(() => {
@@ -1706,7 +1748,9 @@ export const SortableContiCard = memo(
                 const trSpec = trKey ? TRANSITION_MAP[trKey] : null;
                 const deliverable = trKey ? transitionDeliverable(trKey) : "peak_still";
                 const isNotePair = deliverable === "note_pair" || deliverable === "note_pair_crop";
-                const techLabel = trSpec?.label ?? "Transition";
+                const techLabel =
+                  trSpec?.label ??
+                  (isFollowIntentTransition(scene.transition_type) ? t("conti.transitionFollowIntent") : "Transition");
                 const note = (scene.description ?? "").trim();
                 const Thumb = ({ src, label }: { src: string | null; label: string }) => (
                   <div
@@ -2477,6 +2521,86 @@ export const SortableContiCard = memo(
                     </span>
                   </div>
                 )}
+                {/* 모션 묶음(IN/OUT/TR) — 기본 OFF, 참고용 자유텍스트 인라인 편집.
+                    TR→ 라벨 자체가 "TR 카드 삽입" 트리거(양쪽 컷 이미지가 있을 때만 활성). */}
+                {vis.motion && (() => {
+                  const motionRows: Array<{
+                    key: "in" | "out" | "tr";
+                    label: string;
+                    value: string;
+                    onSave: (v: string) => void;
+                    placeholder: string;
+                  }> = [
+                    {
+                      key: "in",
+                      label: "IN",
+                      value: localMotionIn,
+                      placeholder: t("conti.enterMotionIn"),
+                      onSave: (v) => { setLocalMotionIn(v); saveField({ motion_in: v ? v : null }); },
+                    },
+                    {
+                      key: "out",
+                      label: "OUT",
+                      value: localMotionOut,
+                      placeholder: t("conti.enterMotionOut"),
+                      onSave: (v) => { setLocalMotionOut(v); saveField({ motion_out: v ? v : null }); },
+                    },
+                    {
+                      key: "tr",
+                      label: "TR→",
+                      value: localTransition,
+                      placeholder: t("conti.enterTransition"),
+                      onSave: (v) => { setLocalTransition(v); saveField({ transition_to_next: v ? v : null }); },
+                    },
+                  ];
+                  return (
+                    <div style={{ borderTop: "1px solid var(--color-border-tertiary)", paddingTop: 6, marginTop: 6 }} className="space-y-0.5">
+                      {motionRows.map((r) => {
+                        // TR→ 라벨 클릭 = 이 추천으로 TR 카드 삽입. 부모가 콜백을 줄 때
+                        // (=양쪽 컷 이미지가 있고 값이 있을 때)만 클릭 가능하게 한다.
+                        const canInsertTr = r.key === "tr" && !!localTransition.trim() && !!onInsertRecommendedTransition;
+                        return (
+                          <div key={r.key} style={{ display: "flex", alignItems: "center", gap: 6, minHeight: 22 }}>
+                            {canInsertTr ? (
+                              <button
+                                onClick={onInsertRecommendedTransition}
+                                title={t("conti.insertTransitionFromRec")}
+                                className="font-mono shrink-0 transition-colors hover:opacity-70"
+                                style={{
+                                  fontSize: 11,
+                                  fontWeight: 700,
+                                  color: KR,
+                                  minWidth: 26,
+                                  textAlign: "left",
+                                  background: "transparent",
+                                  border: "none",
+                                  borderBottom: `1px dashed ${KR}`,
+                                  borderRadius: 0,
+                                  padding: 0,
+                                  cursor: "pointer",
+                                }}
+                              >
+                                {r.label}
+                              </button>
+                            ) : (
+                              <span className="font-mono" style={{ fontSize: 11, fontWeight: 700, color: KR, minWidth: 26, flexShrink: 0 }}>
+                                {r.label}
+                              </span>
+                            )}
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <InlineField
+                                value={r.value}
+                                onChange={(v) => r.onSave(v.trim())}
+                                placeholder={r.placeholder}
+                                style={{ fontSize: 11, color: "hsl(var(--muted-foreground))", lineHeight: 1.4 } as any}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
               </>
             )}
           </div>

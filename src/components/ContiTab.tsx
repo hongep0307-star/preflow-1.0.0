@@ -17,7 +17,7 @@ import type { VideoFormat, BriefAnalysis, GeneratingStage, ProjectAssetsCache } 
 import { computeSceneGroups, materializeSequences } from "@/lib/sceneGrouping";
 import { getImageModelDefault, getGptQualityDefault } from "@/lib/imageGenPreference";
 import { generateTransitionFrame } from "@/lib/transitions";
-import { DEFAULT_TRANSITION_KEY, TRANSITION_MAP, normalizeTransitionKey } from "@/lib/transitionGrammar";
+import { DEFAULT_TRANSITION_KEY, TRANSITION_NONE, TRANSITION_MAP, normalizeTransitionKey } from "@/lib/transitionGrammar";
 import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import { scrollToScene } from "@/lib/scrollToScene";
@@ -3662,11 +3662,20 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
     toast({ title: t("conti.toast.sceneMerged") });
   };
 
-  const handleInsertTransitionAt = async (idx: number) => {
+  const handleInsertTransitionAt = async (idx: number, seedType?: string | null) => {
     const snapshot = getSceneState(projectId)?.scenes ?? activeScenes;
     const prevScene = snapshot[idx - 1];
     const nextScene = snapshot[idx];
     if (!prevScene?.conti_image_url || !nextScene?.conti_image_url) return;
+    // 추천 트랜지션(컷의 transition_to_next)에서 호출된 경우 시드한다.
+    //  · 정식 기법 키로 정규화되면 → 그 키로(아코디언 선택과 동일).
+    //  · 자유 텍스트(모션 특화 한국어 등)면 → "설명 따름(NONE)" + 원문을 전환 의도
+    //    (description)로 담아, 프리셋에 갇히지 않고 그 설명대로 생성되게 한다.
+    //  · seed 없음(수동 "전환 추가")이면 → 기본 키.
+    const seedRaw = seedType?.trim();
+    const seededKey = normalizeTransitionKey(seedType);
+    const seededType = seededKey ?? (seedRaw ? TRANSITION_NONE : DEFAULT_TRANSITION_KEY);
+    const seededIntent = !seededKey && seedRaw ? seedRaw : "";
     const tempNumber = 80000 + (Date.now() % 10000);
     const { data: newScene, error } = await supabase
       .from("scenes")
@@ -3674,17 +3683,13 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
         project_id: projectId,
         scene_number: tempNumber,
         title: "",
-        description: "",
+        // 자유 텍스트 추천이면 그 원문을 전환 의도로 시드(생성 시 최우선 지시로 사용).
+        description: seededIntent,
         is_transition: true,
-        // DEFAULT_TRANSITION_KEY (= "WHIP_PAN") is a concrete, library-backed
-        // technique so the Claude prompt's technique dispatch actually has
-        // something to bind to from first click. The old "TRANSITION"
-        // placeholder was a catch-all that no system prompt entry matched,
-        // which silently disabled all technique-specific guidance.
-        // Users can change the technique from the TR card's picker;
-        // legacy rows persisting "TRANSITION" in the DB are transparently
-        // rerouted via `normalizeTransitionKey`.
-        transition_type: DEFAULT_TRANSITION_KEY,
+        // 정식 키면 그 키, 자유 텍스트면 NONE(설명 따름), seed 없으면 기본 키.
+        // 사용자는 TR 카드 피커에서 언제든 변경 가능. 레거시 "TRANSITION" 값은
+        // normalizeTransitionKey 로 투명하게 처리된다.
+        transition_type: seededType,
         conti_image_url: null,
         source: "conti",
       })
@@ -6316,7 +6321,7 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
                 <div className="flex items-center gap-1 px-2 py-1.5 border-b border-border">
                   <button
                     onClick={() =>
-                      setInfoVis({ title: true, camera: true, mood: true, location: true, duration: true, description: true })
+                      setInfoVis({ title: true, camera: true, mood: true, location: true, duration: true, description: true, motion: true })
                     }
                     className="flex-1 px-2 py-1 text-2xs font-medium transition-colors hover:bg-primary/[0.08]"
                     style={{ border: "1px solid rgba(255,255,255,0.10)", color: "rgba(255,255,255,0.75)", cursor: "pointer", borderRadius: 0 }}
@@ -6325,7 +6330,7 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
                   </button>
                   <button
                     onClick={() =>
-                      setInfoVis({ title: false, camera: false, mood: false, location: false, duration: false, description: false })
+                      setInfoVis({ title: false, camera: false, mood: false, location: false, duration: false, description: false, motion: false })
                     }
                     className="flex-1 px-2 py-1 text-2xs font-medium transition-colors hover:bg-primary/[0.08]"
                     style={{ border: "1px solid rgba(255,255,255,0.10)", color: "rgba(255,255,255,0.75)", cursor: "pointer", borderRadius: 0 }}
@@ -6868,6 +6873,17 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
                           onSketches={cardHandlers.onSketches}
                           displayNumber={displayNum}
                           onTransitionTypeChange={stableHandleTransitionTypeChange}
+                          onInsertRecommendedTransition={
+                            // 이 컷(idx)→다음 컷(idx+1) 사이에 추천 트랜지션으로 TR 카드 삽입.
+                            // 양쪽 컷에 이미지가 있고, 둘 다 트랜지션 카드가 아닐 때만 활성화.
+                            !scene.is_transition &&
+                            scene.transition_to_next?.trim() &&
+                            !!scene.conti_image_url &&
+                            !!activeScenes[idx + 1]?.conti_image_url &&
+                            !activeScenes[idx + 1]?.is_transition
+                              ? () => handleInsertTransitionAt(idx + 1, scene.transition_to_next)
+                              : undefined
+                          }
                           info={infoVis}
                           layout={viewMode === "single" ? "row" : "card"}
                           showGroup={showGroups && !!group}

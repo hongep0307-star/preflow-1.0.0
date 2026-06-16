@@ -61,3 +61,12 @@ export const REFERENCE_UPLOAD_MAX_LABEL = "300MB";
  *  eagle-import(main) 가 각자 200MB 를 하드코딩해 드리프트하던 것을 한 곳으로
  *  통일한다. 이 값을 넘는 *원본* 은 저장하지 않으며, 컨버팅된 결과만 저장된다. */
 export const MAX_VIDEO_BYTES = REFERENCE_UPLOAD_MAX_BYTES;
+
+/** 300MB 초과 영상을 컨버팅할 때의 목표 용량 (bytes).
+ *  300MB 한도에 약간의 여유를 둔 290MB — ffmpeg 비트레이트 계산의 타깃이다. */
+export const VIDEO_CONVERT_TARGET_BYTES = 290 * 1024 * 1024;
+
+/** 영상 reference 의 최대 재생 길이 (초). 길이는 컨버팅으로 줄일 수 없으므로
+ *  하드 한도다. AI 프레임 샘플링/디코딩 자원 상한과도 연동된다.
+ *  렌더러(videoFrames) 와 main(트랜스코더) 가 같은 값을 쓰도록 단일화한다. */
+export const MAX_VIDEO_DURATION_SEC = 10 * 60;

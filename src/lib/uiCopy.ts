@@ -929,8 +929,8 @@ export const UI_COPY: Record<string, Record<UiLanguage, string>> = {
   "library.inspector.runAi": { en: "Run AI", ko: "AI 실행" },
   "library.inspector.reanalyze": { en: "Re-analyze", ko: "재분석" },
   "library.inspector.classifyVideoHint": {
-    en: "Picks scene-aware frames (more for longer clips, focused on shot changes) and sends them to GPT for motion-aware analysis. Limit: 200MB / 5 min.",
-    ko: "scene-aware 프레임을 선택해 (긴 영상일수록 더 많이, 컷 전환 중심) GPT 로 모션 분석을 수행합니다. 제한: 200MB / 5분.",
+    en: "Picks scene-aware frames (more for longer clips, focused on shot changes) and sends them to GPT for motion-aware analysis. Up to 10 min.",
+    ko: "scene-aware 프레임을 선택해 (긴 영상일수록 더 많이, 컷 전환 중심) GPT 로 모션 분석을 수행합니다. 최대 10분.",
   },
   "library.inspector.classifyTextOnlyHint": {
     en: "No poster is available, so this will classify from text metadata only.",
@@ -1379,6 +1379,7 @@ export const UI_COPY: Record<string, Record<UiLanguage, string>> = {
   // LibraryPage — toasts / dialogs / errors
   "library.toast.importStarted": { en: "Importing {n} item(s)...", ko: "{n}개 가져오는 중..." },
   "library.toast.importProgress": { en: "Importing {done}/{total}...", ko: "{done}/{total} 가져오는 중..." },
+  "library.toast.convertProgress": { en: "Converting {name}... {pct}%", ko: "{name} 변환 중... {pct}%" },
   "library.toast.importDone": { en: "Imported {n} item(s)", ko: "{n}개 가져왔습니다" },
   "library.toast.importPartial": { en: "Imported {ok}/{total}, {failed} failed", ko: "{ok}/{total} 가져옴, {failed}개 실패" },
   "library.toast.importFailed": { en: "Import failed", ko: "가져오기 실패" },

@@ -9,6 +9,7 @@ import { getLocalServerAuthToken, getLocalServerPort, REAL_UA } from "./constant
 import { getStorageBasePath } from "./paths";
 import { initWorkspace, shutdownWorkspace } from "./workspace";
 import { sweepOrphanFiles } from "./orphanSweep";
+import { MAX_VIDEO_DURATION_SEC, REFERENCE_UPLOAD_MAX_BYTES } from "../shared/constants";
 
 // ── Native OLE drag-out addon (v2 — Phase 0) ───────────────────────────────
 // Windows 전용 OLE drag source. Electron 33 의 `webContents.startDrag` 가
@@ -371,6 +372,154 @@ ipcMain.on("preflow-window:close", () => {
   mainWindow?.close();
 });
 ipcMain.handle("preflow-window:is-maximized", () => mainWindow?.isMaximized() ?? false);
+
+// ── 영상 트랜스코딩(ffmpeg) IPC ──────────────────────────────────────
+// 300MB 초과 영상을 목표 용량 이하로 재인코딩한다. 입력은 *원본 디스크 경로*
+// 만 받는다 — 대용량을 base64/IPC 로 실어 나르면 메모리/전송이 터지기 때문.
+// 출력은 references 버킷의 `.scratch/<id>.mp4` 에 써서 렌더러가 /storage/file/
+// 로 다시 fetch → uploadReferenceFile 파이프에 합류시킨다.
+function resolveFfmpegPath(): string {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg");
+  }
+  // dev: ffmpeg-static 은 바이너리 절대경로 문자열을 default export 한다.
+  return require("ffmpeg-static") as string;
+}
+
+const activeTranscodes = new Map<string, ReturnType<typeof spawn>>();
+const AUDIO_KBPS = 128;
+
+/** ffmpeg 로 컨테이너의 실제 재생 길이(초)를 읽는다. 브라우저 <video>.duration
+ *  은 일부 mp4(YouTube 다운로드본 등)에서 Infinity 로 나와 신뢰할 수 없어,
+ *  변환 직전 권위 있는 길이를 ffmpeg stderr 의 `Duration:` 에서 파싱한다.
+ *  `ffmpeg -i <file>` 은 출력이 없어 code 1 로 끝나지만 메타데이터는 출력한다. */
+function probeDurationSec(inputPath: string): Promise<number> {
+  return new Promise((resolve) => {
+    let stderr = "";
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(resolveFfmpegPath(), ["-i", inputPath]);
+    } catch {
+      resolve(0);
+      return;
+    }
+    child.stderr?.on("data", (b: Buffer) => {
+      stderr += b.toString();
+    });
+    child.on("error", () => resolve(0));
+    child.on("close", () => {
+      const m = stderr.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
+      if (m) resolve(Number(m[1]) * 3600 + Number(m[2]) * 60 + parseFloat(m[3]));
+      else resolve(0);
+    });
+  });
+}
+
+ipcMain.handle(
+  "preflow-video:transcode",
+  async (
+    _event,
+    args: { id: string; inputPath: string; durationSec: number; targetBytes: number },
+  ): Promise<{ ok: true; scratchRelPath: string } | { ok: false; reason: string }> => {
+    const { id, inputPath, targetBytes } = args;
+    let durationSec = args.durationSec;
+    try {
+      if (!inputPath || !fs.existsSync(inputPath)) {
+        return { ok: false, reason: "원본 파일 경로를 찾을 수 없습니다." };
+      }
+      // 렌더러의 <video>.duration 이 신뢰 불가(Infinity→0)면 ffmpeg 로 실측.
+      if (!Number.isFinite(durationSec) || durationSec <= 0) {
+        durationSec = await probeDurationSec(inputPath);
+      }
+      if (!Number.isFinite(durationSec) || durationSec <= 0) {
+        return { ok: false, reason: "영상 길이를 확인할 수 없습니다." };
+      }
+      // 길이 초과는 변환으로 해결 불가 — 명확한 사유로 거부.
+      if (durationSec > MAX_VIDEO_DURATION_SEC) {
+        return {
+          ok: false,
+          reason: `${MAX_VIDEO_DURATION_SEC / 60}분 이하 영상만 지원합니다 (현재 약 ${Math.ceil(durationSec / 60)}분). 영상 길이는 변환으로 줄일 수 없습니다.`,
+        };
+      }
+      const outDir = path.join(getStorageBasePath(), "references", ".scratch");
+      await fs.promises.mkdir(outDir, { recursive: true });
+      const outPath = path.join(outDir, `${id}.mp4`);
+      const scratchRelPath = `.scratch/${id}.mp4`;
+
+      // 목표 바이트 → 총 비트레이트(kbps). 오디오/컨테이너 여유를 빼고 안전계수.
+      const computeVideoKbps = (factor: number): number => {
+        const totalKbps = (targetBytes * 8) / durationSec / 1000;
+        return Math.max(200, Math.floor((totalKbps - AUDIO_KBPS) * factor));
+      };
+
+      const runOnce = (videoKbps: number): Promise<number> =>
+        new Promise<number>((resolve, reject) => {
+          const ffmpegBin = resolveFfmpegPath();
+          const ffmpegArgs = [
+            "-y",
+            "-i", inputPath,
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-b:v", `${videoKbps}k`,
+            "-maxrate", `${Math.floor(videoKbps * 1.5)}k`,
+            "-bufsize", `${videoKbps * 2}k`,
+            "-vf", "scale='min(1920,iw)':-2",
+            "-c:a", "aac",
+            "-b:a", `${AUDIO_KBPS}k`,
+            "-movflags", "+faststart",
+            outPath,
+          ];
+          const child = spawn(ffmpegBin, ffmpegArgs);
+          activeTranscodes.set(id, child);
+          child.stderr?.on("data", (buf: Buffer) => {
+            const m = buf.toString().match(/time=(\d+):(\d+):(\d+(?:\.\d+)?)/);
+            if (m) {
+              const sec = Number(m[1]) * 3600 + Number(m[2]) * 60 + parseFloat(m[3]);
+              const ratio = Math.max(0, Math.min(0.99, sec / durationSec));
+              mainWindow?.webContents.send("preflow-video:transcode-progress", { id, ratio });
+            }
+          });
+          child.on("error", reject);
+          child.on("close", (code) => {
+            activeTranscodes.delete(id);
+            resolve(code ?? -1);
+          });
+        });
+
+      let code = await runOnce(computeVideoKbps(0.95));
+      if (code !== 0) {
+        await fs.promises.rm(outPath, { force: true }).catch(() => undefined);
+        return { ok: false, reason: "변환이 취소되었거나 실패했습니다." };
+      }
+      // 사이즈 초과 시 더 낮은 비트레이트로 1회 재시도.
+      let stat = await fs.promises.stat(outPath);
+      if (stat.size > targetBytes) {
+        code = await runOnce(computeVideoKbps(0.8));
+        if (code === 0) stat = await fs.promises.stat(outPath);
+      }
+      if (stat.size > REFERENCE_UPLOAD_MAX_BYTES) {
+        await fs.promises.rm(outPath, { force: true }).catch(() => undefined);
+        return { ok: false, reason: "변환 후에도 용량이 너무 큽니다." };
+      }
+      mainWindow?.webContents.send("preflow-video:transcode-progress", { id, ratio: 1 });
+      return { ok: true, scratchRelPath };
+    } catch (err) {
+      return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+    }
+  },
+);
+
+ipcMain.on("preflow-video:transcode-cancel", (_event, id: string) => {
+  const child = activeTranscodes.get(id);
+  if (child) {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      /* already gone */
+    }
+    activeTranscodes.delete(id);
+  }
+});
 
 // ── OS-level file copy ──────────────────────────────────────────────
 // 렌더러(라이브러리의 Ctrl+C) 가 호출한다. Web Clipboard API 는 image/png |

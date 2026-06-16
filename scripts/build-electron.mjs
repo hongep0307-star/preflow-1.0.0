@@ -4,7 +4,7 @@ const common = {
   bundle: true,
   platform: "node",
   target: "node18",
-  external: ["electron", "better-sqlite3"],
+  external: ["electron", "better-sqlite3", "ffmpeg-static"],
   format: "cjs",
   outdir: "dist-electron",
   sourcemap: true,

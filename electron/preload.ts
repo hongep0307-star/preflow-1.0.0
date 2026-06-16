@@ -137,6 +137,30 @@ const api = {
    */
   getFileIcon: (filename: string, bytes: Uint8Array): Promise<Uint8Array | null> =>
     ipcRenderer.invoke("preflow-doc:get-file-icon", { filename, bytes }),
+  /**
+   * 영상 트랜스코딩 — 원본 디스크 경로를 받아 ffmpeg 로 목표 용량 이하 mp4 로
+   * 재인코딩하고, references 버킷의 scratch 경로(상대)를 돌려준다. 진행률은
+   * `onTranscodeProgress` 로 별도 스트리밍되며, `cancelTranscode(id)` 로 중단.
+   */
+  transcodeVideo: (args: {
+    id: string;
+    inputPath: string;
+    durationSec: number;
+    targetBytes: number;
+  }): Promise<{ ok: true; scratchRelPath: string } | { ok: false; reason: string }> =>
+    ipcRenderer.invoke("preflow-video:transcode", args),
+  /** 트랜스코딩 진행률 구독. 반환값은 unsubscribe 함수. */
+  onTranscodeProgress: (cb: (p: { id: string; ratio: number }) => void): (() => void) => {
+    const listener = (_e: unknown, p: { id: string; ratio: number }) => cb(p);
+    ipcRenderer.on("preflow-video:transcode-progress", listener);
+    return () => {
+      ipcRenderer.removeListener("preflow-video:transcode-progress", listener);
+    };
+  },
+  /** 진행 중인 트랜스코딩 취소(ffmpeg 프로세스 kill). */
+  cancelTranscode: (id: string): void => {
+    ipcRenderer.send("preflow-video:transcode-cancel", id);
+  },
 };
 
 contextBridge.exposeInMainWorld("preflowWindow", api);

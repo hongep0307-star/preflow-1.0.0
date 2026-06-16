@@ -251,6 +251,9 @@ import {
   type UploadReferenceOptions,
 } from "@/lib/referenceLibrary";
 import { DEFAULT_IMAGE_SEARCH_ENGINE, type ImageSearchEngineId } from "@/lib/imageSearchEngines";
+import { REFERENCE_UPLOAD_MAX_BYTES, VIDEO_CONVERT_TARGET_BYTES } from "@shared/constants";
+import { MAX_DURATION_SEC } from "@/lib/videoFrames";
+import { probeVideoMeta, transcodeVideoFile } from "@/lib/videoTranscode";
 import { attachLibraryItemToProject, type AttachTarget } from "@/lib/attachLibraryItemToProject";
 import { appendAgentChatImages, CHAT_IMAGE_MAX, type ChatImage } from "@/components/agent/agentTypes";
 import { buildAgentAttachmentForRef } from "@/lib/agentAttach";
@@ -2096,9 +2099,35 @@ const LibraryPage = () => {
     });
     let processed = 0;
 
+    // 300MB 초과 영상 판별 — 컨버팅 대상. (Phase 2: 확인 팝업 없이 자동 변환,
+    // Phase 3 에서 일괄 확인 다이얼로그로 대체 예정.)
+    const isOversizeVideo = (f: File) =>
+      (f.type.startsWith("video/") || /\.(mp4|mov|webm)$/i.test(f.name)) &&
+      f.size > REFERENCE_UPLOAD_MAX_BYTES;
+
     for (const file of mediaFiles) {
       try {
-        const item = await uploadReferenceFile(file, uploadOptions);
+        let toUpload = file;
+        if (isOversizeVideo(file)) {
+          // 길이는 컨버팅으로 줄일 수 없으므로 5분 초과는 변환하지 않고 거부.
+          const meta = await probeVideoMeta(file);
+          if (meta.durationSec > MAX_DURATION_SEC) {
+            throw new Error(
+              `${MAX_DURATION_SEC / 60}분 이하 영상만 지원합니다 (현재 약 ${Math.ceil(meta.durationSec / 60)}분). 영상 길이는 변환으로 줄일 수 없습니다.`,
+            );
+          }
+          loadingToast.update({ title: t("library.toast.convertProgress", { name: file.name, pct: 0 }) });
+          toUpload = await transcodeVideoFile({
+            file,
+            targetBytes: VIDEO_CONVERT_TARGET_BYTES,
+            durationSec: meta.durationSec,
+            onProgress: (ratio) =>
+              loadingToast.update({
+                title: t("library.toast.convertProgress", { name: file.name, pct: Math.round(ratio * 100) }),
+              }),
+          });
+        }
+        const item = await uploadReferenceFile(toUpload, uploadOptions);
         upsertUploadedItem(item);
         maybeAutoClassifyImport(item);
         successCount += 1;

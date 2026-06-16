@@ -1,3 +1,4 @@
+import { REFERENCE_UPLOAD_MAX_LABEL } from "@shared/constants";
 import { callOpenAI, type OpenAIChatResponse } from "./openai";
 import { updateReference, type ReferenceItem } from "./referenceLibrary";
 import {
@@ -431,8 +432,12 @@ export function friendlyClassifyError(err: unknown): string {
   if (err instanceof Error && err.name === "AbortError") return "";
   const raw = err instanceof Error ? err.message : String(err ?? "");
   if (!raw) return "AI classification failed.";
-  if (raw.includes("200MB")) return `Video too large. Limit: 200MB (current file exceeds it).`;
-  if (raw.includes("5분") || raw.includes("5 minutes")) return `Video too long. Limit: 5 minutes.`;
+  if (raw.includes(REFERENCE_UPLOAD_MAX_LABEL) || raw.includes("MB")) {
+    return `Video too large. Limit: ${REFERENCE_UPLOAD_MAX_LABEL} (current file exceeds it).`;
+  }
+  if (raw.includes("분 이하") || raw.toLowerCase().includes("minutes")) {
+    return `Video too long. Limit: ${MAX_DURATION_SEC / 60} minutes.`;
+  }
   if (raw.includes("디코딩") || raw.toLowerCase().includes("decod")) return "Could not decode video. The file may be corrupted or in an unsupported format.";
   if (raw.includes("메타데이터") || raw.toLowerCase().includes("metadata")) return "Could not read video metadata. The file may be unreachable or corrupted.";
   if (raw.includes("seek")) return "Frame extraction failed (seek error). Try a different video file.";

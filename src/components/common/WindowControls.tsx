@@ -67,6 +67,19 @@ declare global {
        *  셸 아이콘을 PNG 로 추출한다. 메인이 임시 파일을 만들어 `app.
        *  getFileIcon` 으로 뽑은 뒤 즉시 정리한다. 추출 실패 시 null. */
       getFileIcon?: (filename: string, bytes: Uint8Array) => Promise<Uint8Array | null>;
+      /** 300MB 초과 영상을 ffmpeg 로 목표 용량 이하 mp4 로 재인코딩한다. 입력은
+       *  원본 디스크 경로(getPathForFile). 성공 시 references 버킷의 scratch
+       *  상대경로를 반환 — 렌더러가 /storage/file/ 로 다시 fetch 해 업로드한다. */
+      transcodeVideo?: (args: {
+        id: string;
+        inputPath: string;
+        durationSec: number;
+        targetBytes: number;
+      }) => Promise<{ ok: true; scratchRelPath: string } | { ok: false; reason: string }>;
+      /** 트랜스코딩 진행률(0~1) 구독. 반환값은 unsubscribe 함수. */
+      onTranscodeProgress?: (cb: (p: { id: string; ratio: number }) => void) => () => void;
+      /** 진행 중인 트랜스코딩 취소. */
+      cancelTranscode?: (id: string) => void;
     };
   }
 }

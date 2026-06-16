@@ -10,10 +10,10 @@
  *
  * 다운스케일: 가로 768px (GPT vision detail=auto 권장 영역). 세로는 비율 유지.
  *
- * 한도: 300MB / 5분 — 그 이상은 호출자가 사전 검증하고 throw.
+ * 한도: 300MB / 10분 — 그 이상은 호출자가 사전 검증하고 throw.
  */
 
-import { MAX_VIDEO_BYTES, REFERENCE_UPLOAD_MAX_LABEL } from "@shared/constants";
+import { MAX_VIDEO_BYTES, MAX_VIDEO_DURATION_SEC, REFERENCE_UPLOAD_MAX_LABEL } from "@shared/constants";
 
 export interface ExtractedFrame {
   /** 영상 내 시점 (초) */
@@ -31,7 +31,7 @@ export interface VideoMeta {
 }
 
 export { MAX_VIDEO_BYTES };
-export const MAX_DURATION_SEC = 5 * 60;
+export const MAX_DURATION_SEC = MAX_VIDEO_DURATION_SEC;
 const TARGET_WIDTH = 768;
 
 /* ---- Scene-aware sampling 상수 ----
@@ -59,11 +59,13 @@ const HIST_DOWNSCALE_WIDTH = 96;
  *   ≤ 120s: 18
  *   ≤ 180s: 22
  *   ≤ 240s: 26
- *   ≤ 300s: 28  (5분 = 최대)
+ *   ≤ 300s: 28  (5분)
+ *   > 300s: 5분 초과분에 대해 60초당 +4 프레임을 비례 추가 (10분 ≈ 48장).
  *
  * Vision API 비용 ≈ 프레임 수에 비례 (각 768px PNG 가 ~1.5k input tokens).
  * 28 프레임이면 ~42k input tokens — 분류 1회당 GPT-5.5 기준 약 $0.04~0.06
- * 수준이라 도구의 핵심 가치를 감안하면 합리적.
+ * 수준. 10분(48장) 은 약 ~72k tokens 로, 긴 영상의 장면 커버리지를 위해
+ * 길이에 비례해 늘린다.
  */
 export function suggestedFrameCount(durationSec: number): number {
   if (!Number.isFinite(durationSec) || durationSec <= 0) return 8;
@@ -73,7 +75,9 @@ export function suggestedFrameCount(durationSec: number): number {
   if (durationSec <= 120) return 18;
   if (durationSec <= 180) return 22;
   if (durationSec <= 240) return 26;
-  return 28;
+  if (durationSec <= 300) return 28;
+  // 5분 초과: 시간에 비례해 늘린다 (mid-curve 와 동일한 60초당 +4 프레임 기울기).
+  return 28 + Math.ceil((durationSec - 300) / 60) * 4;
 }
 
 export function validateVideoFile(file: File): { ok: true } | { ok: false; reason: string } {
@@ -88,7 +92,7 @@ export function validateVideoMeta(meta: VideoMeta): { ok: true } | { ok: false; 
     // "분" 단위로 안내하고, 컨버팅으로도 해결되지 않음을 명시한다.
     return {
       ok: false,
-      reason: `5분 이하 영상만 지원합니다 (현재 약 ${Math.ceil(meta.durationSec / 60)}분). 영상 길이는 변환으로 줄일 수 없습니다.`,
+      reason: `${MAX_DURATION_SEC / 60}분 이하 영상만 지원합니다 (현재 약 ${Math.ceil(meta.durationSec / 60)}분). 영상 길이는 변환으로 줄일 수 없습니다.`,
     };
   }
   return { ok: true };
@@ -392,7 +396,8 @@ export async function sampleFramesWithSceneAwareness(
     /* Scene-aware path */
     const candidateCount = Math.min(
       Math.ceil(targetN * OVERSAMPLE_RATIO),
-      /* 안전 상한 — 5분 영상에서도 후보가 60장 이하로 제한 */
+      /* 안전 상한 — 후보 히스토그램 디코딩 비용을 막기 위해 최소 60장 또는
+         targetN 중 큰 값으로 제한(긴 영상의 targetN 이 60 을 넘으면 그만큼). */
       Math.max(targetN, 60),
     );
     const candidateTimes = computeUniformTimes(meta.durationSec, candidateCount);

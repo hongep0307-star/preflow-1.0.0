@@ -2620,6 +2620,7 @@ export const UI_COPY: Record<string, Record<UiLanguage, string>> = {
   "variant.resetAllTitle": { en: "Reset all controls to 0", ko: "모든 값을 0으로 초기화" },
   "variant.reset": { en: "Reset", ko: "초기화" },
   "variant.yaw": { en: "Yaw", ko: "좌우 회전" },
+  "variant.rotation": { en: "Rotation", ko: "회전" },
   "variant.pitch": { en: "Pitch", ko: "상하 각도" },
   "variant.zoom": { en: "Zoom", ko: "줌" },
   "variant.zoomHelp": {

@@ -32,8 +32,12 @@
  *   - Model: gpt-image-1.5 (default) | gpt-image-2 (slower fallback).
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { HelpCircle, Move3d, RotateCcw, X } from "lucide-react";
+
+/* 3D 궤도 위젯은 three.js(~600KB) 를 끌어오므로 모달 진입 시에만 로드되도록
+ * lazy 청크로 분리한다. base:"./" 상대경로 빌드라 Electron file:// 에서도 정상. */
+const OrbitSphere3D = lazy(() => import("./OrbitSphere3D"));
 import type { Scene, Asset } from "./contiTypes";
 import { IMAGE_SIZE_MAP } from "@/lib/conti";
 import { getImageModelDefault, getGptQualityDefault } from "@/lib/imageGenPreference";
@@ -253,11 +257,25 @@ const summarizeZoom = (zoom: number): string => {
   return `out ${-a}%`;
 };
 
-const summarizeYawUi = (yaw: number, language: UiLanguage): string => {
-  const a = Math.round(yaw);
-  if (Math.abs(a) < 8) return language === "ko" ? "동일" : "same";
-  if (language === "ko") return `${a > 0 ? "우" : "좌"} ${Math.abs(a)}°`;
-  return `${a > 0 ? "R" : "L"} ${Math.abs(a)}°`;
+/* 회전(Rotation) 표현 — UI 는 "정면=0°, 시계 방향으로 0~350°" 단방향 다이얼로
+ * 노출하고, 내부 yaw(-180~180, 우측+/좌측−) 와는 아래 함수로 변환한다.
+ *   rotation 0   = 정면(yaw 0)
+ *   rotation 90  = 우측 프로필(yaw 90)
+ *   rotation 180 = 후면(yaw 180)
+ *   rotation 270 = 좌측 프로필(yaw -90)
+ *   rotation 350 = 살짝 좌측(yaw -10)
+ * 이 변환은 표시/입력 전용이라 프롬프트(yawPhrase) 의미는 그대로 유지된다. */
+const ROTATION_MAX = 350;
+const rotationFromYaw = (yaw: number): number => {
+  let r = Math.round(yaw >= 0 ? yaw : yaw + 360);
+  if (r >= 360) r -= 360;
+  return r;
+};
+const yawFromRotation = (rot: number): number => (rot <= 180 ? rot : rot - 360);
+const summarizeRotationUi = (yaw: number, language: UiLanguage): string => {
+  const r = rotationFromYaw(yaw);
+  if (r === 0) return language === "ko" ? "정면" : "front";
+  return `${r}°`;
 };
 
 const summarizePitchUi = (pitch: number, language: UiLanguage): string => {
@@ -313,245 +331,85 @@ const buildChangeAnglePrompt = (
   });
 };
 
-/* ━━━ Sphere Control ━━━
- * SVG 기반 의사(pseudo) 3D sphere.
- * 내부적으로는 yaw/pitch 를 구면 좌표로 가지고, 카메라 위치(사용자가 보는 점)를
- * 원점(피사체) 기준 단위 구 위의 한 점으로 놓고 정사영(orthographic projection) 한다.
- *   x3 = sin(yaw) * cos(pitch)
- *   y3 = sin(pitch)              // pitch > 0: 카메라가 위 → high angle → 화면 y 위쪽
- *   z3 = cos(yaw) * cos(pitch)   // z>=0: 앞 반구 / z<0: 뒤 반구
- * 화면 좌표: (x3 * R, -y3 * R). 앞 반구면 solid dot, 뒤 반구면 dashed ring.
- *
- * 드래그 방식 — 포지셔널 매핑 (1:1 커서 매칭):
- *   pointer down 시점의 hemisphere(앞/뒤 반구)와 (커서 ↔ 도트) 오프셋을 기억한 뒤,
- *   move 마다 "커서 위치 - 오프셋" 을 도트의 새 화면 위치로 설정, 이를 구 표면으로
- *   역투영해서 새 (yaw, pitch) 를 구한다. 구 경계 밖으로 나가면 경계로 clamp.
- *   → 드래그가 커서와 1:1 로 따라오고, back 반구(z<0) 에서도 방향이 뒤집히지 않는다.
- *   → 반대편 hemisphere 로 넘어가려면 경계에서 release 후 다시 드래그하거나 preset 사용. */
+/* ━━━ Orbit widget sizing ━━━
+ * 3D 궤도 위젯(OrbitSphere3D)의 캔버스 한 변(px). 우측 컨트롤 그리드
+ * 레이아웃(gridTemplateColumns)과 위젯 size prop 에 함께 쓰인다. */
 const SPHERE_SIZE = 208;
-const SPHERE_RADIUS = 84;
 
-interface SphereControlProps {
+/* SphereControl(SVG 의사 3D) 는 OrbitSphere3D(three.js) 로 대체됨.
+ * yaw↔theta, pitch↔phi 항등 매핑은 아래 AngleOrbitWidget 어댑터가 담당. */
+
+/* ━━━ Camera gizmo ━━━
+ * OrbitSphere3D 의 marker 슬롯에 주입되는 카메라 모양 메쉬. 부모 group 은
+ * three 의 Object3D.lookAt 규약상(일반 오브젝트는 +Z 가 타깃을 향함) 로컬
+ * +Z 가 중앙(피사체)을 향하도록 정렬되므로, 렌즈 배럴을 +Z 로 빼두면 카메라가
+ * 피사체를 겨눈다. 카메라가 구의 뒤쪽(피사체 반대편)으로 돌면 렌즈가 시청자
+ * 쪽을 향하게 되어 렌즈가 또렷이 보인다. (조명용으로 교체 시 이 슬롯에 광원
+ * 기즈모를 넣으면 됨) */
+const CameraGizmo = ({ color }: { color: string }) => (
+  <group scale={1.15}>
+    {/* 바디 */}
+    <mesh>
+      <boxGeometry args={[0.17, 0.12, 0.085]} />
+      <meshStandardMaterial color="#2b2b30" emissive={color} emissiveIntensity={0.1} roughness={0.55} metalness={0.35} />
+    </mesh>
+    {/* 상단 뷰파인더/펜타프리즘 돌기 */}
+    <mesh position={[0.04, 0.082, 0]}>
+      <boxGeometry args={[0.055, 0.045, 0.05]} />
+      <meshStandardMaterial color="#37373d" roughness={0.6} metalness={0.25} />
+    </mesh>
+    {/* 셔터 버튼 */}
+    <mesh position={[-0.055, 0.078, 0]}>
+      <cylinderGeometry args={[0.012, 0.012, 0.02, 12]} />
+      <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.55} roughness={0.3} />
+    </mesh>
+    {/* 렌즈 배럴 — +Z(피사체)를 향함 */}
+    <mesh position={[0, 0, 0.085]} rotation={[Math.PI / 2, 0, 0]}>
+      <cylinderGeometry args={[0.046, 0.052, 0.09, 24]} />
+      <meshStandardMaterial color="#1b1b1f" roughness={0.4} metalness={0.55} />
+    </mesh>
+    {/* 렌즈 림(테두리) */}
+    <mesh position={[0, 0, 0.132]} rotation={[Math.PI / 2, 0, 0]}>
+      <cylinderGeometry args={[0.045, 0.045, 0.012, 24]} />
+      <meshStandardMaterial color="#0e0e12" roughness={0.3} metalness={0.6} />
+    </mesh>
+    {/* 렌즈 글래스(강조색) */}
+    <mesh position={[0, 0, 0.139]} rotation={[Math.PI / 2, 0, 0]}>
+      <cylinderGeometry args={[0.032, 0.032, 0.006, 24]} />
+      <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.85} roughness={0.15} metalness={0.2} />
+    </mesh>
+  </group>
+);
+
+/* ━━━ Angle adapter ━━━
+ * yaw/pitch(도메인) ↔ theta/phi(범용) 항등 매핑으로 OrbitSphere3D 를 감싸는
+ * 얇은 어댑터. 라이트 도메인은 같은 위젯을 azimuth/elevation 어댑터 + 상반구
+ * 제약 + 광원 기즈모로 재사용할 수 있다. */
+interface AngleOrbitWidgetProps {
   yaw: number;
   pitch: number;
+  zoom: number;
   onChange: (v: { yaw: number; pitch: number }) => void;
+  imageUrl?: string;
   disabled?: boolean;
-  labels: {
-    top: string;
-    bottom: string;
-  };
+  labels: { top: string; bottom: string };
 }
-
-const SphereControl = ({ yaw, pitch, onChange, disabled, labels }: SphereControlProps) => {
-  const svgRef = useRef<SVGSVGElement>(null);
-  /** hemi: 1 = 앞 반구(z>=0), -1 = 뒤 반구(z<0).
-   *  offsetX/Y: 포인터 다운 시점의 (커서 ↔ 도트) 화면 오프셋.
-   *    move 마다 (커서 - 오프셋) 을 도트 화면 위치로 간주 → 구 표면으로 역투영.
-   *  cx/cy: 포인터 다운 시점의 svg 화면 중심(BoundingClientRect 캐시). */
-  const dragRef = useRef<{ hemi: 1 | -1; offsetX: number; offsetY: number; screenCx: number; screenCy: number } | null>(
-    null,
-  );
-  const [dragging, setDragging] = useState(false);
-
-  const yawRad = (yaw * Math.PI) / 180;
-  const pitchRad = (pitch * Math.PI) / 180;
-  const x3 = Math.sin(yawRad) * Math.cos(pitchRad);
-  const y3 = Math.sin(pitchRad);
-  const z3 = Math.cos(yawRad) * Math.cos(pitchRad);
-  const inFront = z3 >= 0;
-
-  const cx = SPHERE_SIZE / 2;
-  const cy = SPHERE_SIZE / 2;
-  const dotX = cx + x3 * SPHERE_RADIUS;
-  const dotY = cy - y3 * SPHERE_RADIUS;
-
-  const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
-    if (disabled) return;
-    const svg = svgRef.current;
-    if (!svg) return;
-    (e.currentTarget as unknown as Element).setPointerCapture?.(e.pointerId);
-    const rect = svg.getBoundingClientRect();
-    const screenCx = rect.left + cx;
-    const screenCy = rect.top + cy;
-    const dotScreenX = screenCx + x3 * SPHERE_RADIUS;
-    const dotScreenY = screenCy - y3 * SPHERE_RADIUS;
-    dragRef.current = {
-      hemi: z3 >= 0 ? 1 : -1,
-      offsetX: e.clientX - dotScreenX,
-      offsetY: e.clientY - dotScreenY,
-      screenCx,
-      screenCy,
-    };
-    setDragging(true);
-  };
-  const onPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
-    const d = dragRef.current;
-    if (!d) return;
-    // 목표 도트 화면 좌표 = 커서 - (클릭 당시 커서-도트 오프셋)
-    const targetDotX = e.clientX - d.offsetX;
-    const targetDotY = e.clientY - d.offsetY;
-    let u = targetDotX - d.screenCx;
-    let v = targetDotY - d.screenCy;
-    // 구 경계 밖이면 경계로 clamp — 이때 z=0 (edge).
-    const r = Math.hypot(u, v);
-    if (r > SPHERE_RADIUS) {
-      u = (u / r) * SPHERE_RADIUS;
-      v = (v / r) * SPHERE_RADIUS;
-    }
-    // 화면 좌표 → 단위 구 좌표
-    const xn = u / SPHERE_RADIUS;
-    const yn = -v / SPHERE_RADIUS;
-    const r2 = xn * xn + yn * yn;
-    const zn = d.hemi * Math.sqrt(Math.max(0, 1 - r2));
-    // 역변환: y3 = sin(pitch), (x3, z3) = (sin(yaw)cos(pitch), cos(yaw)cos(pitch))
-    const newPitchRad = Math.asin(Math.max(-1, Math.min(1, yn)));
-    const newYawRad = Math.atan2(xn, zn);
-    const newPitch = (newPitchRad * 180) / Math.PI;
-    let newYaw = (newYawRad * 180) / Math.PI;
-    // 안전: -180..180 범위 보장
-    if (newYaw > 180) newYaw -= 360;
-    if (newYaw < -180) newYaw += 360;
-    onChange({ yaw: newYaw, pitch: newPitch });
-  };
-  const onPointerUp = (e: React.PointerEvent<SVGSVGElement>) => {
-    try {
-      (e.currentTarget as unknown as Element).releasePointerCapture?.(e.pointerId);
-    } catch {
-      /* ignore */
-    }
-    dragRef.current = null;
-    setDragging(false);
-  };
-  const onDoubleClick = () => {
-    if (disabled) return;
-    onChange({ yaw: 0, pitch: 0 });
-  };
-
-  const labelStyle: React.CSSProperties = {
-    userSelect: "none",
-    WebkitUserSelect: "none",
-    pointerEvents: "none",
-  };
-
-  // 경도선(meridians) — 정면 정사영에서 타원 (rx = |sin(λ)|·R, ry = R)
-  const meridianAngles = [30, 60, 90, 120, 150];
-  // 위도선(latitudes) — 정면 정사영에서 y=sin(φ)·R 위치의 수평선. 길이는 cos(φ)·R·2.
-  const latitudes = [-60, -30, 30, 60];
-
-  return (
-    <svg
-      ref={svgRef}
-      width={SPHERE_SIZE}
-      height={SPHERE_SIZE}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
-      onDoubleClick={onDoubleClick}
-      style={{
-        touchAction: "none",
-        cursor: disabled ? "default" : dragging ? "grabbing" : "grab",
-        opacity: disabled ? 0.5 : 1,
-        userSelect: "none",
-        WebkitUserSelect: "none",
-      }}
-    >
-      <defs>
-        <radialGradient id="changeAngleSphereGrad" cx="32%" cy="28%" r="78%">
-          <stop offset="0%" stopColor="hsl(var(--foreground) / 0.14)" />
-          <stop offset="55%" stopColor="hsl(var(--foreground) / 0.04)" />
-          <stop offset="100%" stopColor="rgba(0,0,0,0.55)" />
-        </radialGradient>
-      </defs>
-      {/* sphere body */}
-      <circle
-        cx={cx}
-        cy={cy}
-        r={SPHERE_RADIUS}
-        fill="url(#changeAngleSphereGrad)"
-        stroke="hsl(var(--foreground) / 0.2)"
-        strokeWidth={1}
-      />
-      {/* latitudes */}
-      {latitudes.map((deg) => {
-        const rad = (deg * Math.PI) / 180;
-        const ly = cy - Math.sin(rad) * SPHERE_RADIUS;
-        const halfLen = Math.cos(rad) * SPHERE_RADIUS;
-        return (
-          <line
-            key={`lat-${deg}`}
-            x1={cx - halfLen}
-            y1={ly}
-            x2={cx + halfLen}
-            y2={ly}
-            stroke="hsl(var(--foreground) / 0.08)"
-            strokeWidth={1}
-            strokeDasharray="2 3"
-          />
-        );
-      })}
-      {/* meridians */}
-      {meridianAngles.map((deg) => {
-        const rx = Math.abs(Math.sin((deg * Math.PI) / 180)) * SPHERE_RADIUS;
-        return (
-          <ellipse
-            key={`lon-${deg}`}
-            cx={cx}
-            cy={cy}
-            rx={rx}
-            ry={SPHERE_RADIUS}
-            fill="none"
-            stroke="hsl(var(--foreground) / 0.07)"
-            strokeWidth={1}
-            strokeDasharray="2 3"
-          />
-        );
-      })}
-      {/* equator (horizontal mid-line) */}
-      <line
-        x1={cx - SPHERE_RADIUS}
-        y1={cy}
-        x2={cx + SPHERE_RADIUS}
-        y2={cy}
-        stroke="hsl(var(--foreground) / 0.15)"
-        strokeWidth={1}
-      />
-      {/* vertical prime meridian */}
-      <line
-        x1={cx}
-        y1={cy - SPHERE_RADIUS}
-        x2={cx}
-        y2={cy + SPHERE_RADIUS}
-        stroke="hsl(var(--foreground) / 0.12)"
-        strokeWidth={1}
-      />
-      {/* center marker: original viewpoint */}
-      <circle cx={cx} cy={cy} r={2} fill="hsl(var(--foreground) / 0.38)" />
-      {/* cardinal labels */}
-      <text x={cx} y={cy - SPHERE_RADIUS - 8} textAnchor="middle" fill="hsl(var(--foreground) / 0.55)" fontSize={9} style={labelStyle}>
-        {labels.top}
-      </text>
-      <text x={cx} y={cy + SPHERE_RADIUS + 14} textAnchor="middle" fill="hsl(var(--foreground) / 0.55)" fontSize={9} style={labelStyle}>
-        {labels.bottom}
-      </text>
-      <text x={cx - SPHERE_RADIUS - 6} y={cy + 3} textAnchor="end" fill="hsl(var(--foreground) / 0.55)" fontSize={9} style={labelStyle}>
-        L
-      </text>
-      <text x={cx + SPHERE_RADIUS + 6} y={cy + 3} textAnchor="start" fill="hsl(var(--foreground) / 0.55)" fontSize={9} style={labelStyle}>
-        R
-      </text>
-      {/* draggable viewpoint dot */}
-      {inFront ? (
-        <circle cx={dotX} cy={dotY} r={7} fill="hsl(var(--primary))" stroke="#fff" strokeWidth={1.5} />
-      ) : (
-        <g>
-          <circle cx={dotX} cy={dotY} r={7} fill="none" stroke="hsl(var(--primary))" strokeWidth={2} strokeDasharray="3 2" />
-          <circle cx={dotX} cy={dotY} r={2} fill="hsl(var(--primary))" />
-        </g>
-      )}
-    </svg>
-  );
-};
+const AngleOrbitWidget = ({ yaw, pitch, zoom, onChange, imageUrl, disabled, labels }: AngleOrbitWidgetProps) => (
+  <OrbitSphere3D
+    theta={yaw}
+    phi={pitch}
+    onChange={({ theta, phi }) => onChange({ yaw: theta, pitch: phi })}
+    imageUrl={imageUrl}
+    zoom={zoom}
+    size={SPHERE_SIZE}
+    disabled={disabled}
+    thetaRange={[-YAW_MAX, YAW_MAX]}
+    phiRange={[-PITCH_MAX, PITCH_MAX]}
+    labels={{ top: labels.top, bottom: labels.bottom, left: "L", right: "R" }}
+    accentColor="#f87171"
+    marker={<CameraGizmo color="#f87171" />}
+  />
+);
 
 /* ━━━ Small labeled slider (bi-polar: 중앙 = 0) ━━━ */
 interface BiSliderProps {
@@ -921,7 +779,7 @@ export function ChangeAngleModal({
               help={t("variant.orbitHelp")}
               meta={
                 <span>
-                  {t("variant.yaw")} <b style={{ color: "hsl(var(--foreground) / 0.7)" }}>{summarizeYawUi(cfg.yaw, language)}</b>
+                  {t("variant.rotation")} <b style={{ color: "hsl(var(--foreground) / 0.7)" }}>{summarizeRotationUi(cfg.yaw, language)}</b>
                   <span style={{ opacity: 0.35, margin: "0 5px" }}>·</span>
                   {t("variant.pitch")} <b style={{ color: "hsl(var(--foreground) / 0.7)" }}>{summarizePitchUi(cfg.pitch, language)}</b>
                 </span>
@@ -935,29 +793,49 @@ export function ChangeAngleModal({
                   alignItems: "center",
                 }}
               >
-                <SphereControl
-                  yaw={cfg.yaw}
-                  pitch={cfg.pitch}
-                  onChange={({ yaw, pitch }) =>
-                    setCfg((p) => ({
-                      ...p,
-                      yaw: clamp(yaw, -YAW_MAX, YAW_MAX),
-                      pitch: clamp(pitch, -PITCH_MAX, PITCH_MAX),
-                    }))
+                <Suspense
+                  fallback={
+                    <div
+                      style={{
+                        width: SPHERE_SIZE,
+                        height: SPHERE_SIZE,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        color: "hsl(var(--foreground) / 0.4)",
+                        fontSize: 11,
+                      }}
+                    >
+                      3D…
+                    </div>
                   }
-                  disabled={applying}
-                  labels={{ top: t("variant.top"), bottom: t("variant.bottom") }}
-                />
+                >
+                  <AngleOrbitWidget
+                    yaw={cfg.yaw}
+                    pitch={cfg.pitch}
+                    zoom={cfg.zoom}
+                    onChange={({ yaw, pitch }) =>
+                      setCfg((p) => ({
+                        ...p,
+                        yaw: clamp(yaw, -YAW_MAX, YAW_MAX),
+                        pitch: clamp(pitch, -PITCH_MAX, PITCH_MAX),
+                      }))
+                    }
+                    imageUrl={sourceUrl}
+                    disabled={applying}
+                    labels={{ top: t("variant.top"), bottom: t("variant.bottom") }}
+                  />
+                </Suspense>
                 <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
                   <BiSlider
-                    label={t("variant.yaw")}
-                    value={cfg.yaw}
-                    min={-YAW_MAX}
-                    max={YAW_MAX}
-                    endLabels={["L", "R"]}
-                    onChange={(v) => setCfg((p) => ({ ...p, yaw: clamp(v, -YAW_MAX, YAW_MAX) }))}
+                    label={t("variant.rotation")}
+                    value={rotationFromYaw(cfg.yaw)}
+                    min={0}
+                    max={ROTATION_MAX}
+                    endLabels={[language === "ko" ? "정면" : "Front", `${ROTATION_MAX}°`]}
+                    onChange={(v) => setCfg((p) => ({ ...p, yaw: yawFromRotation(clamp(v, 0, ROTATION_MAX)) }))}
                     disabled={applying}
-                    summary={summarizeYawUi(cfg.yaw, language)}
+                    summary={summarizeRotationUi(cfg.yaw, language)}
                     resetTitle={t("variant.doubleClickResetTitle")}
                   />
                   <BiSlider
@@ -980,7 +858,7 @@ export function ChangeAngleModal({
                           key={preset.id}
                           onClick={() => setCfg((p) => ({ ...p, yaw: preset.yaw, pitch: preset.pitch }))}
                           disabled={applying}
-                          title={`${getOrbitPresetLabel(preset, language)} (${t("variant.yaw")} ${preset.yaw}°, ${t("variant.pitch")} ${preset.pitch}°)`}
+                          title={`${getOrbitPresetLabel(preset, language)} (${t("variant.rotation")} ${rotationFromYaw(preset.yaw)}°, ${t("variant.pitch")} ${preset.pitch}°)`}
                           className="hover:bg-white/[0.08] disabled:opacity-50"
                           style={{
                             padding: "4px 8px",

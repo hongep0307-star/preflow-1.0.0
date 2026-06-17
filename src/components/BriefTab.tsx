@@ -97,6 +97,14 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { KR } from "@/lib/brand";
+import { SidebarResizeHandle } from "@/components/SidebarResizeHandle";
+import {
+  BRIEF_PANEL_WIDTH_CHANGED_EVENT,
+  DEFAULT_BRIEF_PANEL_WIDTH,
+  clampBriefPanelWidth,
+  readBriefPanelWidth,
+  saveBriefPanelWidth,
+} from "@/lib/briefPreferences";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -4352,6 +4360,26 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
   const { language: uiLanguage } = useUiLanguage();
   const isMobile = useIsMobile();
 
+  // 크리에이티브 입력 패널 폭 — 드래그 리사이즈 가능. localStorage 영구화 +
+  // 같은/다른 윈도우 동기화(CustomEvent + storage). 분석 후에도 접지 않고
+  // 이 폭을 그대로 유지한다.
+  const [briefPanelWidth, setBriefPanelWidth] = useState<number>(() => readBriefPanelWidth());
+  useEffect(() => {
+    const syncFromEvent = (e: Event) => {
+      const detail = (e as CustomEvent<number>).detail;
+      if (typeof detail === "number") setBriefPanelWidth(clampBriefPanelWidth(detail));
+    };
+    const syncFromStorage = (e: StorageEvent) => {
+      if (e.key === "preflow.brief.panelWidth") setBriefPanelWidth(readBriefPanelWidth());
+    };
+    window.addEventListener(BRIEF_PANEL_WIDTH_CHANGED_EVENT, syncFromEvent);
+    window.addEventListener("storage", syncFromStorage);
+    return () => {
+      window.removeEventListener(BRIEF_PANEL_WIDTH_CHANGED_EVENT, syncFromEvent);
+      window.removeEventListener("storage", syncFromStorage);
+    };
+  }, []);
+
   const getInitialDraft = useCallback((): DraftState => {
     const memCached = _draftByProject.get(projectId);
     if (memCached) return memCached;
@@ -5923,7 +5951,10 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
   };
 
   const hasAnalysis = !!analysis && !analyzing;
-  const isCollapsedMode = hasAnalysis;
+  // 분석 후에도 크리에이티브 입력 패널을 접지 않는다(사용자 요청). 폭은
+  // briefPanelWidth(드래그 리사이즈) 로 사용자가 직접 조절한다. 과거에는
+  // hasAnalysis 시 좁은 collapsible 모드로 전환됐다.
+  const isCollapsedMode = false;
 
   const briefTextPreview = briefText.trim()
     ? briefText.trim().slice(0, 60) + (briefText.trim().length > 60 ? "…" : "")
@@ -6491,9 +6522,9 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
           isMobile
             ? {}
             : {
-                width: isCollapsedMode ? 260 : 300,
-                minWidth: isCollapsedMode ? 220 : undefined,
-                maxWidth: isCollapsedMode ? 280 : undefined,
+                // 드래그 리사이즈로 사용자가 정한 폭(접힘 없음). 기본값은 기존
+                // 300 보다 넓혀 긴 설명/모델 라벨이 처음부터 잘 보이게 한다.
+                width: briefPanelWidth,
               }
         }
       >
@@ -6585,6 +6616,18 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
           </div>
         </div>
       </div>
+
+      {/* ── 리사이즈 핸들 ── 데스크톱에서 크리에이티브 입력 패널 폭을 드래그로
+          조절. 더블클릭하면 기본 폭으로 복원. mouseup 시점에만 영구화. */}
+      {!isMobile && (
+        <SidebarResizeHandle
+          width={briefPanelWidth}
+          onWidthChange={setBriefPanelWidth}
+          defaultWidth={DEFAULT_BRIEF_PANEL_WIDTH}
+          clamp={clampBriefPanelWidth}
+          onCommit={saveBriefPanelWidth}
+        />
+      )}
 
       {/* ── CENTER: Strategy Manifesto ── */}
       {(hasAnalysis || analyzing || loaderLingering) && (

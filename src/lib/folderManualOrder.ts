@@ -158,6 +158,22 @@ export function reorderFoldersBefore(
   return [...remaining.slice(0, targetIdx), moveId, ...remaining.slice(targetIdx)];
 }
 
+/** reorderFoldersBefore 의 짝 — moveId 를 targetId 바로 *직후* 위치로 옮긴다.
+ *  목록 맨 아래(마지막 형제 다음)로 폴더를 내릴 때 사용. targetId === null
+ *  이면 끝쪽 append, moveId === targetId 면 noop. */
+export function reorderFoldersAfter(
+  visibleChildren: string[],
+  moveId: string,
+  targetId: string | null,
+): string[] {
+  if (targetId !== null && moveId === targetId) return visibleChildren;
+  const remaining = visibleChildren.filter((id) => id !== moveId);
+  if (targetId === null) return [...remaining, moveId];
+  const targetIdx = remaining.indexOf(targetId);
+  if (targetIdx < 0) return [...remaining, moveId];
+  return [...remaining.slice(0, targetIdx + 1), moveId, ...remaining.slice(targetIdx + 1)];
+}
+
 /** parent 의 부모 path 산출 helper. "" 는 root.
  *  e.g., "a/b/c" → "a/b", "a" → "", "" → "" */
 export function parentPathOf(path: string): string {

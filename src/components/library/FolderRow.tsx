@@ -260,6 +260,9 @@ export function FolderRow({
     : isReferenceDrag
       ? true
       : isDescendantOfSource;
+  // "after" 는 before 의 짝 — 타깃 *직후* 위치(형제). 비활성 규칙은 before 와
+  // 동일하다(드래그 안 함 / reference drag / 자기 자신·자손).
+  const afterDisabled = beforeDisabled;
 
   const {
     setNodeRef: setDragRef,
@@ -279,6 +282,11 @@ export function FolderRow({
     id: `${row.tag}::before`,
     disabled: beforeDisabled,
     data: { kind: "folder-before", row },
+  });
+  const { setNodeRef: setAfterRef, isOver: isOverAfter } = useDroppable({
+    id: `${row.tag}::after`,
+    disabled: afterDisabled,
+    data: { kind: "folder-after", row },
   });
 
   const setRowRef = useCallback(
@@ -440,6 +448,23 @@ export function FolderRow({
             {isOverBefore ? (
               <div
                 className="absolute right-1 top-1/2 h-[3px] -translate-y-1/2 rounded-full bg-primary"
+                style={{ left: `${4 + depthIndent}px` }}
+              />
+            ) : null}
+          </div>
+          {/* "after" insertion strip — before 의 짝. 행 하단 엣지에 두어
+              "여기 같은 레벨, 이 폴더 *다음* 으로 들어감" 을 표현. 목록 맨 아래
+              로 폴더를 내릴 때 유일한 드롭 타깃이 된다(이전엔 마지막 위치로
+              이동이 불가능했던 문제 해결). 위쪽 before strip 과 다음 행 before
+              strip 사이에서 hit 영역이 겹치지 않게 행 안쪽(bottom-0)에 둔다. */}
+          <div
+            ref={setAfterRef}
+            aria-hidden
+            className="pointer-events-none absolute inset-x-0 -bottom-1 z-10 h-2"
+          >
+            {isOverAfter ? (
+              <div
+                className="absolute bottom-1/2 right-1 h-[3px] translate-y-1/2 rounded-full bg-primary"
                 style={{ left: `${4 + depthIndent}px` }}
               />
             ) : null}

@@ -156,6 +156,7 @@ import {
   getFolderSiblingOrder,
   parentPathOf,
   reorderFoldersBefore,
+  reorderFoldersAfter,
   setFolderSiblingOrder,
 } from "@/lib/folderManualOrder";
 import {
@@ -6399,6 +6400,110 @@ const LibraryPage = () => {
     [activeTag, selectedFolderTags, applyFolderSelection, folderHasChildren, toast, t],
   );
 
+  /** 다중 폴더 일괄 이동 — 사이드바에서 Ctrl/Shift 로 여러 폴더를 선택한
+   *  뒤 그중 하나를 드래그해 다른 폴더로 떨어뜨릴 때 사용. 선택 전체를 같은
+   *  목적지(destPath, null 이면 root)로 옮긴다. 단건 moveFolderTo 와 달리
+   *  토스트/선택 remap 을 한 번만 수행해 N 번 깜빡이지 않게 한다. */
+  const moveFoldersTo = useCallback(
+    async (sourceRows: LibraryFolderRow[], destPath: string | null) => {
+      // 선택 안에 부모·자손이 함께 있으면 자손은 부모와 함께 따라 이동되므로
+      // 중복 이동 대상에서 제외(또한 동일 경로 dedupe).
+      const allPaths = sourceRows.map((r) => normalizeFolderPath(r.tag));
+      const seen = new Set<string>();
+      const targets = sourceRows.filter((r) => {
+        const p = normalizeFolderPath(r.tag);
+        if (seen.has(p)) return false;
+        seen.add(p);
+        return !allPaths.some((other) => other !== p && p.startsWith(`${other}/`));
+      });
+
+      const moves: { oldTag: string; newTag: string }[] = [];
+      let blockedChildren = 0;
+      let needsBriefCount = 0;
+      let failed = 0;
+      const updatedItems: ReferenceItem[] = [];
+
+      for (const row of targets) {
+        const oldPath = normalizeFolderPath(row.tag);
+        const leaf = oldPath.split("/").pop() ?? oldPath;
+        const newPath = destPath ? normalizeFolderPath(`${destPath}/${leaf}`) : leaf;
+        // no-op / 사이클(자기 자신·자손으로) 차단.
+        if (!newPath || newPath === oldPath) continue;
+        if (destPath !== null && (destPath === oldPath || destPath.startsWith(`${oldPath}/`))) continue;
+        // 같은 부모로의 이동은 의미 없음.
+        const currentParent = oldPath.includes("/") ? oldPath.slice(0, oldPath.lastIndexOf("/")) : "";
+        if ((destPath ?? "") === currentParent) continue;
+        if (folderHasChildren(oldPath)) {
+          blockedChildren += 1;
+          continue;
+        }
+        const intoBrief = isBriefMatchPath(newPath) && !isBriefMatchPath(oldPath);
+        if (intoBrief && !hasBriefContent(oldPath)) {
+          needsBriefCount += 1;
+          continue;
+        }
+        try {
+          const result = await renameFolder(oldPath, newPath);
+          renameUserFolderPath(oldPath, newPath);
+          cascadeRenameFolderPrefs(oldPath, newPath);
+          cascadeRenameFolderManualOrder(oldPath, newPath);
+          renameFolderAiSettings(oldPath, newPath);
+          cascadeRenameCanvasLayout(oldPath, newPath);
+          cascadeRenameBriefMatchEntries(oldPath, newPath);
+          updatedItems.push(...result.items);
+          moves.push({ oldTag: folderTag(oldPath), newTag: folderTag(newPath) });
+        } catch (err) {
+          failed += 1;
+          console.warn("[LibraryPage] moveFoldersTo rename failed:", (err as Error).message);
+        }
+      }
+
+      if (moves.length > 0) {
+        setUserFolderPaths(getUserFolderPaths());
+        setItems((current) =>
+          current.map((item) => updatedItems.find((u) => u.id === item.id) ?? item),
+        );
+        // 선택 집합/앵커 경로를 모든 이동에 맞춰 한 번에 remap(자손 포함).
+        const remap = (tag: string) => {
+          for (const { oldTag, newTag } of moves) {
+            if (tag === oldTag) return newTag;
+            if (tag.startsWith(`${oldTag}/`)) return newTag + tag.slice(oldTag.length);
+          }
+          return tag;
+        };
+        applyFolderSelection(selectedFolderTags.map(remap), activeTag ? remap(activeTag) : null);
+        toast({
+          title: t("library.toast.foldersMoved", { n: moves.length }),
+          description: destPath
+            ? t("library.toast.foldersMovedDesc", {
+                to: prettyBriefMatchPath(destPath, t("library.sidebar.briefMatch")),
+              })
+            : t("library.toast.foldersMovedToRootDesc"),
+        });
+      }
+
+      // 일부가 규칙에 막혔으면 알린다(하위 폴더 보유 / 브리프 필요).
+      if (blockedChildren > 0) {
+        toast({
+          variant: "destructive",
+          title: t("briefMatch.move.hasChildrenTitle"),
+          description: t("briefMatch.move.hasChildrenDesc"),
+        });
+      }
+      if (needsBriefCount > 0) {
+        toast({
+          variant: "destructive",
+          title: t("briefMatch.move.needBriefTitle"),
+          description: t("briefMatch.move.needBriefDesc"),
+        });
+      }
+      if (failed > 0) {
+        toast({ variant: "destructive", title: t("library.toast.moveFolderFailed") });
+      }
+    },
+    [activeTag, selectedFolderTags, applyFolderSelection, folderHasChildren, toast, t],
+  );
+
   const confirmMoveFolder = useCallback(
     async (destPath: string) => {
       const target = folderMoveTarget;
@@ -6531,6 +6636,16 @@ const LibraryPage = () => {
   // 번 더 방어적 검증 — 자기 자신 / 자손 / 동일 부모는 noop.
   const handleDragMoveFolder = useCallback(
     (sourceRow: LibraryFolderRow, destPath: string | null) => {
+      // 드래그한 폴더가 다중 선택(2개 이상)의 일부면 선택 폴더 전체를 같은
+      // 목적지로 일괄 이동한다. 단건 가드/이동 로직은 moveFoldersTo 가 각
+      // 폴더별로 다시 평가하므로 여기선 곧장 위임한다.
+      if (selectedFolderTags.length > 1 && selectedFolderTags.includes(sourceRow.tag)) {
+        const rows = selectedFolderTags
+          .map((tag) => folders.find((r) => r.tag === tag))
+          .filter((r): r is LibraryFolderRow => Boolean(r));
+        void moveFoldersTo(rows, destPath);
+        return;
+      }
       const sourcePath = normalizeFolderPath(sourceRow.tag);
       if (destPath !== null) {
         if (destPath === sourcePath || destPath.startsWith(`${sourcePath}/`)) return;
@@ -6541,7 +6656,7 @@ const LibraryPage = () => {
       if ((destPath ?? null) === currentParent) return;
       void moveFolderTo(sourceRow, destPath);
     },
-    [moveFolderTo],
+    [moveFolderTo, moveFoldersTo, selectedFolderTags, folders],
   );
 
   const applyUpdatedItems = useCallback((updated: ReferenceItem[]) => {
@@ -6727,9 +6842,34 @@ const LibraryPage = () => {
         const sourcePath = sourceTag.replace(/^folder:/, "");
         const sourceCurrentParent = parentPathOf(sourcePath);
         const BEFORE_SUFFIX = "::before";
+        const AFTER_SUFFIX = "::after";
 
-        if (overId.endsWith(BEFORE_SUFFIX)) {
-          const targetTag = overId.slice(0, -BEFORE_SUFFIX.length);
+        // ── 다중 선택 일괄 이동 ──
+        // 사이드바에서 Ctrl/Shift 로 여러 폴더를 고른 뒤 그중 하나를 드래그하면
+        // 선택 폴더 전체를 같은 목적지로 옮긴다. before/after/into 모두 "목적지
+        // 부모" 로 환원해 moveFoldersTo 에 위임 — per-folder 검증·토스트·선택
+        // remap 을 한 곳에서 처리한다(형제 순서 미세 조정은 다중 케이스에선 생략).
+        if (selectedFolderTags.length > 1 && selectedFolderTags.includes(sourceTag)) {
+          const destParent = overId.endsWith(BEFORE_SUFFIX)
+            ? parentPathOf(overId.slice(0, -BEFORE_SUFFIX.length).replace(/^folder:/, ""))
+            : overId.endsWith(AFTER_SUFFIX)
+              ? parentPathOf(overId.slice(0, -AFTER_SUFFIX.length).replace(/^folder:/, ""))
+              : overId.replace(/^folder:/, "");
+          const rows = selectedFolderTags
+            .map((tag) => folders.find((r) => r.tag === tag))
+            .filter((r): r is LibraryFolderRow => Boolean(r));
+          void moveFoldersTo(rows, destParent || null);
+          return;
+        }
+
+        // ── 형제 순서 재배치(::before / ::after) ──
+        // before = 타깃 직전, after = 타깃 직후(목록 맨 아래로 내릴 때 사용).
+        // 둘 다 "타깃의 형제(=같은 부모)" 로 들어가며, 부모가 바뀌면 rename 까지.
+        const isBeforeDrop = overId.endsWith(BEFORE_SUFFIX);
+        const isAfterDrop = overId.endsWith(AFTER_SUFFIX);
+        if (isBeforeDrop || isAfterDrop) {
+          const suffixLen = (isBeforeDrop ? BEFORE_SUFFIX : AFTER_SUFFIX).length;
+          const targetTag = overId.slice(0, -suffixLen);
           const targetPath = targetTag.replace(/^folder:/, "");
           if (targetPath === sourcePath) return;
           const newParentPath = parentPathOf(targetPath);
@@ -6781,12 +6921,14 @@ const LibraryPage = () => {
           })();
 
           // 다른 부모에서 가져오는 경우엔 시드에 newSourcePath 가 없으니
-          // 강제로 끝쪽에 더한 뒤 reorderFoldersBefore 로 옮긴다. 같은 부모
-          // 면 이미 sourcePath(=newSourcePath) 가 시드 안에 있다.
+          // 강제로 끝쪽에 더한 뒤 reorderFolders(Before|After) 로 옮긴다. 같은
+          // 부모면 이미 sourcePath(=newSourcePath) 가 시드 안에 있다.
           const seed = sortedSiblingsOfNewParent.includes(newSourcePath)
             ? sortedSiblingsOfNewParent
             : [...sortedSiblingsOfNewParent, newSourcePath];
-          const newOrder = reorderFoldersBefore(seed, newSourcePath, targetPath);
+          const newOrder = isAfterDrop
+            ? reorderFoldersAfter(seed, newSourcePath, targetPath)
+            : reorderFoldersBefore(seed, newSourcePath, targetPath);
           setFolderSiblingOrder(newParentPath, newOrder);
 
           // 부모가 다르면 옛 부모의 order 에서도 source 를 빼낸다 — 그러지
@@ -6846,7 +6988,7 @@ const LibraryPage = () => {
       if (data?.kind === "reference") {
         const ids = data.ids && data.ids.length > 0 ? data.ids : [String(event.active.id)];
         if (overId.startsWith("folder:")) {
-          if (overId.endsWith("::before")) return;
+          if (overId.endsWith("::before") || overId.endsWith("::after")) return;
           const path = overId.replace(/^folder:/, "");
           void handleDropReferencesToFolder(ids, path);
           return;
@@ -6870,6 +7012,8 @@ const LibraryPage = () => {
     [
       activeDrag,
       folders,
+      selectedFolderTags,
+      moveFoldersTo,
       evaluateFolderMove,
       handleDragMoveFolder,
       handleDropReferencesToFolder,

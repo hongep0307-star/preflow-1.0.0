@@ -64,6 +64,7 @@ import { useToast } from "@/hooks/use-toast";
 import { toast as sonnerToast } from "sonner";
 import {
   BarChart3,
+  Check,
   CheckCircle,
   Copy,
   ImagePlus,
@@ -80,7 +81,7 @@ import {
   GalleryHorizontalEnd,
   ChevronLeft,
   GripVertical,
-  Package,
+  Layers,
   MessageSquare,
   Target,
   Camera,
@@ -913,7 +914,7 @@ confidence < 0.6 이면 secondary_type 도 추가 제시.
     "definition": "이 프로젝트에서 키비주얼/하이라이트 컷이 의미하는 바 1문장",
     "selection_rules": ["하이라이트 후보를 고르는 기준 3개 — hook/hero/product/emotion/cta 중 근거 명시"],
     "visual_priorities": ["대표 이미지가 가져야 할 시각 우선순위 3-5개 — 피사체 위계, 실루엣, 깊이, 컬러 포인트 등"],
-    "avoid_patterns": ["반복되면 품질이 떨어지는 구도/표현 2-4개"],
+    "avoid_patterns": ["반복되면 품질이 떨어지는 구도/표현 2-4개 — 한국어 서술형"],
     "evidence": ["브리프/레퍼런스/ABCD 기준 중 이 정의의 근거 2-4개"]
   },
 
@@ -975,7 +976,8 @@ brand_film 인 경우에만 추가:
 - Highlight 체크박스가 후속 씬/이미지 생성에서 참고할 기준이다. 반드시 브리프와 레퍼런스 근거를 evidence 에 적는다.
 - selection_rules 는 "왜 이 컷이 대표 이미지 후보인지"를 판단할 수 있어야 한다. 단순히 "멋있게" 금지.
 - visual_priorities 는 카메라 고정값이 아니라 피사체 위계, 실루엣, 전경/중경/후경 깊이, 조명 분리, 브랜드/제품 가독성처럼 다양한 구도에 적용 가능한 기준으로 작성한다.
-- avoid_patterns 는 과도한 중앙 클로즈업, generic stock hero pose, 로고 단독 첫 프레임, 모든 컷 동일 구도 등 반복 패턴 방지 기준을 포함한다.
+- avoid_patterns 는 과도한 중앙 클로즈업, 일반적인 스톡 히어로 포즈, 로고만 보이는 정적 첫 프레임, 모든 컷 동일 구도 등 반복 패턴 방지 기준을 포함한다.
+- avoid_patterns 의 각 항목은 반드시 한국어 서술형으로 작성한다. constraints.avoid 의 영어 네거티브 프롬프트 형식 규칙을 여기에는 적용하지 않는다.
 - ABCD 기준과 연결: Attract=첫눈에 이해, Brand=제품/브랜드 명확성, Connect=감정/타겟 공감, Direct=CTA로 이어지는 명확성.
 
 [레퍼런스 분석 규칙]
@@ -1735,11 +1737,15 @@ const EditableText = ({
    *   차이로 인한 0.5~1px shift 를 막는다.
    * - 멀티라인은 line-break 를 그대로 유지하기 위해 `whiteSpace: pre-wrap`.
    *
-   * NOTE: font 속성(family/size/line-height) 은 여기 넣지 않는다. Display span
-   * 은 className 의 Tailwind text-* 를 그대로 받아야 해서 inline style 로
-   * fontSize: "inherit" 를 박으면 부모 폰트 크기로 강제 회귀해 타이틀과 본문
-   * 폰트 차이가 사라진다. textarea/input 만 form-element 의 브라우저 기본
-   * 폰트를 잠재우려고 별도로 inherit 를 명시한다.
+   * NOTE: 폰트 크기/줄간격은 inline style 로 넣지 않는다. Display span 과
+   * textarea/input *둘 다* 동일한 className(Tailwind text-*) 을 받으므로,
+   * 폰트 크기는 전적으로 className 이 결정하게 둔다. 과거엔 form-element 에
+   * fontSize/lineHeight: "inherit" 를 박았는데, inline style 이 className 의
+   * text-* 보다 우선순위가 높아 편집 시 폰트가 className 이 아니라 *부모
+   * 크기* 로 튀는 버그가 있었다(작은 필드는 커지고, 큰 필드는 작아짐).
+   * 이제 form-element 는 브라우저 기본 폼 폰트(굴림/monospace 류)만 잠재우도록
+   * fontFamily 만 inherit 하고, 크기/줄간격은 className 에 맡겨 Display↔Edit
+   * 가 항상 같은 크기로 보이게 한다.
    */
   const sharedBoxStyle: React.CSSProperties = {
     padding: 0,
@@ -1751,8 +1757,6 @@ const EditableText = ({
   };
   const formFontStyle: React.CSSProperties = {
     fontFamily: "inherit",
-    fontSize: "inherit",
-    lineHeight: "inherit",
   };
 
   // textarea 의 높이를 내용에 맞춰 자동으로 키워, "클릭하니 작은 박스로 바뀐다"
@@ -4277,7 +4281,7 @@ const NextStepModal = ({
   const t = useT();
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent size="sm">
+      <DialogContent size="lg">
         <DialogHeader>
           <DialogTitle>{t("brief.nextStepTitle")}</DialogTitle>
         </DialogHeader>
@@ -4287,7 +4291,7 @@ const NextStepModal = ({
         <div className="space-y-2 mt-1">
           {[
             {
-              Icon: Package,
+              Icon: Layers,
               title: t("brief.nextStepAssetsTitle"),
               desc: t("brief.nextStepAssetsDesc"),
               onClick: () => {
@@ -4352,6 +4356,69 @@ const LangToggle = ({
     ))}
   </button>
 );
+
+/* ━━━━━ StepBadge — 패널 헤더용 단계 번호 칩 ━━━━━ */
+const StepBadge = ({ n, active = true }: { n: number; active?: boolean }) => (
+  <span
+    className="w-[18px] h-[18px] flex items-center justify-center text-2xs font-bold shrink-0"
+    style={{
+      borderRadius: 0,
+      background: active ? KR : "rgba(255,255,255,0.08)",
+      color: active ? "#fff" : "rgba(255,255,255,0.4)",
+    }}
+  >
+    {n}
+  </span>
+);
+
+/* ━━━━━ BriefStepper — 3패널 위 가로 진행 표시 ━━━━━
+ * current: 1=입력, 2=분석 진행/결과, 3=실행 준비 (분석 완료) */
+const BriefStepper = ({ current }: { current: 1 | 2 | 3 }) => {
+  const t = useT();
+  const steps = [
+    { n: 1 as const, label: t("brief.step1") },
+    { n: 2 as const, label: t("brief.step2") },
+    { n: 3 as const, label: t("brief.step3") },
+  ];
+  return (
+    <div
+      className="shrink-0 flex items-center justify-center gap-2 px-4 py-2.5 border border-border bg-card/40"
+      style={{ borderRadius: 0 }}
+    >
+      {steps.map((s, i) => {
+        const done = s.n < current;
+        const active = s.n === current;
+        return (
+          <div key={s.n} className="flex items-center gap-2">
+            <span
+              className="w-[20px] h-[20px] flex items-center justify-center text-2xs font-bold shrink-0 transition-colors"
+              style={{
+                borderRadius: 0,
+                background: active ? KR : done ? "rgba(249,66,58,0.15)" : "rgba(255,255,255,0.06)",
+                color: active ? "#fff" : done ? KR : "rgba(255,255,255,0.35)",
+                border: done ? "1px solid rgba(249,66,58,0.4)" : "1px solid transparent",
+              }}
+            >
+              {done ? <Check className="w-3 h-3" /> : s.n}
+            </span>
+            <span
+              className="text-caption font-semibold tracking-wider transition-colors whitespace-nowrap"
+              style={{ color: active ? "#f0f0f0" : done ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.3)" }}
+            >
+              {s.label}
+            </span>
+            {i < steps.length - 1 && (
+              <span
+                className="w-8 h-px mx-1 shrink-0"
+                style={{ background: done ? "rgba(249,66,58,0.4)" : "rgba(255,255,255,0.1)" }}
+              />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
 
 /* ━━━━━ Main Component ━━━━━ */
 export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props) => {
@@ -4632,6 +4699,9 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
   const [composerDragOver, setComposerDragOver] = useState(false);
   const [refDragOver, setRefDragOver] = useState(false);
   const [refUrlInput, setRefUrlInput] = useState("");
+  // 링크 입력 오버레이 열림 상태 — 파일 첨부(드롭존) 영역을 그대로 덮어
+  // "같은 영역" 처럼 보이게 한다. 모델이 이미지 전용이면 항상 닫혀 있어야 한다.
+  const [refLinkOpen, setRefLinkOpen] = useState(false);
   const [showNextStepModal, setShowNextStepModal] = useState(false);
   const [viewMode, setViewMode] = useState<"list" | "slide">("list");
 
@@ -5230,6 +5300,8 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
   // 모델/설정이 바뀔 때마다 ignoredByModel 재계산
   useEffect(() => {
     setRefItems((prev) => recomputeIgnoredByModel(prev, supportsVideoFrames));
+    // 이미지 전용 모델로 바뀌면 링크 오버레이는 더 이상 유효하지 않으니 닫는다.
+    if (!supportsVideoFrames) setRefLinkOpen(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supportsVideoFrames]);
 
@@ -5928,7 +6000,12 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
       text = [
         `캠페인 목표: ${a.goal.summary}\n${a.goal.items.map((g) => `• ${g}`).join("\n")}`,
         `타겟: ${a.target.summary}\n${a.target.primary.map((t) => `• ${t}`).join("\n")}`,
-        `USP: ${a.usp.summary}\n${a.usp.items.map((u) => `• ${u}`).join("\n")}`,
+        `USP: ${a.usp.summary}\n${(a.usp.items as (string | UspItem)[])
+          .map((u) => {
+            if (typeof u === "string") return `• ${u}`;
+            return u.comparison ? `• ${u.keyword}: ${u.comparison}` : `• ${u.keyword}`;
+          })
+          .join("\n")}`,
         `톤앤매너: ${a.tone_manner.summary}\n키워드: ${a.tone_manner.keywords.join(", ")}`,
         `제작 노트\n포맷: ${a.production_notes.format_recommendation}`,
       ].join("\n\n");
@@ -6359,17 +6436,57 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
           }}
         />
 
-        {/* ── 라이브러리 진입 — Workspace 스위치 + returnTo=현재 프로젝트.
-             브리프 측 *부착 흐름* 의 단방향 친화도를 키운다 (라이브러리 가서
-             자료 우클릭하면 returnProjectId 가 이 프로젝트로 잡혀 즉시 attach). */}
-        <button
-          onClick={() => setLibraryImportOpen(true)}
-          className="w-full flex items-center justify-center gap-2 mb-2 px-3 py-1.5 border border-border-subtle text-meta font-medium text-muted-foreground hover:text-foreground hover:border-foreground/20 transition-colors"
-          style={{ borderRadius: 0 }}
-        >
-          <Library className="w-3.5 h-3.5" />
-          {t("brief.openLibrary")}
-        </button>
+        {/* ── 라이브러리 / 링크 2분할 ──
+             ① 라이브러리: Workspace 스위치 + returnTo=현재 프로젝트로 부착 흐름 진입.
+             ② 링크: 모델이 영상/링크를 지원할 때(supportsVideoFrames)만 활성. 클릭하면
+                아래 파일 첨부(드롭존) 영역을 그대로 덮는 오버레이로 URL 입력.
+                이미지 전용 모델이면 비활성 버튼 + hover 제한 문구
+                (기존 인라인 안내 행을 대체해 레퍼런스 영역을 3줄→2줄로 단순화). */}
+        <div className="grid grid-cols-2 gap-2 mb-2">
+          <button
+            onClick={() => setLibraryImportOpen(true)}
+            className="flex items-center justify-center gap-1.5 px-3 py-1.5 border border-border-subtle text-meta font-medium text-muted-foreground hover:text-foreground hover:border-foreground/20 transition-colors min-w-0"
+            style={{ borderRadius: 0 }}
+            title={t("brief.openLibrary")}
+          >
+            <Library className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">{t("brief.refLibrary")}</span>
+          </button>
+
+          {supportsVideoFrames ? (
+            // 활성: 클릭하면 아래 드롭존을 덮는 오버레이를 토글. 열려 있으면
+            // primary 강조로 "지금 링크 입력 중" 을 명확히 한다.
+            <button
+              type="button"
+              aria-expanded={refLinkOpen}
+              onClick={() => setRefLinkOpen((v) => !v)}
+              className={`flex items-center justify-center gap-1.5 px-3 py-1.5 border text-meta font-medium transition-colors min-w-0 ${
+                refLinkOpen
+                  ? "border-primary/60 bg-primary/10 text-foreground"
+                  : "border-border-subtle text-muted-foreground hover:text-foreground hover:border-foreground/20"
+              }`}
+              style={{ borderRadius: 0 }}
+              title={t("brief.refLink")}
+            >
+              <LinkIcon className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">{t("brief.refLink")}</span>
+            </button>
+          ) : (
+            // 이미지 전용 모드: 네이티브 disabled 대신 aria-disabled + onClick 차단으로
+            // 두어, hover 시 title 툴팁(제한 문구)이 확실히 노출되게 한다.
+            <button
+              type="button"
+              aria-disabled
+              onClick={(e) => e.preventDefault()}
+              title={t("brief.imageOnlyModeTitle")}
+              className="flex items-center justify-center gap-1.5 px-3 py-1.5 border border-dashed border-border-subtle text-meta font-medium text-muted-foreground/40 cursor-not-allowed transition-colors min-w-0"
+              style={{ borderRadius: 0 }}
+            >
+              <EyeOff className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">{t("brief.refLink")}</span>
+            </button>
+          )}
+        </div>
         <LibraryImportDialog
           open={libraryImportOpen}
           onOpenChange={setLibraryImportOpen}
@@ -6378,122 +6495,130 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
           onOpenFullLibrary={handleGoToLibrary}
         />
 
-        {/* ── URL 인풋 (모델이 video frames 지원할 때만) ── */}
-        {supportsVideoFrames ? (
-          <div
-            className="flex items-center gap-1.5 px-2 py-1 mb-2 border bg-input"
-            style={{ borderRadius: 0, borderColor: "rgba(255,255,255,0.07)" }}
-          >
-            <LinkIcon className="w-3 h-3 text-muted-foreground/40 shrink-0" />
-            <input
-              type="url"
-              value={refUrlInput}
-              onChange={(e) => setRefUrlInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  if (refUrlInput.trim()) {
-                    addYoutubeRef(refUrlInput);
-                    setRefUrlInput("");
-                  }
-                }
+        {/* ── 드롭존 / 타일 (+ 링크 입력 오버레이) ──
+             relative wrapper 안에 드롭존과 링크 오버레이를 함께 두어, 오버레이가
+             absolute inset-0 으로 드롭존과 *완전히 동일한 영역* 을 덮게 한다. */}
+        <div className="relative">
+          {refItems.length === 0 ? (
+            <div
+              onClick={() => refFileInputRef.current?.click()}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setRefDragOver(true);
               }}
-              placeholder={t("brief.youtubePlaceholder")}
-              className="flex-1 min-w-0 bg-transparent border-none outline-none text-meta font-[inherit] text-foreground placeholder:text-muted-foreground/40"
-            />
-            {refUrlInput.trim() && (
-              <button
-                onClick={() => {
-                  if (refUrlInput.trim()) {
-                    addYoutubeRef(refUrlInput);
-                    setRefUrlInput("");
-                  }
-                }}
-                className="font-mono text-2xs text-muted-foreground hover:text-foreground"
-              >
-                {t("brief.add")}
-              </button>
-            )}
-          </div>
-        ) : (
-          <div
-            className="flex items-center gap-1.5 px-2 py-1 mb-2 border border-dashed overflow-hidden"
-            style={{ borderRadius: 0, borderColor: "rgba(255,255,255,0.07)" }}
-            title={t("brief.imageOnlyModeTitle")}
-          >
-            <EyeOff className="w-3 h-3 text-muted-foreground/30 shrink-0" />
-            {/* 컨테이너가 좁으면 2줄로 깨지던 문구. whitespace-nowrap + truncate
-             *  로 항상 한 줄에 유지하고, 폭이 부족하면 말줄임표로 축약.
-             *  원문 title 로 전체 문구는 hover 툴팁에서 읽을 수 있음. */}
-            <span className="font-mono text-2xs text-muted-foreground/40 whitespace-nowrap truncate min-w-0">
-              {t("brief.imageOnlyMode")}
-            </span>
-          </div>
-        )}
-
-        {/* ── 드롭존 / 타일 ── */}
-        {refItems.length === 0 ? (
-          <div
-            onClick={() => refFileInputRef.current?.click()}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setRefDragOver(true);
-            }}
-            onDragLeave={() => setRefDragOver(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              setRefDragOver(false);
-              handleRefFileSelect(e.dataTransfer.files);
-            }}
-            className="h-[60px] border border-dashed flex items-center justify-center gap-2 px-3 cursor-pointer transition-colors"
-            style={{
-              borderRadius: 0,
-              borderColor: refDragOver ? "rgba(249,66,58,0.5)" : "rgba(255,255,255,0.1)",
-              background: refDragOver ? "rgba(249,66,58,0.04)" : "transparent",
-            }}
-          >
-            <ImagePlus className="w-4 h-4 text-muted-foreground/30 shrink-0" />
-            <p className="font-mono text-2xs text-muted-foreground/40 text-center leading-tight min-w-0 break-keep">{dropHintLabel}</p>
-          </div>
-        ) : (
-          <div
-            onDragOver={(e) => {
-              e.preventDefault();
-              setRefDragOver(true);
-            }}
-            onDragLeave={() => setRefDragOver(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              setRefDragOver(false);
-              handleRefFileSelect(e.dataTransfer.files);
-            }}
-            className="border p-2 transition-colors"
-            style={{
-              borderRadius: 0,
-              borderColor: refDragOver ? "rgba(249,66,58,0.5)" : "rgba(255,255,255,0.07)",
-              background: refDragOver ? "rgba(249,66,58,0.04)" : "transparent",
-            }}
-          >
-            <div className="flex gap-2 flex-wrap">
-              {refItems.map(renderTile)}
-              {slotsLeft > 0 && (
-                <button
-                  onClick={() => refFileInputRef.current?.click()}
-                  className="h-[54px] w-[54px] border border-dashed border-border hover:border-primary/40 flex flex-col items-center justify-center gap-0.5 transition-colors"
-                  style={{ borderRadius: 0 }}
-                  title={t("brief.addMoreReferences")}
-                >
-                  <Plus className="w-3.5 h-3.5 text-muted-foreground/30" />
-                </button>
+              onDragLeave={() => setRefDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setRefDragOver(false);
+                handleRefFileSelect(e.dataTransfer.files);
+              }}
+              className="h-[60px] border border-dashed flex items-center justify-center gap-2 px-3 cursor-pointer transition-colors"
+              style={{
+                borderRadius: 0,
+                borderColor: refDragOver ? "rgba(249,66,58,0.5)" : "rgba(255,255,255,0.1)",
+                background: refDragOver ? "rgba(249,66,58,0.04)" : "transparent",
+              }}
+            >
+              <ImagePlus className="w-4 h-4 text-muted-foreground/30 shrink-0" />
+              <p className="font-mono text-2xs text-muted-foreground/40 text-center leading-tight min-w-0 break-keep">{dropHintLabel}</p>
+            </div>
+          ) : (
+            <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                setRefDragOver(true);
+              }}
+              onDragLeave={() => setRefDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setRefDragOver(false);
+                handleRefFileSelect(e.dataTransfer.files);
+              }}
+              className="border p-2 transition-colors"
+              style={{
+                borderRadius: 0,
+                borderColor: refDragOver ? "rgba(249,66,58,0.5)" : "rgba(255,255,255,0.07)",
+                background: refDragOver ? "rgba(249,66,58,0.04)" : "transparent",
+              }}
+            >
+              <div className="flex gap-2 flex-wrap">
+                {refItems.map(renderTile)}
+                {slotsLeft > 0 && (
+                  <button
+                    onClick={() => refFileInputRef.current?.click()}
+                    className="h-[54px] w-[54px] border border-dashed border-border hover:border-primary/40 flex flex-col items-center justify-center gap-0.5 transition-colors"
+                    style={{ borderRadius: 0 }}
+                    title={t("brief.addMoreReferences")}
+                  >
+                    <Plus className="w-3.5 h-3.5 text-muted-foreground/30" />
+                  </button>
+                )}
+              </div>
+              {refCounts.ignored > 0 && (
+                <p className="font-mono text-micro text-muted-foreground/50 mt-1.5">
+                  {t("brief.ignoredByModel", { count: refCounts.ignored })}
+                </p>
               )}
             </div>
-            {refCounts.ignored > 0 && (
-              <p className="font-mono text-micro text-muted-foreground/50 mt-1.5">
-                {t("brief.ignoredByModel", { count: refCounts.ignored })}
-              </p>
-            )}
-          </div>
-        )}
+          )}
+
+          {/* 링크 입력 오버레이 — 드롭존과 같은 박스처럼 보이도록 inset-0 으로
+              완전히 덮는다(불투명 bg-card). Enter/추가로 등록, Esc/X 로 닫기. */}
+          {refLinkOpen && supportsVideoFrames && (
+            <div
+              className="absolute inset-0 z-30 flex items-center gap-2 border border-primary/50 bg-card px-3"
+              style={{ borderRadius: 0 }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setRefLinkOpen(false);
+                }
+              }}
+            >
+              <LinkIcon className="w-3.5 h-3.5 text-muted-foreground/50 shrink-0" />
+              <input
+                type="url"
+                autoFocus
+                value={refUrlInput}
+                onChange={(e) => setRefUrlInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    if (refUrlInput.trim()) {
+                      addYoutubeRef(refUrlInput);
+                      setRefUrlInput("");
+                    }
+                  }
+                }}
+                placeholder={t("brief.youtubePlaceholder")}
+                className="flex-1 min-w-0 bg-transparent border-none outline-none text-meta font-[inherit] text-foreground placeholder:text-muted-foreground/40"
+              />
+              {refUrlInput.trim() && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (refUrlInput.trim()) {
+                      addYoutubeRef(refUrlInput);
+                      setRefUrlInput("");
+                    }
+                  }}
+                  className="font-mono text-2xs text-muted-foreground hover:text-foreground shrink-0"
+                >
+                  {t("brief.add")}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setRefLinkOpen(false)}
+                className="shrink-0 text-muted-foreground/50 hover:text-foreground transition-colors"
+                title={t("common.close")}
+                aria-label={t("common.close")}
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+        </div>
       </>
     );
   };
@@ -6513,8 +6638,11 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
   );
 
   /* ━━━━━ RENDER ━━━━━ */
+  const briefStep: 1 | 2 | 3 = hasAnalysis ? 3 : analyzing || loaderLingering ? 2 : 1;
   return (
-    <div className="flex gap-3 h-full">
+    <div className="flex flex-col gap-3 h-full">
+      {!isMobile && <BriefStepper current={briefStep} />}
+      <div className="flex gap-3 flex-1 min-h-0">
       {/* ── LEFT: Input Panel ── */}
       <div
         className={`shrink-0 ${isMobile ? "w-full" : ""}`}
@@ -6535,6 +6663,7 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
            *  `shrink-0` 으로 온전히 보이게 고정. `Creative Input` 타이틀 역시
            *  min-w-0 + truncate 로 필요하면 줄여서 토글 잘림을 방지. */}
           <div className="px-4 pt-4 pb-3 border-b border-border flex items-center gap-2">
+            <StepBadge n={1} active={briefStep === 1} />
             <h2 className="text-body font-bold tracking-wider text-foreground min-w-0 truncate">
               {t("brief.creativeInput")}
             </h2>
@@ -6556,6 +6685,42 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
             </div>
           </div>
 
+          {/* ★ Action zone — 우측 '전략 실행' 과 수직 위치를 맞추기 위해
+              헤더 바로 아래(상단)에 '분석 실행' CTA 를 고정 배치한다. */}
+          <div className="px-4 pt-3 pb-3 border-b border-border shrink-0">
+            {isCollapsedMode ? (
+              <button
+                onClick={handleAnalyze}
+                disabled={!canAnalyze || analyzing}
+                className="w-full h-[40px] text-caption font-semibold tracking-wider text-muted-foreground border border-border transition-colors flex items-center justify-center gap-2 hover:text-foreground hover:border-foreground/20 disabled:opacity-30 disabled:cursor-not-allowed"
+                style={{ borderRadius: 0 }}
+              >
+                <RefreshCw className="w-3 h-3" />
+                {t("brief.reAnalyze")}
+              </button>
+            ) : (
+              <button
+                onClick={handleAnalyze}
+                disabled={!canAnalyze || analyzing}
+                className="w-full h-[44px] text-meta font-semibold tracking-wider text-white transition-colors flex items-center justify-center gap-2 disabled:opacity-30 disabled:cursor-not-allowed"
+                style={{
+                  borderRadius: 0,
+                  background: analyzing ? "rgba(249,66,58,0.4)" : KR,
+                }}
+                onMouseEnter={(e) => {
+                  if (!analyzing && canAnalyze) (e.currentTarget as HTMLElement).style.background = "#e03530";
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLElement).style.background = analyzing ? "rgba(249,66,58,0.4)" : KR;
+                }}
+              >
+                {analyzing
+                  ? t("brief.analyzing")
+                  : `✦ ${analysis || analyzedAt ? t("brief.executeReAnalysis") : t("brief.executeAnalysis")}`}
+              </button>
+            )}
+          </div>
+
           <div className="flex flex-col flex-1 px-5 pt-3 pb-4 gap-4 overflow-y-auto">
             {isCollapsedMode ? (
               <>
@@ -6568,24 +6733,21 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
                 <CollapsibleSection title={t("brief.ideaNote")} preview={ideaNotePreview}>
                   {renderIdeaNoteContent()}
                 </CollapsibleSection>
-                <button
-                  onClick={handleAnalyze}
-                  disabled={!canAnalyze || analyzing}
-                  className="w-full h-[36px] text-caption font-semibold tracking-wider text-muted-foreground border border-border transition-colors flex items-center justify-center gap-2 mt-auto hover:text-foreground hover:border-foreground/20 disabled:opacity-30 disabled:cursor-not-allowed"
-                  style={{ borderRadius: 0 }}
-                >
-                  <RefreshCw className="w-3 h-3" />
-                  {t("brief.reAnalyze")}
-                </button>
               </>
             ) : (
               <>
                 <div>
-                  <p className="label-meta text-primary mb-1">{t("brief.briefText")}</p>
+                  <p className="label-meta text-primary mb-1">
+                    {t("brief.briefText")} <span className="font-normal text-muted-foreground/60">· {t("brief.briefTextHint")}</span>
+                  </p>
                   {renderBriefTextContent()}
                 </div>
                 <div>
-                  <p className="label-meta text-primary mb-1">{t("brief.reference")}</p>
+                  {/* 레퍼런스 = 참고 자료를 *올리는* 곳임을 부제로 명확히 — 브리프/아이디어
+                      노트의 텍스트와 역할이 겹쳐 보이던 혼동을 줄인다. */}
+                  <p className="label-meta text-primary mb-1">
+                    {t("brief.reference")} <span className="font-normal text-muted-foreground/60">· {t("brief.referenceHint")}</span>
+                  </p>
                   {renderMoodboardContent()}
                 </div>
                 <div>
@@ -6594,23 +6756,6 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
                   </p>
                   {renderIdeaNoteContent()}
                 </div>
-                <button
-                  onClick={handleAnalyze}
-                  disabled={!canAnalyze || analyzing}
-                  className="w-full h-[40px] text-meta font-semibold tracking-wider text-white transition-colors flex items-center justify-center gap-2 mt-auto disabled:opacity-30 disabled:cursor-not-allowed"
-                  style={{
-                    borderRadius: 0,
-                    background: analyzing ? "rgba(249,66,58,0.4)" : KR,
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!analyzing && canAnalyze) (e.currentTarget as HTMLElement).style.background = "#e03530";
-                  }}
-                  onMouseLeave={(e) => {
-                    (e.currentTarget as HTMLElement).style.background = analyzing ? "rgba(249,66,58,0.4)" : KR;
-                  }}
-                >
-                  {analyzing ? t("brief.analyzing") : `✦ ${t("brief.executeAnalysis")}`}
-                </button>
               </>
             )}
           </div>
@@ -6637,7 +6782,18 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
               className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0"
               style={{ background: "rgba(249,66,58,0.06)" }}
             >
+              <StepBadge n={2} active={briefStep === 2} />
               <h2 className="text-body font-bold tracking-wider text-foreground">{t("brief.strategyManifesto")}</h2>
+              {hasAnalysis && (
+                <button
+                  onClick={copyAll}
+                  aria-label={t("brief.copy")}
+                  title={t("brief.copy")}
+                  className="flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
+              )}
               {showEditHint && (
                 <span
                   className="text-2xs px-2 py-0.5 rounded-none animate-fade-in"
@@ -6724,6 +6880,7 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
               className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0"
               style={{ background: "rgba(249,66,58,0.06)" }}
             >
+              <StepBadge n={2} active={briefStep === 2} />
               <h2 className="text-body font-bold tracking-wider text-foreground">{t("brief.strategyManifesto")}</h2>
             </div>
             <div className="flex-1 overflow-y-auto bg-background/60 p-4">
@@ -6753,10 +6910,11 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
             >
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <CheckCircle className="w-3.5 h-3.5 text-emerald-500" />
-                  <span className="text-caption font-medium text-emerald-400">{t("brief.analysisComplete")}</span>
+                  <StepBadge n={3} active={briefStep === 3} />
+                  <h2 className="text-body font-bold tracking-wider text-foreground">{t("brief.step3")}</h2>
+                  <CheckCircle className="w-3.5 h-3.5 text-emerald-500 ml-auto shrink-0" />
                   {analyzedAt && (
-                    <span className="font-mono text-2xs text-muted-foreground/50 ml-auto">
+                    <span className="font-mono text-2xs text-muted-foreground/50 shrink-0">
                       {formatDate(analyzedAt)}
                     </span>
                   )}
@@ -6774,23 +6932,6 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
                 >
                   {t("brief.executeStrategy")} →
                 </button>
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={copyAll}
-                    className="flex items-center gap-1.5 text-caption text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <Copy className="w-3 h-3" />
-                    {t("brief.copy")}
-                  </button>
-                  <button
-                    onClick={handleAnalyze}
-                    disabled={!canAnalyze || analyzing}
-                    className="flex items-center gap-1.5 text-caption text-muted-foreground hover:text-foreground transition-colors disabled:opacity-30"
-                  >
-                    <RefreshCw className="w-3 h-3" />
-                    {t("brief.reAnalyze")}
-                  </button>
-                </div>
               </div>
             </div>
 
@@ -6812,7 +6953,8 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
       {!isMobile && !hasAnalysis && (
         <div className="w-[200px] shrink-0">
           <div className="bg-card/80 border border-border flex flex-col h-full" style={{ borderRadius: 0 }}>
-            <div className="px-4 pt-4 pb-3 border-b border-border">
+            <div className="px-4 pt-4 pb-3 border-b border-border flex items-center gap-2">
+              <StepBadge n={3} active={false} />
               <h2 className="text-body font-bold tracking-wider text-foreground">{t("brief.nextStep")}</h2>
             </div>
             <div className="flex flex-col flex-1 px-3 pt-4 pb-4 gap-4">
@@ -6833,6 +6975,7 @@ export const BriefTab = ({ projectId, onSwitchToAgent, onSwitchToAssets }: Props
           </div>
         </div>
       )}
+      </div>
 
       {showNextStepModal && (
         <NextStepModal

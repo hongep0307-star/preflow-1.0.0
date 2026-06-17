@@ -13,7 +13,7 @@ interface Props {
 const MODE_FALLBACK: Record<DirectionMode, { title: string; reason: string }> = {
   narrative: { title: "서사 중심", reason: "스토리 구조·감정 흐름을 우선합니다." },
   motion: { title: "모션 연출 중심", reason: "컷 간 트랜지션·시각 에너지를 우선합니다." },
-  hybrid: { title: "하이브리드", reason: "서사 척추 + 모션 실행을 절충합니다." },
+  hybrid: { title: "균형", reason: "서사 척추 + 모션 실행을 균형 있게 가져갑니다." },
 };
 
 const MODE_ORDER: DirectionMode[] = ["narrative", "motion", "hybrid"];

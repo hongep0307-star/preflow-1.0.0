@@ -80,8 +80,19 @@ export function suggestedFrameCount(durationSec: number): number {
   return 28 + Math.ceil((durationSec - 300) / 60) * 4;
 }
 
+// 확장자 폴백 — Windows/일부 브라우저는 .mov 등의 file.type 을 빈 문자열이나
+// 비표준 값으로 보고하므로, MIME 만 검사하면 detectReferenceKind 가 확장자로
+// "video" 로 분류한 파일을 여기서 다시 거부하는 모순이 생긴다(= MOV 업로드 실패의
+// 직접 원인). detectReferenceKind 와 동일한 확장자 목록으로 보정한다.
+const VIDEO_EXTENSIONS = [".mp4", ".mov", ".webm"];
+const hasVideoExtension = (name: string): boolean => {
+  const lower = name.toLowerCase();
+  return VIDEO_EXTENSIONS.some((ext) => lower.endsWith(ext));
+};
+
 export function validateVideoFile(file: File): { ok: true } | { ok: false; reason: string } {
-  if (!file.type.startsWith("video/")) return { ok: false, reason: "비디오 파일이 아닙니다." };
+  const isVideo = file.type.startsWith("video/") || hasVideoExtension(file.name);
+  if (!isVideo) return { ok: false, reason: "비디오 파일이 아닙니다." };
   if (file.size > MAX_VIDEO_BYTES) return { ok: false, reason: `${REFERENCE_UPLOAD_MAX_LABEL} 이하 영상만 지원합니다.` };
   return { ok: true };
 }

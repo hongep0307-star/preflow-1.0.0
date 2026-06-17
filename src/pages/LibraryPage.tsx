@@ -232,6 +232,8 @@ import {
   resolveReferenceFilePath,
   restoreReference,
   saveCanvasFrameAsReference,
+  saveCroppedImageAsNewReference,
+  overwriteReferenceImage,
   saveVideoFrameAsReference,
   setReferenceCoverFromBlob,
   setReferenceCoverFromCanvas,
@@ -455,6 +457,18 @@ function pathToFileUrl(p: string): string {
     .map((segment) => (/^[A-Za-z]:$/.test(segment) ? segment : encodeURIComponent(segment)))
     .join("/");
   return normalized.startsWith("/") ? `file://${encoded}` : `file:///${encoded}`;
+}
+
+/** 크롭용 이미지 로더 — crossOrigin anonymous 로 받아 canvas tainting 을 피한다. */
+function loadHtmlImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.decoding = "async";
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Failed to load image for cropping."));
+    img.src = src;
+  });
 }
 
 const FILENAME_MIME_MAP: Record<string, string> = {
@@ -5855,6 +5869,56 @@ const LibraryPage = () => {
     }
   }, [selected, toast, upsertUploadedItem, t]);
 
+  /* 정지 이미지 크롭 저장 — LibraryPreviewPanel 의 8핸들 오버레이가 확정한
+     정규화 rect 를 받아, 원본을 실제 픽셀로 잘라 저장한다.
+       - "new": 원본을 두고 새 reference 로 (같은 폴더 상속)
+       - "overwrite": 원본 reference 의 이미지를 교체 (파괴적)
+     handleSaveFrame 과 동일한 책임 분리 — UI(panel)는 영역만, 저장/toast 는 부모. */
+  const handleCropImage = useCallback(
+    async (rect: RegionRect, mode: "new" | "overwrite") => {
+      if (!selected) return;
+      const src = selected.file_url || selected.thumbnail_url;
+      if (!src) return;
+      setSaving(true);
+      try {
+        const img = await loadHtmlImage(src);
+        const nw = img.naturalWidth;
+        const nh = img.naturalHeight;
+        const sx = Math.max(0, Math.round(rect.x * nw));
+        const sy = Math.max(0, Math.round(rect.y * nh));
+        const sw = Math.max(1, Math.min(nw - sx, Math.round(rect.w * nw)));
+        const sh = Math.max(1, Math.min(nh - sy, Math.round(rect.h * nh)));
+        const canvas = document.createElement("canvas");
+        canvas.width = sw;
+        canvas.height = sh;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) throw new Error("Failed to create crop canvas.");
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+        const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+        if (!blob) throw new Error("Failed to encode cropped image.");
+        const saved = mode === "overwrite"
+          ? await overwriteReferenceImage(selected, blob, sw, sh)
+          : await saveCroppedImageAsNewReference(selected, blob, sw, sh);
+        upsertUploadedItem(saved);
+        toast({
+          title: t("library.toast.cropSaved"),
+          description: mode === "overwrite"
+            ? t("library.toast.cropOverwritten")
+            : t("library.toast.cropSavedNew"),
+        });
+      } catch (err) {
+        toast({
+          variant: "destructive",
+          title: t("library.toast.cropFailed"),
+          description: err instanceof Error ? err.message : String(err),
+        });
+      } finally {
+        setSaving(false);
+      }
+    },
+    [selected, toast, upsertUploadedItem, t],
+  );
+
   /* 영상 loop 구간을 GIF / WebP 애니메이션으로 변환해 새 ReferenceItem 으로 저장.
      LibraryPreviewPanel 의 SaveLoopAsGifDialog 가 인코딩까지 마치고 Blob 을
      이쪽으로 넘기면 (Blob → File → uploadReferenceFile → upsert + toast).
@@ -7695,6 +7759,7 @@ const LibraryPage = () => {
                 onSetCover={handleSetCover}
                 onSaveFrame={handleSaveFrame}
                 onSaveLoopAsGif={handleSaveLoopAsGif}
+                onCropImage={handleCropImage}
                 onSetCoverFromCanvas={handleSetCoverFromCanvas}
                 onSaveFrameFromCanvas={handleSaveFrameFromCanvas}
                 saving={saving}

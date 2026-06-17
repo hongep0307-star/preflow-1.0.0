@@ -128,20 +128,20 @@ const directionModeLabel = (mode: DirectionMode, lang: "ko" | "en"): string =>
       ? "Narrative"
       : mode === "motion"
         ? "Motion"
-        : "Hybrid"
+        : "Balanced"
     : mode === "narrative"
       ? "서사"
       : mode === "motion"
         ? "모션"
-        : "하이브리드";
+        : "균형";
 
 /** 방향 카드 클릭 시 채팅으로 보낼 확정 문구(이 메시지가 LLM 을 Phase 1 로 넘긴다). */
 const directionConfirmMsg = (mode: DirectionMode, lang: "ko" | "en"): string => {
   if (lang === "en") {
-    const l = mode === "narrative" ? "narrative-driven" : mode === "motion" ? "motion-driven" : "hybrid";
+    const l = mode === "narrative" ? "narrative-driven" : mode === "motion" ? "motion-driven" : "balanced";
     return `Let's go ${l}. Now propose the synopsis directions (storylines).`;
   }
-  const l = mode === "narrative" ? "서사 중심" : mode === "motion" ? "모션 연출 중심" : "하이브리드";
+  const l = mode === "narrative" ? "서사 중심" : mode === "motion" ? "모션 연출 중심" : "균형";
   return `${l}으로 진행할게요. 이제 시놉시스(storylines)를 제안해줘.`;
 };
 
@@ -990,7 +990,7 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
           const tail = !initMode
             ? initLang === "en"
               ? "\n\nBefore proposing synopses, recommend a direction first: output ONLY one ```direction fence (narrative / motion / hybrid + a recommended one + a one-line reason each). Do NOT write storylines or scenes yet."
-              : "\n\n시놉시스를 짜기 전에 먼저 연출 방향을 추천해줘: ```direction 펜스 1개만 출력해(서사/모션/하이브리드 3안 + 추천 1개 + 각 1줄 근거). 아직 storylines나 씬은 짜지 마."
+              : "\n\n시놉시스를 짜기 전에 먼저 연출 방향을 추천해줘: ```direction 펜스 1개만 출력해(서사/모션/균형 3안 + 추천 1개 + 각 1줄 근거). 아직 storylines나 씬은 짜지 마."
             : initLang === "en"
               ? "\n\nBased on this brief, propose 2–3 synopsis directions in a storylines block. Do not write scenes yet."
               : "\n\n이 브리프를 바탕으로 방향성이 다른 시놉시스 2~3안을 storylines 블록으로 제안해주세요. 아직 씬은 짜지 마세요.";

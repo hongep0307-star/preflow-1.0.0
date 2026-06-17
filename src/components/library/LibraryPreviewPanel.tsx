@@ -5,6 +5,7 @@ import {
   Camera,
   ChevronLeft,
   ChevronRight,
+  Crop,
   Film,
   Image as ImageIcon,
   Keyboard,
@@ -32,6 +33,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { GifFramePlayer } from "@/components/library/GifFramePlayer";
+import { ImageCropOverlay } from "@/components/library/ImageCropOverlay";
 import { RegionOverlay } from "@/components/library/RegionOverlay";
 import { SaveLoopAsGifDialog } from "@/components/library/SaveLoopAsGifDialog";
 import { AudioView } from "@/components/library/preview/AudioView";
@@ -131,6 +133,11 @@ interface LibraryPreviewPanelProps {
     startSec: number,
     endSec: number,
   ) => Promise<void>;
+  /** 정지 이미지 크롭 — 사용자가 8핸들로 영역을 정해 확정하면 호출.
+   *  rect 는 정규화 [0,1](원본 이미지 기준). mode 로 새 파일/덮어쓰기를 구분.
+   *  실제 픽셀 크롭 + 저장 + toast 는 부모(LibraryPage)가 담당한다. 미전달이면
+   *  크롭 버튼을 노출하지 않는다. */
+  onCropImage?: (rect: RegionRect, mode: "new" | "overwrite") => void | Promise<void>;
 }
 
 export function LibraryPreviewPanel({
@@ -160,6 +167,7 @@ export function LibraryPreviewPanel({
   initialPageIndex,
   onInitialPageConsumed,
   onSaveLoopAsGif,
+  onCropImage,
 }: LibraryPreviewPanelProps) {
   const { t } = useUiLanguage();
   const currentIndex = items.findIndex((candidate) => candidate.id === item.id);
@@ -201,6 +209,14 @@ export function LibraryPreviewPanel({
        로드 시점에, img 는 onLoad 에서 채워진다. */
   const [regionMode, setRegionMode] = useState(false);
   const [mediaNaturalSize, setMediaNaturalSize] = useState<{ w: number; h: number } | null>(null);
+
+  /* 정지 이미지 크롭 모드 — 8핸들 오버레이로 영역을 정한다.
+     - cropMode: 토글. ON 이면 ImageCropOverlay 가 줌/팬 위에 마스크+핸들을 띄움.
+     - cropRect: 정규화 [0,1] 크롭 영역 (기본 전체).
+     - cropPending: 확정 후 "새 파일 / 덮어쓰기" 선택 다이얼로그 표시 여부. */
+  const [cropMode, setCropMode] = useState(false);
+  const [cropRect, setCropRect] = useState<RegionRect>({ x: 0, y: 0, w: 1, h: 1 });
+  const [cropPending, setCropPending] = useState(false);
 
   /* 커스텀 비디오 컨트롤 상태 — native <video controls> 를 끄고 우리가
      직접 그리므로, play/pause / currentTime / muted / volume 을 React state 로
@@ -278,6 +294,11 @@ export function LibraryPreviewPanel({
        켜둔 토글이 새 자료에서 갑자기 crosshair 로 보이는 사고 방지. */
     setRegionMode(false);
     setMediaNaturalSize(null);
+    /* 크롭 모드도 자료 변경 시 해제 — 다른 이미지로 넘어갔는데 이전 크롭
+       핸들/마스크가 남아 있지 않게 한다. */
+    setCropMode(false);
+    setCropRect({ x: 0, y: 0, w: 1, h: 1 });
+    setCropPending(false);
   }, [item.id]);
 
   const isVideo = item.kind === "video" && Boolean(item.file_url);
@@ -568,7 +589,7 @@ export function LibraryPreviewPanel({
      스크롤 등) 을 가로채지 않는다. */
   const imagePanZoom = useImagePanZoom({
     containerRef: imageScrollRef,
-    enabled: isStillImageBranch && !regionMode,
+    enabled: isStillImageBranch && !regionMode && !cropMode,
   });
 
   /* 자료 변경 시 줌·팬을 fit 으로 리셋. 위 item.id reset effect 에 합쳐도
@@ -621,6 +642,61 @@ export function LibraryPreviewPanel({
       videoRef.current?.pause();
     }
   }, [isVideo, videoRef]);
+
+  /* 크롭 모드 토글. 켤 때 region 모드를 끄고 줌/팬을 fit 으로 리셋해
+     크롭 사각형이 보이는 전체 이미지와 정렬되도록 한다. 끌 때 영역을
+     전체로 되돌린다. */
+  const { reset: resetCropPanZoom } = imagePanZoom;
+  const toggleCropMode = useCallback(() => {
+    setCropMode((v) => {
+      if (v) {
+        setCropPending(false);
+        setCropRect({ x: 0, y: 0, w: 1, h: 1 });
+        return false;
+      }
+      setRegionMode(false);
+      resetCropPanZoom();
+      setCropRect({ x: 0, y: 0, w: 1, h: 1 });
+      setCropPending(false);
+      return true;
+    });
+  }, [resetCropPanZoom]);
+
+  /* 확정 → 저장 방식(새 파일/덮어쓰기) 선택 다이얼로그 표시. */
+  const handleCropConfirm = useCallback(() => {
+    setCropPending(true);
+  }, []);
+
+  /* 저장 방식 선택 → 부모가 픽셀 크롭 + 저장 + toast 를 수행. */
+  const handleCropChoose = useCallback(
+    async (mode: "new" | "overwrite") => {
+      const rect = cropRect;
+      setCropPending(false);
+      setCropMode(false);
+      setCropRect({ x: 0, y: 0, w: 1, h: 1 });
+      await onCropImage?.(rect, mode);
+    },
+    [cropRect, onCropImage],
+  );
+
+  /* C 키 — 이미지 크롭 토글. 정지 이미지 + onCropImage 가 있을 때만 동작.
+     R 단축키와 동일하게 IME/입력 포커스 가드. (isStillImageBranch /
+     toggleCropMode 가 위에서 초기화된 뒤에 등록해야 TDZ 가 안 난다.) */
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "c" && event.key !== "C" && event.code !== "KeyC") return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+        return;
+      }
+      if (!isStillImageBranch || !onCropImage) return;
+      event.preventDefault();
+      toggleCropMode();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isStillImageBranch, onCropImage, toggleCropMode]);
 
   /* 커스텀 timeline — 클릭 또는 드래그로 시크. mousemove 는 윈도우에 등록
      해 트랙 밖으로 마우스가 나가도 드래그 지속되게. */
@@ -1121,20 +1197,40 @@ export function LibraryPreviewPanel({
                 가 visible 이미지 위치에 정확히 정렬된다. region 모드 ON 일 땐
                 위 훅이 enabled=false 라 휠/드래그가 비활성화되고 오버레이의
                 자체 pointer events 가 crosshair 드래그를 캡처. */}
-            <RegionOverlay
-              containerRef={imageScrollRef}
-              naturalWidth={mediaNaturalSize?.w ?? null}
-              naturalHeight={mediaNaturalSize?.h ?? null}
-              visibleNotes={visibleRegionNotes}
-              drawing={regionMode}
-              onCreateRegion={handleRegionCreate}
-              onAfterCreate={handleAfterRegion}
-              onDeleteRegion={onDeleteTimestampNote}
-              onEditRegion={onEditTimestampNote}
-              panX={imagePanZoom.tx}
-              panY={imagePanZoom.ty}
-              scale={imagePanZoom.scale}
-            />
+            {/* 크롭 모드에서는 region 박스/오버레이를 숨겨 핸들·마스크에 집중. */}
+            {!cropMode && (
+              <RegionOverlay
+                containerRef={imageScrollRef}
+                naturalWidth={mediaNaturalSize?.w ?? null}
+                naturalHeight={mediaNaturalSize?.h ?? null}
+                visibleNotes={visibleRegionNotes}
+                drawing={regionMode}
+                onCreateRegion={handleRegionCreate}
+                onAfterCreate={handleAfterRegion}
+                onDeleteRegion={onDeleteTimestampNote}
+                onEditRegion={onEditTimestampNote}
+                panX={imagePanZoom.tx}
+                panY={imagePanZoom.ty}
+                scale={imagePanZoom.scale}
+              />
+            )}
+            {/* 정지 이미지 크롭 — 8핸들 오버레이. transform wrapper 의 형제로 두어
+                RegionOverlay 와 동일한 좌표계(pan/scale)를 공유한다. */}
+            {cropMode && (
+              <ImageCropOverlay
+                containerRef={imageScrollRef}
+                naturalWidth={mediaNaturalSize?.w ?? null}
+                naturalHeight={mediaNaturalSize?.h ?? null}
+                value={cropRect}
+                onChange={setCropRect}
+                onConfirm={handleCropConfirm}
+                onCancel={toggleCropMode}
+                onReset={() => setCropRect({ x: 0, y: 0, w: 1, h: 1 })}
+                panX={imagePanZoom.tx}
+                panY={imagePanZoom.ty}
+                scale={imagePanZoom.scale}
+              />
+            )}
             {/* 우상단 floating 컨트롤 — 이미지에는 컨트롤 바가 없어서 별도
                 위치. 좌측: Fit 버튼(현재 fit 상태면 primary 강조 + 클릭 시
                 scale=1·tx=ty=0 으로 리셋, PDF 뷰어의 Fit 버튼과 동일 UX).
@@ -1167,6 +1263,7 @@ export function LibraryPreviewPanel({
                 style={{ borderRadius: 0 }}
                 onClick={(event) => {
                   event.stopPropagation();
+                  setCropMode(false);
                   setRegionMode((v) => !v);
                 }}
                 title={regionMode ? t("library.preview.regionOnImg") : t("library.preview.regionImg")}
@@ -1175,6 +1272,25 @@ export function LibraryPreviewPanel({
               >
                 <BoxSelect className="h-3.5 w-3.5" />
               </button>
+              {onCropImage && (
+                <button
+                  type="button"
+                  className={cn(
+                    "flex h-8 w-8 items-center justify-center border border-border-subtle bg-background/80 text-foreground shadow-sm transition-colors hover:bg-background",
+                    cropMode && "border-primary/40 bg-primary/15 text-primary",
+                  )}
+                  style={{ borderRadius: 0 }}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    toggleCropMode();
+                  }}
+                  title={cropMode ? t("library.preview.cropOnImg") : t("library.preview.cropImg")}
+                  aria-label={t("library.preview.cropAria")}
+                  aria-pressed={cropMode}
+                >
+                  <Crop className="h-3.5 w-3.5" />
+                </button>
+              )}
             </div>
             </>
           ) : (
@@ -1674,6 +1790,51 @@ export function LibraryPreviewPanel({
             >
               {t("common.save")}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 크롭 저장 방식 선택 — 확정 후 새 파일/덮어쓰기 중 선택. */}
+      <Dialog open={cropPending} onOpenChange={(o) => !o && setCropPending(false)}>
+        <DialogContent size="md">
+          <DialogHeader>
+            <DialogTitle>{t("library.preview.cropSaveTitle")}</DialogTitle>
+          </DialogHeader>
+          <p className="text-meta text-muted-foreground leading-relaxed">
+            {t("library.preview.cropSaveDesc")}
+          </p>
+          <div className="mt-1 space-y-2">
+            <button
+              type="button"
+              onClick={() => void handleCropChoose("new")}
+              className="flex w-full items-start gap-3 border border-border-subtle p-3 text-left transition-colors hover:border-primary/40 hover:bg-primary/5"
+              style={{ borderRadius: 0 }}
+            >
+              <ImageIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" strokeWidth={1.75} />
+              <div>
+                <div className="text-meta font-semibold text-foreground">{t("library.preview.cropSaveNew")}</div>
+                <div className="mt-0.5 text-caption text-muted-foreground">{t("library.preview.cropSaveNewDesc")}</div>
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleCropChoose("overwrite")}
+              className="flex w-full items-start gap-3 border border-border-subtle p-3 text-left transition-colors hover:border-primary/40 hover:bg-primary/5"
+              style={{ borderRadius: 0 }}
+            >
+              <Crop className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" strokeWidth={1.75} />
+              <div>
+                <div className="text-meta font-semibold text-foreground">{t("library.preview.cropOverwrite")}</div>
+                <div className="mt-0.5 text-caption text-muted-foreground">{t("library.preview.cropOverwriteDesc")}</div>
+              </div>
+            </button>
+          </div>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="ghost" className="h-8 px-3 text-meta" style={{ borderRadius: 0 }}>
+                {t("common.cancel")}
+              </Button>
+            </DialogClose>
           </DialogFooter>
         </DialogContent>
       </Dialog>

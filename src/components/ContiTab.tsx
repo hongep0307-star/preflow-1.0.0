@@ -15,7 +15,7 @@ import { deleteStoredFile, deleteStoredFileIfUnreferenced, normalizeStorageUrl }
 import { generateConti, styleTransfer, IMAGE_SIZE_MAP, buildProjectAssetsCache } from "@/lib/conti";
 import type { VideoFormat, BriefAnalysis, GeneratingStage, ProjectAssetsCache } from "@/lib/conti";
 import { computeSceneGroups, materializeSequences } from "@/lib/sceneGrouping";
-import { getImageModelDefault, getGptQualityDefault } from "@/lib/imageGenPreference";
+import { getImageModelDefault, getGptQualityDefault, IMAGE_GEN_MODEL_LABELS } from "@/lib/imageGenPreference";
 import { generateTransitionFrame } from "@/lib/transitions";
 import { DEFAULT_TRANSITION_KEY, TRANSITION_NONE, TRANSITION_MAP, normalizeTransitionKey } from "@/lib/transitionGrammar";
 import { useToast } from "@/hooks/use-toast";
@@ -184,6 +184,32 @@ const _sceneStateListenersByProject = new Map<string, Set<() => void>>();
 const _versionsByProject = new Map<string, SceneVersion[]>();
 const CONTI_PENDING_GENERATE_KEY_PREFIX = "preflow_conti_pending_generate:";
 const CONTI_PENDING_SINGLE_KEY_PREFIX = "preflow_conti_pending_single:";
+
+// 전체 생성 / 스타일 변형의 동시 실행 상한. 예전에는 상한 없이 전 씬을 한꺼번에
+// 병렬로 띄워, 응답들이 비슷한 시점에 돌아오며 (이미지 디코드 + 캔버스 크롭 +
+// PNG 인코딩 + 스토어/DB write-back) 메인스레드를 포화시켜 탭/워크스페이스 이동이
+// 막히는 체감이 있었다. 동시 개수를 이 값으로 제한해 UI 응답성을 확보한다.
+const GENERATE_CONCURRENCY = 8;
+
+// 동시 실행 상한을 둔 워커 풀. items 를 limit 개 슬롯으로 굴리되, 슬롯이 비는 즉시
+// 다음 item 을 끌어온다 (batch 가 아니라 sliding window — 가장 느린 한 개를 기다리지
+// 않음). worker 는 내부에서 자체 try/catch 로 실패를 흡수하는 계약을 전제로 한다.
+const runPool = async <T,>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<void>,
+): Promise<void> => {
+  if (items.length === 0) return;
+  const max = Math.max(1, Math.min(limit, items.length));
+  let cursor = 0;
+  const runNext = async (): Promise<void> => {
+    while (cursor < items.length) {
+      const idx = cursor++;
+      await worker(items[idx], idx);
+    }
+  };
+  await Promise.all(Array.from({ length: max }, () => runNext()));
+};
 
 type PendingContiGenerateJob = {
   id: string;
@@ -4307,12 +4333,6 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
     }
   };
 
-  // 콘티 전체 생성은 동시 상한 없이 전 씬을 병렬로 띄우되, 시작 시점만 이 간격으로
-  // 엇갈려 (canvas 크롭 + 스토리지 업로드 + 서버 호출) 초기 launch burst 를 분산한다.
-  // 각 호출이 길게 걸리므로 결국 전부 동시에 in-flight 가 되지만, 워커풀(4개) 시절의
-  // "대기중" 적체가 사라진다. runStyleTransferAll 과 동일한 패턴.
-  const GENERATE_STAGGER_MS = 600;
-
   const runGenerateAll = async (
     mode: "all" | "missing",
     resumeJob?: PendingContiGenerateJob,
@@ -4440,17 +4460,12 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
         }
       };
 
-      // 상한 없이 전체 pending 씬을 병렬로 띄운다. 시작 시점만 idx × GENERATE_STAGGER_MS
-      // 만큼 엇갈려 launch burst 를 분산한다. 각 씬은 자기 stagger 가 지나면 processScene
-      // 안에서 "대기중(queued)" 에서 빠지고 spinner 로 전환된다.
-      await Promise.all(
-        pending.map(async (scene, idx) => {
-          if (idx > 0) {
-            await new Promise((resolve) => window.setTimeout(resolve, idx * GENERATE_STAGGER_MS));
-          }
-          await processScene(scene);
-        }),
-      );
+      // 동시 실행 상한(GENERATE_CONCURRENCY)을 둔 워커 풀로 돌린다. 슬롯이 비는 즉시
+      // 다음 씬을 끌어와 항상 최대 N 개만 in-flight 로 유지한다 (batch 가 아니라 sliding
+      // window). 대기 중인 씬은 processScene 진입 전까지 "대기중(queued)" 으로 남고, 풀이
+      // 자기 차례에 끌어오면 그 안에서 큐에서 빠지며 spinner 로 전환된다. 이로써 응답들이
+      // 동시에 몰려 메인스레드를 포화시켜 탭/워크스페이스 이동이 막히던 문제를 방지한다.
+      await runPool(pending, GENERATE_CONCURRENCY, (scene) => processScene(scene));
     } finally {
       await reconcilePendingContiOutputs();
       const latestScenes = runVersionId ? await getScenesForVersion(runVersionId) : getSceneState(projectId)?.scenes ?? activeScenes;
@@ -4519,12 +4534,6 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
     });
   }, [activeScenes, activeVersionId, projectId]);
 
-  // 스타일 변형은 상한 없이 전체 scene 을 병렬로 띄우되, 시작 시점만 이 간격으로
-  // 엇갈려서 (canvas 크롭 + 스토리지 업로드 + 서버 다운스케일) 초기 burst 를 분산한다.
-  // 각 호출이 ~200s 걸리므로 결국 전부 동시에 in-flight 가 되지만, launch 스파이크가
-  // 사라져 "갑자기 무거워지는" 체감이 완화된다.
-  const STYLE_STAGGER_MS = 500;
-
   const runStyleTransferAll = async (mode: "all" | "selected" = "all") => {
     const runVersionId = activeVersionIdRef.current;
     const targetScenes =
@@ -4557,16 +4566,12 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
     // transfer complete!" — leaving the user staring at unchanged images.
     const failedScenes: { sceneNumber: number; reason: string }[] = [];
     try {
-      // 상한 없이 전체 scene 을 병렬로 띄운다. 시작 시점만 idx × STYLE_STAGGER_MS
-      // 만큼 엇갈려 launch burst (크롭/업로드/다운스케일) 를 분산한다. 각 호출이
-      // ~200s 라 결국 전부 동시 in-flight 가 되지만, 그 대기는 idle 이라 UI 부하는
-      // 작고 초기 스파이크만 사라진다.
-      await Promise.all(
-        targetScenes.map(async (scene, idx) => {
-          if (idx > 0) {
-            await new Promise((resolve) => window.setTimeout(resolve, idx * STYLE_STAGGER_MS));
-          }
-          // 자기 차례(시작 지연 경과) 도달 → 대기중에서 빼고 spinner 채널 / 버전 태깅.
+      // 동시 실행 상한(GENERATE_CONCURRENCY)을 둔 워커 풀로 돌린다. 슬롯이 비는 즉시
+      // 다음 scene 을 끌어와 항상 최대 N 개만 in-flight 로 유지 (batch 아님, sliding window).
+      // 대기 중인 scene 은 풀이 자기 차례에 끌어올 때까지 "대기중(queued)" 으로 남고, 그
+      // 시점에 큐에서 빠지며 spinner 채널 / 버전 태깅으로 전환된다. 이로써 응답들이 동시에
+      // 몰려 메인스레드를 포화시켜 탭/워크스페이스 이동이 막히던 문제를 방지한다.
+      await runPool(targetScenes, GENERATE_CONCURRENCY, async (scene) => {
           // 버전 태깅은 sibling copy-version 이 같은 scene id 로 spinner 를 띄우지
           // 않도록 하기 위함. SortableContiCard `versionMatches` 참고.
           setQueuedSceneIds((prev) => {
@@ -4655,8 +4660,7 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
               return n;
             });
           }
-        }),
-      );
+      });
       // 마지막 post-process 까지 다 끝난 뒤 종료 (exception-proof).
       await postProcessChain.catch(() => {});
     } finally {
@@ -6460,6 +6464,7 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
         >
           <button
             onClick={() => setShowStyleModal(true)}
+            title={currentStyle ? currentStyle.name : undefined}
             className="flex items-center gap-1.5 px-3 text-caption font-medium tracking-wide transition-colors"
             style={{
               background: "transparent",
@@ -6485,7 +6490,8 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
             ) : (
               <PhotoStar className="w-3.5 h-3.5" />
             )}
-            {currentStyle ? currentStyle.name : t("projectModal.style")}
+            {/* 스타일 적용 시엔 이름을 빼고 썸네일만 — 칩을 심플하게. 미적용 시에만 라벨 노출. */}
+            {!currentStyle && t("projectModal.style")}
           </button>
           {currentStyle && (
             <button
@@ -6543,6 +6549,14 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
                 <ArrowRightLeft className="w-3.5 h-3.5" />
               )}
               {t("conti.transfer")}
+              {/* 스타일 적용에 쓰이는 실제 모델 배지 — 콘티 모델 토글(GPT)과 혼동 방지.
+                  생성 호출부와 동일하게 style 설정값을 읽어 표기/실제를 일치시킨다. */}
+              <span
+                className="text-nano tracking-wide px-1 py-0.5 border"
+                style={{ color: "rgba(255,255,255,0.55)", borderColor: "rgba(255,255,255,0.18)" }}
+              >
+                {IMAGE_GEN_MODEL_LABELS[getImageModelDefault("style")] ?? getImageModelDefault("style")}
+              </span>
             </button>
           )}
         </div>

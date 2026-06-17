@@ -306,7 +306,10 @@ export const ProjectListRow = ({
               이전됨 — 그리드 카드와 시각 언어 통일). */}
           <div className="flex items-start gap-2 min-w-0">
             <div className="min-w-0 flex-1">
-              <div className="truncate text-label font-bold tracking-wide text-foreground group-hover:text-primary transition-colors">
+              {/* 호버 시 제목 색 변화 없음 — 그리드 카드(ProjectCard)는 inline
+                  color 가 group-hover:text-primary 를 덮어 사실상 색이 안 바뀌므로,
+                  리스트도 동일하게 정적 색으로 통일한다. */}
+              <div className="truncate text-label font-bold tracking-wide text-foreground">
                 {project.title}
               </div>
               {project.client && (

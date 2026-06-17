@@ -221,9 +221,11 @@ export function LibraryImportDialog({ open, onOpenChange, target, projectId, onO
           </div>
         ) : (
           <div className="flex flex-col gap-3">
-            {/* 필터 칩 + 검색 */}
-            <div className="flex items-center gap-2">
-              <div className="flex gap-1.5">
+            {/* 필터 칩 + 검색 — 한 줄짜리 통합 툴바. 칩은 좌측 고정폭, 검색은
+                남은 폭을 모두 채워(flex-1) 우측에 따로 떠 있지 않고 자연스럽게
+                이어지게 한다. 아래 콘텐츠와 분리되도록 옅은 하단 보더 추가. */}
+            <div className="flex items-center gap-2 border-b border-border-subtle pb-3">
+              <div className="flex shrink-0 gap-1.5">
                 {filterChips.map((c) => {
                   const active = filter === c.id;
                   const Icon = c.icon;
@@ -244,20 +246,23 @@ export function LibraryImportDialog({ open, onOpenChange, target, projectId, onO
                   );
                 })}
               </div>
-              <div className="relative ml-auto w-56">
-                <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <div className="relative min-w-0 flex-1">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder={t("library.import.searchPlaceholder")}
-                  className="h-8 rounded-none pl-7 text-meta"
+                  className="h-8 w-full rounded-none pl-8 text-meta"
                 />
               </div>
             </div>
 
-            <div className="flex gap-3" style={{ minHeight: 380 }}>
+            {/* 콘텐츠 영역 — 폴더 자료 유무와 관계없이 높이 고정(420px)해서
+                다이얼로그 전체 높이가 흔들리지 않게 한다. 각 칼럼은 내부에서
+                스크롤. */}
+            <div className="flex gap-3" style={{ height: 420 }}>
               {/* 폴더 트리 */}
-              <div className="w-40 shrink-0 overflow-y-auto border border-border-subtle p-1" style={{ borderRadius: 0, maxHeight: 420 }}>
+              <div className="h-full w-40 shrink-0 overflow-y-auto border border-border-subtle p-1" style={{ borderRadius: 0 }}>
                 <button
                   type="button"
                   onClick={() => setActiveFolder(null)}
@@ -289,13 +294,13 @@ export function LibraryImportDialog({ open, onOpenChange, target, projectId, onO
               </div>
 
               {/* 그리드 */}
-              <div className="flex-1 overflow-y-auto" style={{ maxHeight: 420 }}>
+              <div className="h-full flex-1 overflow-y-auto">
                 {loading ? (
-                  <div className="flex h-40 items-center justify-center text-muted-foreground">
+                  <div className="flex h-full items-center justify-center text-muted-foreground">
                     <Loader2 className="h-5 w-5 animate-spin" />
                   </div>
                 ) : visible.length === 0 ? (
-                  <div className="flex h-40 items-center justify-center text-body text-muted-foreground">
+                  <div className="flex h-full items-center justify-center text-body text-muted-foreground">
                     {t("library.import.empty")}
                   </div>
                 ) : (

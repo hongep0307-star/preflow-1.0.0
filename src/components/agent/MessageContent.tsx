@@ -1,5 +1,5 @@
-import React from "react";
-import ReactMarkdown from "react-markdown";
+import React, { useState } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
 import {
   KR,
   type Asset,
@@ -36,6 +36,44 @@ const normalizeMentions = (text: string) =>
     .replace(/\uFF20/g, "@") // ＠ → @
     .replace(/\uFF3F/g, "_") // ＿ → _
     .replace(/\uFF0D/g, "-"); // － → -
+
+// 긴 자유 대화 본문은 기본적으로 접어서 "벽 같은 텍스트" 를 줄인다.
+// 임계치를 넘는 본문만 max-height + 하단 페이드로 클램프하고 더보기/접기 토글을 노출.
+const PROSE_COLLAPSE_CHARS = 700;
+
+const ProseBlock = ({ source, components }: { source: string; components: Components }) => {
+  const t = useT();
+  const collapsible = source.length > PROSE_COLLAPSE_CHARS;
+  const [open, setOpen] = useState(false);
+  const clamp = collapsible && !open;
+  return (
+    <div className="relative">
+      <div
+        className={clamp ? "overflow-hidden" : undefined}
+        style={
+          clamp
+            ? {
+                maxHeight: 220,
+                WebkitMaskImage: "linear-gradient(to bottom, black 62%, transparent)",
+                maskImage: "linear-gradient(to bottom, black 62%, transparent)",
+              }
+            : undefined
+        }
+      >
+        <ReactMarkdown components={components}>{source}</ReactMarkdown>
+      </div>
+      {collapsible && (
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="mt-1 text-2xs font-bold uppercase tracking-wider px-2 py-1 transition-opacity hover:opacity-80"
+          style={{ color: KR, background: "rgba(249,66,58,0.08)", border: "1px solid rgba(249,66,58,0.2)", borderRadius: 0 }}
+        >
+          {open ? t("agent.showLess") : t("agent.showMore")}
+        </button>
+      )}
+    </div>
+  );
+};
 
 export const MessageContent = ({
   content,
@@ -82,8 +120,51 @@ export const MessageContent = ({
       }
       return child;
     });
+  const markdownComponents: Components = {
+    h1: ({ children }) => (
+      <h1 className="text-heading font-bold text-foreground mt-3 mb-1.5 first:mt-0">{processChildren(children)}</h1>
+    ),
+    h2: ({ children }) => (
+      <h2 className="text-subhead font-bold text-foreground mt-3 mb-1 first:mt-0">{processChildren(children)}</h2>
+    ),
+    h3: ({ children }) => (
+      <h3 className="text-title font-bold text-foreground mt-3 mb-1 first:mt-0 flex items-center gap-1.5">
+        <span className="inline-block w-1 h-3.5 shrink-0" style={{ background: KR }} />
+        {processChildren(children)}
+      </h3>
+    ),
+    code: ({ children }) => (
+      <code className="bg-background/50 px-1 py-0.5 rounded-none text-body font-mono text-muted-foreground">
+        {children}
+      </code>
+    ),
+    strong: ({ children }) => <strong className="font-bold text-foreground">{processChildren(children)}</strong>,
+    em: ({ children }) => <em>{processChildren(children)}</em>,
+    p: ({ children }) => (
+      <p className="text-label leading-[1.7] mb-2.5 last:mb-0 text-foreground/80">{processChildren(children)}</p>
+    ),
+    ul: ({ children }) => (
+      <ul className="list-disc pl-4 mb-2.5 space-y-1.5 marker:text-[#f9423a]/70">{children}</ul>
+    ),
+    ol: ({ children }) => (
+      <ol className="list-decimal pl-4 mb-2.5 space-y-1.5 marker:text-[#f9423a]/70 marker:font-bold">{children}</ol>
+    ),
+    li: ({ children }) => (
+      <li className="text-label leading-[1.6] text-foreground/80 pl-0.5">{processChildren(children)}</li>
+    ),
+    hr: () => <hr className="border-border/30 my-3" />,
+    blockquote: ({ children }) => (
+      <blockquote
+        className="my-2 px-3 py-2 text-label font-medium text-foreground/90 not-italic"
+        style={{ borderLeft: `3px solid ${KR}`, background: "rgba(249,66,58,0.07)", borderRadius: 0 }}
+      >
+        {processChildren(children)}
+      </blockquote>
+    ),
+  };
+
   return (
-    <div>
+    <div className="space-y-1">
       {segments.map((seg, i) => {
         if (seg.type === "strategy") return <StrategyCard key={i} content={seg.content} renderText={renderWithTags} />;
         if (seg.type === "direction") {
@@ -213,48 +294,7 @@ export const MessageContent = ({
             </div>
           );
         }
-        return (
-          <ReactMarkdown
-            key={i}
-            components={{
-              h1: ({ children }) => (
-                <h1 className="text-heading font-bold text-foreground mt-3 mb-1.5 first:mt-0">{processChildren(children)}</h1>
-              ),
-              h2: ({ children }) => (
-                <h2 className="text-subhead font-bold text-foreground mt-3 mb-1 first:mt-0">{processChildren(children)}</h2>
-              ),
-              h3: ({ children }) => (
-                <h3 className="text-title font-semibold text-foreground mt-2.5 mb-1 first:mt-0">{processChildren(children)}</h3>
-              ),
-              code: ({ children }) => (
-                <code className="bg-background/50 px-1 py-0.5 rounded-none text-body font-mono text-muted-foreground">
-                  {children}
-                </code>
-              ),
-              strong: ({ children }) => <strong className="font-semibold text-foreground">{processChildren(children)}</strong>,
-              em: ({ children }) => <em>{processChildren(children)}</em>,
-              p: ({ children }) => (
-                <p className="text-label leading-[1.7] mb-1.5 last:mb-0 text-foreground/85">{processChildren(children)}</p>
-              ),
-              ul: ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-1">{children}</ul>,
-              ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-1">{children}</ol>,
-              li: ({ children }) => (
-                <li className="text-label leading-[1.65] text-foreground/80">{processChildren(children)}</li>
-              ),
-              hr: () => <hr className="border-border/30 my-2.5" />,
-              blockquote: ({ children }) => (
-                <blockquote
-                  className="border-l-2 pl-3 my-2 text-label text-muted-foreground italic"
-                  style={{ borderColor: KR }}
-                >
-                  {processChildren(children)}
-                </blockquote>
-              ),
-            }}
-          >
-            {normalizeShotRefs(seg.content)}
-          </ReactMarkdown>
-        );
+        return <ProseBlock key={i} source={normalizeShotRefs(seg.content)} components={markdownComponents} />;
       })}
     </div>
   );

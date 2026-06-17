@@ -1840,6 +1840,78 @@ async function saveCanvasFrameAsReferenceInternal(
   });
 }
 
+/** 프리뷰 크롭 — 잘라낸 이미지를 *새 reference* 로 저장한다.
+ *  원본의 tags(폴더 `folder:` 태그 포함)와 notes 를 상속해 같은 폴더에 들어가고,
+ *  source_id 로 출처를 남긴다. 비파괴 — 원본은 그대로 둔다. */
+export async function saveCroppedImageAsNewReference(
+  item: ReferenceItem,
+  blob: Blob,
+  width: number,
+  height: number,
+): Promise<ReferenceItem> {
+  const newId = makeId();
+  const ext = blob.type === "image/webp" ? "webp" : blob.type === "image/jpeg" ? "jpg" : "png";
+  const fileUrl = await uploadToReferences(
+    storagePath(newId, `${sanitizeFileName(item.title)}_crop.${ext}`),
+    blob,
+  );
+  return createReference({
+    id: newId,
+    kind: "image",
+    title: `${item.title} (crop)`,
+    file_url: fileUrl,
+    thumbnail_url: fileUrl,
+    mime_type: blob.type || "image/png",
+    file_size: blob.size,
+    width,
+    height,
+    tags: [...new Set([...item.tags, "crop"])],
+    notes: item.notes,
+    source_url: item.file_url ?? item.source_url ?? null,
+    source_app: "preflow",
+    source_library: "reference-library",
+    source_id: item.id,
+  });
+}
+
+/** 프리뷰 크롭 — 잘라낸 이미지를 *원본 reference 에 덮어쓴다*.
+ *  새 storage 경로에 올리고 file_url/thumbnail_url/해상도/크기를 교체한다.
+ *  URL 이 바뀌므로 그리드/프리뷰가 즉시 새 비트맵을 가져온다(캐시 문제 없음).
+ *  이전 원본/썸네일 파일은 best-effort 로 정리해 orphan 을 막는다. 파괴적. */
+export async function overwriteReferenceImage(
+  item: ReferenceItem,
+  blob: Blob,
+  width: number,
+  height: number,
+): Promise<ReferenceItem> {
+  const ext = blob.type === "image/webp" ? "webp" : blob.type === "image/jpeg" ? "jpg" : "png";
+  const priorFileUrl = item.file_url;
+  const priorThumb = item.thumbnail_url;
+  const fileUrl = await uploadToReferences(
+    storagePath(item.id, `crop-${Date.now()}.${ext}`),
+    blob,
+  );
+  const updated = await updateReference(item.id, {
+    file_url: fileUrl,
+    thumbnail_url: fileUrl,
+    mime_type: blob.type || "image/png",
+    file_size: blob.size,
+    width,
+    height,
+  });
+  const toDelete = [...new Set([priorFileUrl, priorThumb])].filter(
+    (u): u is string => Boolean(u) && u !== fileUrl,
+  );
+  if (toDelete.length > 0) {
+    try {
+      await deleteStoredFiles(toDelete);
+    } catch {
+      /* 정리 실패는 무시 — 데이터는 이미 새 파일로 교체 완료. */
+    }
+  }
+  return updated;
+}
+
 function loadVideoElement(src: string, seekSec: number): Promise<HTMLVideoElement> {
   return new Promise((resolve, reject) => {
     const video = document.createElement("video");

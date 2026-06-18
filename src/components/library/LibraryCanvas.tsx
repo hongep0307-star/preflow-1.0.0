@@ -6203,6 +6203,18 @@ function CanvasItemViewBase({
               </>
             )}
           </div>
+        ) : item.thumbnail_url ? (
+          /* doc 자료 중 *진짜* 썸네일이 있는 항목(PDF 첫 페이지 / PSD 합성 /
+             폰트 미리보기 / Office 임베디드 썸네일). 무드보드에서도 아이콘
+             대신 실제 미리보기를 보여준다(그리드와 동일). 썸네일이 없으면
+             아래 FileText 아이콘으로 폴백. */
+          <img
+            src={stillSrc}
+            alt={item.title}
+            draggable={false}
+            className="absolute inset-0 h-full w-full object-cover"
+            style={{ pointerEvents: "none" }}
+          />
         ) : (
           <div className="flex h-full w-full items-center justify-center bg-muted text-muted-foreground">
             <FileText className="h-6 w-6" />

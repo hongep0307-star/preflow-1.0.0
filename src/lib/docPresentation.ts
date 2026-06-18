@@ -18,6 +18,7 @@ import {
   Archive,
   Code2,
   FileBarChart2,
+  FileImage,
   FileSpreadsheet,
   FileText,
   FileType2,
@@ -45,6 +46,7 @@ export interface DocPresentation {
 
 const TABLE: Record<DocSubtype, DocPresentation> = {
   pdf:          { subtype: "pdf",          Icon: FileText,         labelEn: "PDF",          hue: "rose" },
+  psd:          { subtype: "psd",          Icon: FileImage,        labelEn: "Photoshop",    hue: "blue" },
   spreadsheet:  { subtype: "spreadsheet",  Icon: FileSpreadsheet,  labelEn: "Spreadsheet",  hue: "emerald" },
   presentation: { subtype: "presentation", Icon: PresentationIcon, labelEn: "Presentation", hue: "orange" },
   document:     { subtype: "document",     Icon: FileBarChart2,    labelEn: "Document",     hue: "blue" },
@@ -119,6 +121,7 @@ export function docExtensionTag(item: ReferenceItem): string {
  *  스캔 순서(자주 쓰는 → 드물게 쓰는) 기준으로 손수 정렬. */
 export const DOC_SUBTYPE_ORDER: DocSubtype[] = [
   "pdf",
+  "psd",
   "presentation",
   "spreadsheet",
   "document",

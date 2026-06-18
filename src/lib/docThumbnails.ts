@@ -66,6 +66,68 @@ export async function renderPdfFirstPageThumbnail(file: File): Promise<Blob | nu
 }
 
 /**
+ * Photoshop 문서(PSD / PSB) → 합성(composite) PNG 썸네일.
+ *
+ * 브라우저는 PSD/PSB 를 <img> 로 디코드하지 못해 그냥 깨지거나 셸 아이콘으로
+ * 떨어진다. Eagle 처럼 *진짜* 미리보기를 보여주기 위해 `ag-psd` 로 파일을
+ * 읽어 합성 캔버스를 얻은 뒤 THUMB_LONGER_EDGE 로 다운스케일해 PNG 로 굽는다.
+ *
+ * 우선순위:
+ *  1) `psd.canvas`            — 파일에 저장된 합성(merged) 이미지. 가장 충실.
+ *  2) imageResources 썸네일   — "호환성 최대화" 옵션으로 저장된 PSD 의 임베디드
+ *                               미리보기(보통 저해상도). 합성 데이터가 없을 때 폴백.
+ *
+ * 둘 다 없으면(=레이어만 저장된 비호환 PSD) null → 호출부가 셸 아이콘으로 폴백.
+ *
+ * 성능: 레이어 픽셀 디코드는 썸네일에 불필요하므로 `skipLayerImageData: true`
+ * 로 꺼서 대형 PSD 의 메인스레드 점유를 줄인다. 합성 캔버스만 받는다.
+ */
+export async function renderPsdThumbnail(file: File): Promise<Blob | null> {
+  try {
+    const buffer = await file.arrayBuffer();
+    /* ag-psd 는 무겁고 PSD 자료에서만 필요하므로 동적 import 로 메인 번들에서
+       분리. (PDF/Office 파서가 동적 import 되는 것과 동일 톤) */
+    const { readPsd } = await import("ag-psd");
+    const psd = readPsd(buffer, {
+      skipLayerImageData: true,
+      skipCompositeImageData: false,
+      skipThumbnail: false,
+      useImageData: false,
+    });
+    const source: CanvasImageSource | null =
+      (psd.canvas as CanvasImageSource | undefined)
+      ?? (psd.imageResources?.thumbnail as CanvasImageSource | undefined)
+      ?? null;
+    if (!source) return null;
+    /* CanvasImageSource 는 width/height 직접 노출 안 하므로 psd 메타에서 폭/높이
+       를 읽는다. 임베디드 썸네일 폴백 시엔 thumbnail 자체 크기를 쓴다. */
+    const srcW = psd.canvas?.width ?? psd.imageResources?.thumbnail?.width ?? psd.width;
+    const srcH = psd.canvas?.height ?? psd.imageResources?.thumbnail?.height ?? psd.height;
+    const longest = Math.max(srcW, srcH);
+    if (longest <= 0) return null;
+    const scale = Math.min(1, THUMB_LONGER_EDGE / longest);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(srcW * scale));
+    canvas.height = Math.max(1, Math.round(srcH * scale));
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    /* PSD 가 투명 배경이면 다크 그리드에서 일부 픽셀만 떠 보인다 — PDF 썸네일과
+       동일하게 흰 종이 위에 합성. (불투명 PSD 는 그대로 덮인다) */
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+    return await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob((blob) => resolve(blob), "image/png", 0.92);
+    });
+  } catch (err) {
+    console.warn("[docThumbnails] psd render failed", err);
+    return null;
+  }
+}
+
+/**
  * 폰트 파일 → "Aa Gg" 단문 미리보기.
  *
  * 1) 파일을 ArrayBuffer 로 읽어 FontFace API 로 등록(임의의 family 명).

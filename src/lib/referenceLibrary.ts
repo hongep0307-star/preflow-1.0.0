@@ -28,6 +28,7 @@ export type ClassificationStatus = "unclassified" | "pending" | "ready" | "faile
  */
 export type DocSubtype =
   | "pdf"
+  | "psd"
   | "spreadsheet"
   | "presentation"
   | "document"
@@ -455,6 +456,7 @@ export function detectDocSubtype(mime: string | null | undefined, name?: string 
   const ext = (name ?? "").match(/\.[^.]+$/)?.[0]?.toLowerCase() ?? "";
 
   if (m === "application/pdf" || ext === ".pdf") return "pdf";
+  if (m === "image/vnd.adobe.photoshop" || m === "application/x-photoshop" || [".psd", ".psb"].includes(ext)) return "psd";
   if (m.startsWith("font/") || [".ttf", ".otf", ".woff", ".woff2"].includes(ext)) return "font";
   if (
     m === "application/zip"
@@ -501,6 +503,11 @@ export function detectReferenceKind(file: File): ReferenceKind {
   if (file.type === "image/gif" || ext === ".gif") return "gif";
   if (ext === ".apng") return "gif";
   if (file.type === "image/webp" || ext === ".webp") return "webp";
+  /* PSD/PSB 는 브라우저 <img> 로 디코드 불가 — image 로 분류하면 깨진 카드가
+     된다(일부 환경은 `.psd` 를 image/vnd.adobe.photoshop 으로 보고). doc 으로
+     흡수해 업로드 파이프라인이 ag-psd 합성 썸네일을 생성하도록 한다. image/*
+     체크보다 *먼저* 가로채야 한다. */
+  if ([".psd", ".psb"].includes(ext)) return "doc";
   if (file.type.startsWith("image/")) return "image";
   if (file.type.startsWith("video/") || [".mp4", ".mov", ".webm"].includes(ext)) return "video";
   /* deny-list 에 걸리면 "doc" fallback 도 거부. 호출부의 try/catch 가 토스트
@@ -2183,6 +2190,13 @@ export async function uploadReferenceFile(file: File, options: UploadReferenceOp
       if (subtype === "pdf") {
         thumbBlob = await docThumbs.renderPdfFirstPageThumbnail(file);
         stepLog = `pdf:${thumbBlob ? "ok" : "fail"}`;
+      } else if (subtype === "psd") {
+        thumbBlob = await docThumbs.renderPsdThumbnail(file);
+        stepLog = `psd:${thumbBlob ? "ok" : "fail"}`;
+        if (!thumbBlob) {
+          thumbBlob = await docThumbs.renderShellIconThumbnail(file);
+          stepLog += `,shell:${thumbBlob ? "ok" : "fail"}`;
+        }
       } else if (subtype === "font") {
         thumbBlob = await docThumbs.renderFontPreviewThumbnail(file);
         stepLog = `font:${thumbBlob ? "ok" : "fail"}`;

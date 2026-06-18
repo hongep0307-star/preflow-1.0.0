@@ -466,6 +466,7 @@ export const UI_COPY: Record<string, Record<UiLanguage, string>> = {
   /* DocSubtype — 카드 / 인스펙터 / 필터 행에서 공유. 키는 sub-type id 와
      1:1 매칭되어 한 곳에서만 갱신해도 모든 표시 지점이 따라간다. */
   "library.docSubtype.pdf": { en: "PDF", ko: "PDF" },
+  "library.docSubtype.psd": { en: "Photoshop", ko: "포토샵" },
   "library.docSubtype.spreadsheet": { en: "Spreadsheet", ko: "스프레드시트" },
   "library.docSubtype.presentation": { en: "Presentation", ko: "프레젠테이션" },
   "library.docSubtype.document": { en: "Document", ko: "문서" },

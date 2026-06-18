@@ -65,6 +65,7 @@ export function detectLinkPlatform(
  *  뱃지 라벨 + 뷰어 지원 여부(PDF/Audio 만 인뷰 표시) 판정에 쓴다. */
 export type DocSubtype =
   | "pdf"
+  | "psd"
   | "font"
   | "archive"
   | "spreadsheet"
@@ -81,6 +82,7 @@ export function detectDocSubtype(mime: string | null | undefined, name?: string 
   const ext = (name ?? "").match(/\.[a-z0-9]+(?:[?#]|$)/i)?.[0]?.replace(/[?#]$/, "").toLowerCase() ?? "";
 
   if (m === "application/pdf" || ext === ".pdf") return "pdf";
+  if (m === "image/vnd.adobe.photoshop" || m === "application/x-photoshop" || [".psd", ".psb"].includes(ext)) return "psd";
   if (m.startsWith("font/") || [".ttf", ".otf", ".woff", ".woff2"].includes(ext)) return "font";
   if (
     m === "application/zip" || m === "application/x-7z-compressed" || m === "application/x-rar-compressed" ||
@@ -102,6 +104,7 @@ export function detectDocSubtype(mime: string | null | undefined, name?: string 
 
 const DOC_SUBTYPE_LABEL: Record<DocSubtype, string> = {
   pdf: "PDF",
+  psd: "PSD",
   font: "Font",
   archive: "ZIP",
   spreadsheet: "Sheet",

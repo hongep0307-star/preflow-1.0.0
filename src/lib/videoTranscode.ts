@@ -11,6 +11,7 @@
 
 import { LOCAL_SERVER_BASE_URL } from "@shared/constants";
 import { supabase } from "./supabase";
+import type { VideoMeta } from "./videoFrames";
 
 export interface ProbedVideoMeta {
   durationSec: number;
@@ -50,6 +51,50 @@ export async function probeVideoMeta(file: File): Promise<ProbedVideoMeta> {
     });
   } finally {
     URL.revokeObjectURL(url);
+  }
+}
+
+/**
+ * 브라우저 <video> 가 디코드하지 못하는 영상(ProRes/HEVC MOV 등) 의 첫 프레임을
+ * 메인 프로세스 ffmpeg 로 추출해 PNG Blob + VideoMeta 로 돌려준다.
+ *
+ * 데이터 흐름은 transcodeVideoFile 과 동일:
+ *   getPathForFile(원본 경로) → IPC extractVideoPoster → scratch PNG →
+ *   /storage/file/ fetch → Blob, 그리고 scratch 정리(best-effort).
+ *
+ * 경로를 얻을 수 없거나(폴더 임포트본) 브리지 미지원/실패면 null — 호출부가
+ * 썸네일 없이 업로드를 계속하도록 한다.
+ */
+export async function extractVideoPosterFile(
+  file: File,
+): Promise<{ blob: Blob; meta: VideoMeta } | null> {
+  const bridge = window.preflowWindow;
+  if (!bridge?.extractVideoPoster || !bridge.getPathForFile) return null;
+  const inputPath = bridge.getPathForFile(file);
+  if (!inputPath) return null;
+
+  const id = `poster_${Date.now()}_${transcodeSeq++}`;
+  try {
+    const result = await bridge.extractVideoPoster({ id, inputPath });
+    if (result.ok !== true) return null;
+    const { scratchRelPath, durationSec, width, height } = result;
+    const scratchUrl = `${LOCAL_SERVER_BASE_URL}/storage/file/references/${scratchRelPath}`;
+    const res = await fetch(scratchUrl);
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    if (blob.size === 0) return null;
+
+    void supabase.storage
+      .from("references")
+      .remove([scratchRelPath])
+      .catch(() => undefined);
+
+    return {
+      blob,
+      meta: { durationSec, widthPx: width, heightPx: height },
+    };
+  } catch {
+    return null;
   }
 }
 

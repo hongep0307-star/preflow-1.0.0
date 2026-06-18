@@ -46,7 +46,7 @@ export interface DocPresentation {
 
 const TABLE: Record<DocSubtype, DocPresentation> = {
   pdf:          { subtype: "pdf",          Icon: FileText,         labelEn: "PDF",          hue: "rose" },
-  psd:          { subtype: "psd",          Icon: FileImage,        labelEn: "Photoshop",    hue: "blue" },
+  psd:          { subtype: "psd",          Icon: FileImage,        labelEn: "PSD",          hue: "blue" },
   spreadsheet:  { subtype: "spreadsheet",  Icon: FileSpreadsheet,  labelEn: "Spreadsheet",  hue: "emerald" },
   presentation: { subtype: "presentation", Icon: PresentationIcon, labelEn: "Presentation", hue: "orange" },
   document:     { subtype: "document",     Icon: FileBarChart2,    labelEn: "Document",     hue: "blue" },
@@ -87,6 +87,11 @@ const HUE_CLASSES: Record<DocPresentation["hue"], {
 };
 
 export function docSubtypeOf(item: ReferenceItem): DocSubtype {
+  /* 저장된 PSD 는 mime 이 application/octet-stream 으로 떨어지고 title 에서
+     확장자(.psd)가 제거돼 mime/ext 기반 판정이 "other" 로 빗나간다. 업로드 시
+     생성한 풀해상도 프리뷰(ai_suggestions.psdPreview)가 있으면 확실한 PSD 이므로
+     우선 확정한다. */
+  if (item.ai_suggestions?.psdPreview) return "psd";
   return detectDocSubtype(item.mime_type ?? "", item.title ?? item.file_url ?? "");
 }
 

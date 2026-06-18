@@ -171,6 +171,31 @@ export function resolveTypeLabel(
   }
 }
 
+/* 인스펙터 "종류" 필드가 쓰는 *포맷 기준* 라벨 정리기.
+ *
+ * 기존엔 `mime_type ?? resolveTypeLabel` 로 보여줘서, URL 자료가 썸네일의
+ * mime(image/png)을 그대로 노출하는 버그가 있었다. 종류는 "파일이 무엇이냐"
+ * 를 사용자 언어로 보여줘야 하므로 kind 별로 일관되게 정한다:
+ *
+ *   - URL 계열(youtube/link): 항상 플랫폼 라벨(URL/YouTube/Pinterest/…).
+ *     썸네일 mime/확장자는 무시 — "이건 웹 링크" 라는 사실이 우선.
+ *   - doc 계열: 호출부가 docExtensionTag 로 PSD/PDF/ZIP 등 태그를 준다(여기선
+ *     다루지 않음, 아래 resolveFormatLabel 은 비-doc 만 책임).
+ *   - 미디어(image/webp/gif/video): 실제 포맷 확장자를 대문자로(PNG/JPEG/MP4/
+ *     MOV/WEBP/GIF). mime subtype → file_url → title 순으로 약어형(≤5자) 만
+ *     채택하므로 video/quicktime 같은 긴 subtype 은 .mov 확장자로 자연 폴백.
+ *     추출 실패 시 kind 라벨(Image/Video/…) 로 폴백. */
+export function resolveFormatLabel(
+  item: Pick<ReferenceItem, "kind" | "source_url" | "mime_type" | "file_url" | "title">,
+): string {
+  if (item.kind === "youtube" || item.kind === "link") {
+    return LINK_PLATFORM_LABEL[detectLinkPlatform(item) ?? "other"];
+  }
+  const ext = pickAcronymExtension(item);
+  if (ext) return ext.toUpperCase();
+  return resolveTypeLabel(item);
+}
+
 /** 리스트 뷰의 Extension 컬럼 + Sort 의 "extension" 키가 공유하는 추출 로직.
  *
  *  표기 정책 — "그 포맷의 가장 자연스러운 형태" 를 그대로 노출한다:

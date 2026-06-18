@@ -950,11 +950,14 @@ function LibraryMediaThumbnail({
         onMouseEnter={playVideo}
         onMouseLeave={pauseVideo}
       >
-        {stillSrc ? (
+        {item.thumbnail_url ? (
           /* (실험 X) video poster 도 `<img>` 대신 background-image div 로
              paint — video kind 의 cursor 는 현재도 정상이지만, 포스터가
              PNG/JPG 라면 잠재적 image-mode trigger 가 될 수 있으므로 모든
-             정적 썸네일을 일관되게 background paint 로 통일. */
+             정적 썸네일을 일관되게 background paint 로 통일.
+             ⚠ thumbnail_url 이 없으면(=ffmpeg 포스터 추출 실패/경로 없음) src
+             로 file_url(.mov 원본)을 쓰면 background-image 로 디코드가 안 돼
+             검은 카드가 되므로, 아이콘 플레이스홀더로 폴백한다. */
           <BackgroundThumb
             src={stillSrc}
             alt={item.title}
@@ -965,7 +968,9 @@ function LibraryMediaThumbnail({
             onAspect={onAspect}
           />
         ) : (
-          <Icon className={cn("h-8 w-8 text-muted-foreground transition-opacity", showVideoFrame && "opacity-0")} />
+          <div className={cn("flex h-full w-full items-center justify-center bg-muted transition-opacity", showVideoFrame && "opacity-0")}>
+            <Icon className="h-8 w-8 text-muted-foreground" />
+          </div>
         )}
         <video
           ref={videoRef}
@@ -1952,7 +1957,8 @@ function LibraryCard({
                       && (item.kind === "video"
                         || item.kind === "gif"
                         || item.kind === "webp"
-                        || item.kind === "image")
+                        || item.kind === "image"
+                        || item.kind === "doc")
                       && item.timestamp_notes.length > 0 ? (
                       <Badge
                         className="h-5 px-1 text-micro bg-primary/85 text-primary-foreground"

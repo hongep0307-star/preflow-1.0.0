@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { DotGrid3x3 } from "@/components/icons/DotGrid3x3";
 import { KR, KR_BG, ACFG, ASSET_ICON, type Asset } from "./contiTypes";
+import { AssetMentionHover } from "@/components/AssetMentionHover";
 import { useT } from "@/lib/uiLanguage";
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -405,7 +406,11 @@ export const LocationField = ({
               if (/^@[\w가-힣-]+$/.test(p)) {
                 const resolved = resolveAsset(p, assets);
                 if (resolved)
-                  return <TagChip key={i} name={resolved.name} assetType={resolved.asset.asset_type || "background"} />;
+                  return (
+                    <AssetMentionHover key={i} asset={resolved.asset} name={resolved.name}>
+                      <TagChip name={resolved.name} assetType={resolved.asset.asset_type || "background"} />
+                    </AssetMentionHover>
+                  );
               }
               return p ? <span key={i}>{p}</span> : null;
             })
@@ -1124,7 +1129,9 @@ export const DescriptionField = ({
               const suffix = rawName.slice(resolved.name.length);
               return (
                 <span key={i}>
-                  <TagChip name={resolved.name} assetType={resolved.asset.asset_type || "character"} />
+                  <AssetMentionHover asset={resolved.asset} name={resolved.name}>
+                    <TagChip name={resolved.name} assetType={resolved.asset.asset_type || "character"} />
+                  </AssetMentionHover>
                   {suffix}
                 </span>
               );

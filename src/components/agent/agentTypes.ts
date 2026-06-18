@@ -1,4 +1,5 @@
 import type { VideoFormat } from "@/lib/conti";
+import type { CharacterRefMode } from "@/components/assets/types";
 import { KR, KR_BG } from "@/lib/brand";
 import { parseProductionSpec, type ProductionSpec } from "@/lib/productionSpec";
 
@@ -278,6 +279,12 @@ export interface Asset {
   role_description?: string | null;
   outfit_description?: string | null;
   space_description?: string | null;
+  /** 캐릭터/아이템 레퍼런스 모드(원본/시트/보드) — 멘션 프리뷰가 선택된 모드의
+   *  이미지를 보여주기 위해 함께 로드한다(pickCharacterRefUrl). */
+  character_ref_mode?: CharacterRefMode | null;
+  character_sheet_url?: string | null;
+  character_board_url?: string | null;
+  use_character_sheet?: boolean | number | null;
 }
 
 export interface MoodImage {

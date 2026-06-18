@@ -104,9 +104,11 @@ import {
   buildBriefContextString,
   buildContinuityFixPrompt,
   buildDirectionReminder,
+  buildDraftSnapshotReminder,
   isBriefAnalysisMsg,
 } from "./agent/prompts";
 import { MessageContent } from "./agent/MessageContent";
+import { StreamingText } from "./agent/StreamingText";
 import { AgentChatInput } from "./agent/AgentChatInput";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LibraryImportDialog } from "@/components/library/LibraryImportDialog";
@@ -257,6 +259,17 @@ const stripFencesForPreview = (s: string): string =>
   (s ?? "")
     .replace(/```[\s\S]*?```/g, "")
     .replace(/```[\s\S]*$/, "")
+    // 스트리밍 평문 프리뷰: 마크다운 기호(인용구/헤더/목록/강조/인라인코드)를
+    // 벗겨 "> 확인하겠습니다" 같은 원문 기호가 그대로 노출되지 않게 한다.
+    // (완료 후 chatHistory 커밋 시에는 원문이 그대로 마크다운 렌더된다.)
+    .replace(/^\s{0,3}>\s?/gm, "")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/^(\s{0,3})[-*+]\s+/gm, "$1")
+    .replace(/^(\s{0,3})\d+\.\s+/gm, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1$2")
+    .replace(/(^|[^_])_([^_\n]+)_/g, "$1$2")
+    .replace(/`([^`]+)`/g, "$1")
     .trim();
 
 /**
@@ -648,6 +661,11 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
     [rightPanelKey],
   );
   const [chatCollapsed, setChatCollapsed] = useState(false);
+  // 방금 스트리밍이 끝난 "마지막 어시스턴트 메시지" 를 펼친 채로 둘지 여부.
+  // (created_at 매칭은 완료 직후 chat_logs 재조회로 DB 타임스탬프로 교체되면 깨지므로,
+  //  타임스탬프 대신 마지막 어시스턴트 메시지 인덱스로 판별한다.) 다른 탭에 다녀오거나
+  //  채팅 패널을 접으면 아래 effect 에서 false 로 리셋해 다시 접힌 기본값으로 돌아간다.
+  const [keepLatestOpen, setKeepLatestOpen] = useState(false);
   const [splitView, setSplitViewState] = useState<boolean>(() => {
     try {
       const raw = typeof window !== "undefined" ? window.localStorage.getItem(splitViewKey) : null;
@@ -715,7 +733,7 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
   const fetchAssets = useCallback(async () => {
     const { data, error } = await supabase
       .from("assets")
-      .select("tag_name,photo_url,ai_description,asset_type,role_description,outfit_description,space_description")
+      .select("tag_name,photo_url,ai_description,asset_type,role_description,outfit_description,space_description,character_ref_mode,character_sheet_url,character_board_url,use_character_sheet")
       .eq("project_id", projectId);
     if (error) {
       console.warn("[AgentTab] fetchAssets skipped after transient read error:", error.message);
@@ -1348,9 +1366,19 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
   }, []);
 
   useEffect(() => {
-    if (!userScrolledUp && (isLoading || chatHistory.length > 0))
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatHistory, isLoading, userScrolledUp]);
+    if (userScrolledUp || !(isLoading || chatHistory.length > 0)) return;
+    // ⚠️ behavior:"smooth" 로 따라가면, 토큰마다 재시작되는 스무스 애니메이션이
+    //    아직 진행 중일 때 사용자가 스크롤을 올려도 그 lingering 애니메이션이 바닥까지
+    //    마저 내려가며 userScrolledUp 를 다시 false 로 되돌려 사용자의 스크롤-업을
+    //    덮어쓴다. 즉시(instant) 스크롤은 단일 점프라 lingering 애니메이션이 없어
+    //    "올리는 순간 멈춤"이 그대로 유지된다(다시 바닥으로 내려오면 onScroll 이 재개).
+    const node = chatContainerRef.current;
+    if (node) node.scrollTop = node.scrollHeight;
+    else messagesEndRef.current?.scrollIntoView({ block: "end" });
+    // 스트리밍 중에는 chatHistory/isLoading 이 그대로라 토큰이 들어와도 effect 가
+    // 재실행되지 않는다. throttle 된 스트리밍 값(과 라이브 카드 길이)을 의존성에
+    // 넣어 답변이 자라는 동안에도 바닥을 따라가게 한다.
+  }, [chatHistory, isLoading, userScrolledUp, throttledStreamingText, liveStreamScenes.length]);
 
   // 탭 복귀(display:none → block) 는 컨테이너가 unmount 되지 않아 callback ref 가
   // 안 불린다. 이 경로의 scrollTop 리셋은 별도 effect 로 보정한다. chatCollapsed
@@ -1362,6 +1390,13 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
       if (c) c.scrollTop = c.scrollHeight;
     });
     return () => cancelAnimationFrame(id);
+  }, [isActive, chatCollapsed]);
+
+  // 다른 탭으로 나가면(또는 채팅 패널을 접으면) "방금 완료" 펼침 상태를 해제한다.
+  // 탭 전환은 display:none 이라 ProseBlock 이 언마운트되지 않으므로, 여기서 플래그를
+  // 내려 복귀 시 긴 답변이 다시 접힌 상태로 보이게 한다.
+  useEffect(() => {
+    if (!isActive || chatCollapsed) setKeepLatestOpen(false);
   }, [isActive, chatCollapsed]);
 
   useEffect(() => {
@@ -1485,7 +1520,15 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
         : "";
       // 확정된 연출 모드 리마인더(순응도 강화, LLM 전용).
       const directionReminder = buildDirectionReminder(directionModeRef.current, briefLang);
-      const prefixBlocks = [directionReminder, assetReminder, refContext].filter(Boolean).join("\n\n");
+      // 현재 드래프트(사용자 인라인 수정 반영본)를 진실 소스로 주입한다. 대화 히스토리의 옛
+      // scene 블록은 수동 편집을 echo 하지 않으므로, 이게 없으면 "#1만 고쳐줘" 요청에 전체 컷을
+      // 다시 뱉을 때 사용자가 고친 다른 컷이 옛 버전으로 리셋된다. 모듈 스토어에서 최신 값을 읽어
+      // 스테일 클로저를 피한다.
+      const liveDraft = _pendingScenesByProject.get(projectId) ?? loadPendingFromLS(projectId) ?? [];
+      const draftSnapshot = buildDraftSnapshotReminder(liveDraft, briefLang);
+      const prefixBlocks = [directionReminder, assetReminder, refContext, draftSnapshot]
+        .filter(Boolean)
+        .join("\n\n");
       const textForLLM = prefixBlocks ? `${prefixBlocks}\n${briefLang === "en" ? "[User request]" : "[사용자 요청]"}\n${text}` : text;
       // ⚠️ callLLM 디스패처(llm.ts)의 정규형 LLMImagePart 는
       //    { type:"image", mediaType, dataBase64 } 이다. (Anthropic 의
@@ -1568,6 +1611,8 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
           ...prev,
           { project_id: projectId, role: "assistant", content: assistantContent, created_at: new Date().toISOString() },
         ]);
+        // 방금 완료된 답변은 길어도 펼친 상태로 둔다(스트리밍 → 완료 전환이 자연스럽게).
+        setKeepLatestOpen(true);
       }
       const extractedSpec = extractSpecFromText(assistantContent);
       if (extractedSpec) setPendingSpec(extractedSpec);
@@ -1844,9 +1889,19 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
           </button>
         )}
       </div>
+      <div className="relative flex-1 flex flex-col min-h-0">
       <div className="flex-1 overflow-y-auto p-4 space-y-4" ref={setChatContainer}>
         {(() => {
           const cumulativeIds = new Set<string>();
+          // 마지막 어시스턴트 메시지 인덱스(방금 완료된 답변). keepLatestOpen 일 때
+          // 이 메시지만 펼친 채로 둔다.
+          let lastAssistantIdx = -1;
+          for (let k = displayMessages.length - 1; k >= 0; k--) {
+            if (displayMessages[k].role === "assistant") {
+              lastAssistantIdx = k;
+              break;
+            }
+          }
           return displayMessages.map((msg, i) => {
             const parsedSegments = msg.role === "assistant" && !isBriefAnalysisMsg(msg.content)
               ? parseMessageSegments(msg.content, cumulativeIds)
@@ -1861,7 +1916,7 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
             }
 
             return (
-              <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+              <div key={i} className={`flex animate-fade-in ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
                 {msg.role === "assistant" && <CdAvatar size="w-6 h-6" iconSize={14} />}
                 {msg.role === "assistant" && <div className="mr-2" />}
                 <div className="max-w-[85%]">
@@ -1902,7 +1957,7 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
                     className={`px-3.5 py-2.5 text-label leading-relaxed ${msg.role === "user" ? "text-foreground" : "bg-card text-foreground border border-border"}`}
                     style={
                       msg.role === "user"
-                        ? { background: "rgba(249,66,58,0.06)", border: "1px solid rgba(249,66,58,0.15)", borderRadius: 0 }
+                        ? { background: "rgba(249,66,58,0.14)", border: "1px solid rgba(249,66,58,0.5)", borderRadius: 0 }
                         : { borderRadius: 0 }
                     }
                   >
@@ -1911,6 +1966,7 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
                       assets={projectAssets}
                       onSend={handleSend}
                       segments={parsedSegments}
+                      defaultOpen={keepLatestOpen && i === lastAssistantIdx}
                       activeDirectionMode={directionMode}
                       onPickDirection={(m) => {
                         void persistDirectionMode(m);
@@ -1931,6 +1987,17 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
           // 펜스가 하나라도 닫혔으면(전략/스펙/컷) 점진 렌더 패널을 보여준다.
           const hasLive =
             liveStreamScenes.length > 0 || liveStreamHasSpec || liveStreamHasStrategy;
+          // 단계 인식형 상태 문구 — 스트리밍에서 구조화 출력이 감지될 때만 특화하고,
+          // 그 외(브리프 분석이 필요 없는 일반 답변)는 기존 범용 문구를 그대로 둔다.
+          const statusLabel = liveStreamScenes.length > 0
+            ? t("agent.statusScenes", { n: String(liveStreamScenes.length) })
+            : liveStreamHasStrategy
+              ? t("agent.statusStrategy")
+              : liveStreamHasSpec
+                ? t("agent.statusSpec")
+                : isBriefAnalysisMsg(throttledStreamingText)
+                  ? t("agent.statusAnalyzingBrief")
+                  : t("agent.craftingScenario");
           return (
             <div className="flex justify-start">
               <CdAvatar size="w-6 h-6" iconSize={14} />
@@ -1942,7 +2009,7 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
                     className="px-3.5 py-2.5 text-label leading-relaxed bg-card text-foreground border border-border whitespace-pre-wrap"
                     style={{ borderRadius: 0 }}
                   >
-                    {streamPreview}
+                    <StreamingText text={streamPreview} />
                     <span className="inline-block w-1.5 h-3.5 ml-0.5 align-text-bottom animate-pulse" style={{ background: KR }} />
                   </div>
                 ) : hasLive ? null : (
@@ -1963,12 +2030,28 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
                     hasStrategy={liveStreamHasStrategy}
                   />
                 )}
-                <div className="text-meta text-muted-foreground mt-1">{t("agent.craftingScenario")}</div>
+                <div className="text-meta text-muted-foreground mt-1">{statusLabel}</div>
               </div>
             </div>
           );
         })()}
         <div ref={messagesEndRef} />
+      </div>
+        {userScrolledUp && (
+          <button
+            type="button"
+            onClick={() => {
+              setUserScrolledUp(false);
+              messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+            }}
+            title={t("agent.jumpToLatest")}
+            className="absolute bottom-3 right-4 z-20 inline-flex items-center gap-1 px-2.5 py-1.5 text-caption font-semibold text-white shadow-lg animate-fade-in hover:opacity-90 transition-opacity"
+            style={{ background: KR, borderRadius: 0, border: "1px solid rgba(255,255,255,0.15)" }}
+          >
+            <ChevronDown className="w-3.5 h-3.5" />
+            {t("agent.jumpToLatest")}
+          </button>
+        )}
       </div>
       {chatImages.length > 0 && (
         <div className="px-4 pt-3 pb-1 flex items-center gap-2 shrink-0">

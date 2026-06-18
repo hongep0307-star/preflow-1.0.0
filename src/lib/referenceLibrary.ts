@@ -7,7 +7,8 @@ import {
 import { supabase } from "./supabase";
 import { dispatchPaletteUpdated, enqueueExtractFromThumbnail } from "./colorPalette";
 import { deleteStoredFiles, parseStorageUrl } from "./storageUtils";
-import { extractFirstFrame, validateVideoFile, validateVideoMeta } from "./videoFrames";
+import { extractFirstFrame, validateVideoFile, validateVideoMeta, type VideoMeta } from "./videoFrames";
+import { extractVideoPosterFile } from "./videoTranscode";
 import { ingestYoutube, isYoutubeUrl, YOUTUBE_URL_REGEX } from "./youtube";
 import { fetchLinkPreview, type LinkPreviewResult } from "./linkPreview";
 import type { RefAnnotation, RefImageItem, RefItem, RefVideoItem, RefYoutubeItem } from "./refItems";
@@ -2175,6 +2176,11 @@ export async function uploadReferenceFile(file: File, options: UploadReferenceOp
     const fileUrl = await uploadToReferences(originalPath, file);
 
     let thumbnailUrl: string | null = null;
+    /* PSD 전용 — 풀해상도 프리뷰 URL/native 해상도. 프리뷰 패널이 이미지처럼
+       줌·팬 하도록 ai_suggestions.psdPreview 로 durable 저장한다. */
+    let psdPreviewUrl: string | null = null;
+    let psdWidth: number | undefined;
+    let psdHeight: number | undefined;
     try {
       const subtype = detectDocSubtype(file.type, file.name);
       /* sub-type 별 fallback ladder:
@@ -2191,11 +2197,18 @@ export async function uploadReferenceFile(file: File, options: UploadReferenceOp
         thumbBlob = await docThumbs.renderPdfFirstPageThumbnail(file);
         stepLog = `pdf:${thumbBlob ? "ok" : "fail"}`;
       } else if (subtype === "psd") {
-        thumbBlob = await docThumbs.renderPsdThumbnail(file);
-        stepLog = `psd:${thumbBlob ? "ok" : "fail"}`;
-        if (!thumbBlob) {
+        /* Eagle 식 원본 크기 프리뷰 — 풀해상도 합성을 preview.webp 로 굽고,
+           그리드용 작은 썸네일은 별도로. 둘 다 한 번의 PSD 파싱으로 생성. */
+        const rasters = await docThumbs.renderPsdRasters(file);
+        if (rasters) {
+          thumbBlob = rasters.thumb;
+          psdWidth = rasters.width;
+          psdHeight = rasters.height;
+          psdPreviewUrl = await uploadToReferences(storagePath(id, "preview.webp"), rasters.full);
+          stepLog = `psd:ok(${rasters.width}x${rasters.height})`;
+        } else {
           thumbBlob = await docThumbs.renderShellIconThumbnail(file);
-          stepLog += `,shell:${thumbBlob ? "ok" : "fail"}`;
+          stepLog = `psd:fail,shell:${thumbBlob ? "ok" : "fail"}`;
         }
       } else if (subtype === "font") {
         thumbBlob = await docThumbs.renderFontPreviewThumbnail(file);
@@ -2229,14 +2242,27 @@ export async function uploadReferenceFile(file: File, options: UploadReferenceOp
       title: baseTitle,
       file_url: fileUrl,
       thumbnail_url: thumbnailUrl,
-      mime_type: file.type || "application/octet-stream",
+      /* PSD 는 file.type 이 비어 octet-stream 으로 떨어지는 환경이 많아, 저장
+         후 종류/서브타입 판정이 빗나간다. 업로드 시점 파일명(.psd) 으로
+         확정해 표준 mime 을 박아두면 그리드 배지·인스펙터 종류·색 분기가
+         모두 일관되게 PSD 로 표시된다. */
+      mime_type: detectDocSubtype(file.type, file.name) === "psd"
+        ? "image/vnd.adobe.photoshop"
+        : (file.type || "application/octet-stream"),
       file_size: file.size,
       content_hash: hash,
+      /* PSD 는 합성 native 해상도를 기록해 인스펙터가 썸네일 크기가 아닌
+         실제 크기를 표시하게 한다(그 외 doc 은 미정). */
+      width: psdWidth,
+      height: psdHeight,
       tags: options.tags,
       notes: options.notes,
       source_url: options.sourceUrl,
       origin_project_id: options.originProjectId,
       is_favorite: options.isFavorite,
+      /* PSD 풀해상도 프리뷰 URL — 프리뷰 패널의 이미지 줌·팬 분기가 사용.
+         자유 JSON 이라 DB 마이그레이션 없이 durable 저장된다. */
+      ai_suggestions: psdPreviewUrl ? { psdPreview: psdPreviewUrl } : null,
       /* AI 분류는 doc 자료에 의미가 없는 데다 image-only 파이프라인이라
          실행되어도 즉시 실패. 처음부터 "skipped" 로 기록해 인스펙터의 AI
          탭 stepper 가 idle 빈 상태로 유지되도록 한다(failed 빨간 상태가
@@ -2246,14 +2272,38 @@ export async function uploadReferenceFile(file: File, options: UploadReferenceOp
   }
 
   if (kind === "video") {
-    const { meta, poster } = await extractFirstFrame(file);
-    const metaValidation = validateVideoMeta(meta);
-    if (metaValidation.ok !== true) throw new Error(metaValidation.reason);
+    /* 포스터 추출 사다리:
+       1) 렌더러 <video> 디코드(extractFirstFrame) — H.264 mp4/mov 등 빠른 경로
+       2) 실패 시 메인 ffmpeg(extractVideoPosterFile) — ProRes/HEVC MOV 등
+          브라우저가 못 푸는 코덱도 첫 프레임을 PNG 로 추출(Eagle 동등)
+       3) 둘 다 실패하면 썸네일 없이 업로드(thumbnail_url=null) — 그리드는
+          video 플레이스홀더로 폴백. 업로드 자체는 절대 막지 않는다. */
+    let meta: VideoMeta | null = null;
+    let posterBlob: Blob | null = null;
+    try {
+      const r = await extractFirstFrame(file);
+      meta = r.meta;
+      posterBlob = await (await fetch(`data:${r.poster.mediaType};base64,${r.poster.base64}`)).blob();
+    } catch (rendererErr) {
+      console.warn("[library] renderer poster failed, trying ffmpeg", rendererErr);
+      const ff = await extractVideoPosterFile(file);
+      if (ff) {
+        meta = ff.meta;
+        posterBlob = ff.blob;
+      }
+    }
+    // 길이를 알 수 있으면(둘 중 하나라도 성공) 10분 한도를 강제. 메타를 전혀
+    // 못 얻은 경우(둘 다 실패) 길이 검증은 생략하고 업로드는 계속한다.
+    if (meta && meta.durationSec > 0) {
+      const metaValidation = validateVideoMeta(meta);
+      if (metaValidation.ok !== true) throw new Error(metaValidation.reason);
+    }
     const hash = await sha256(file);
     const originalPath = storagePath(id, file.name || `reference${fileExtension(file)}`);
     const fileUrl = await uploadToReferences(originalPath, file);
-    const posterBlob = await (await fetch(`data:${poster.mediaType};base64,${poster.base64}`)).blob();
-    const thumbnailUrl = await uploadToReferences(storagePath(id, "poster.png"), posterBlob);
+    const thumbnailUrl = posterBlob
+      ? await uploadToReferences(storagePath(id, "poster.png"), posterBlob)
+      : null;
     return createReference({
       id,
       kind,
@@ -2263,9 +2313,9 @@ export async function uploadReferenceFile(file: File, options: UploadReferenceOp
       mime_type: file.type || "video/*",
       file_size: file.size,
       content_hash: hash,
-      duration_sec: meta.durationSec,
-      width: meta.widthPx,
-      height: meta.heightPx,
+      duration_sec: meta?.durationSec,
+      width: meta?.widthPx,
+      height: meta?.heightPx,
       tags: options.tags,
       notes: options.notes,
       source_url: options.sourceUrl,

@@ -80,6 +80,16 @@ declare global {
       onTranscodeProgress?: (cb: (p: { id: string; ratio: number }) => void) => () => void;
       /** 진행 중인 트랜스코딩 취소. */
       cancelTranscode?: (id: string) => void;
+      /** 브라우저 <video> 가 못 푸는 코덱(ProRes/HEVC MOV 등) 의 첫 프레임을
+       *  ffmpeg 로 PNG 로 추출한다. 입력은 원본 디스크 경로(getPathForFile).
+       *  성공 시 references 버킷 scratch 상대경로 + 길이/해상도 반환. */
+      extractVideoPoster?: (args: {
+        id: string;
+        inputPath: string;
+      }) => Promise<
+        | { ok: true; scratchRelPath: string; durationSec: number; width: number; height: number }
+        | { ok: false; reason: string }
+      >;
     };
   }
 }

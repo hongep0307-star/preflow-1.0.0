@@ -122,6 +122,11 @@ interface LibraryPreviewPanelProps {
    *  PdfViewer 가 1회 이동할 페이지(1-based). GIF 의 initialFrameIndex 와 동일 패턴. */
   initialPageIndex?: number | null;
   onInitialPageConsumed?: () => void;
+  /** 정지 이미지/PSD 용 — Inspector 영역 노트 클릭으로 큰 프리뷰가 열린 직후
+   *  잠깐 하이라이트할 region 노트 id. RegionOverlay 가 해당 박스를 강조하고,
+   *  일정 시간 뒤 onHighlightRegionConsumed 로 클리어한다. */
+  highlightRegionNoteId?: string | null;
+  onHighlightRegionConsumed?: () => void;
   /** "Save loop as GIF" 다이얼로그가 변환을 끝낸 직후, GIF Blob 을 새
    *  ReferenceItem 으로 등록할 때 LibraryPage 가 처리할 콜백. Blob 을
    *  File 로 감싸 uploadReferenceFile 호출하고 upsert + toast 까지 부모가
@@ -138,6 +143,9 @@ interface LibraryPreviewPanelProps {
    *  실제 픽셀 크롭 + 저장 + toast 는 부모(LibraryPage)가 담당한다. 미전달이면
    *  크롭 버튼을 노출하지 않는다. */
   onCropImage?: (rect: RegionRect, mode: "new" | "overwrite") => void | Promise<void>;
+  /** 인앱 <video> 가 디코드 실패(MOV ProRes/HEVC 등)했을 때 OS 기본 플레이어로
+   *  여는 콜백. 미전달이면 자동 열기 없이 안내만 표시. */
+  onOpenInDefaultApp?: (item: ReferenceItem) => void;
 }
 
 export function LibraryPreviewPanel({
@@ -164,10 +172,13 @@ export function LibraryPreviewPanel({
   onInitialSeekConsumed,
   initialFrameIndex,
   onInitialFrameConsumed,
+  highlightRegionNoteId,
+  onHighlightRegionConsumed,
   initialPageIndex,
   onInitialPageConsumed,
   onSaveLoopAsGif,
   onCropImage,
+  onOpenInDefaultApp,
 }: LibraryPreviewPanelProps) {
   const { t } = useUiLanguage();
   const currentIndex = items.findIndex((candidate) => candidate.id === item.id);
@@ -178,7 +189,17 @@ export function LibraryPreviewPanel({
      에서 업스케일된 흐릿한 이미지가 보이고, 줌 클릭 시 자연 크기(=썸네일
      원본 크기) 로 돌아가 오히려 더 작아지는 현상이 났다. file_url 이
      없을 때만 thumbnail_url 로 폴백한다. */
-  const imagePreviewUrl = item.file_url || item.thumbnail_url || "";
+  /* PSD/PSB 풀해상도 프리뷰 — 업로드 시 ai_suggestions.psdPreview 로 저장된
+     원본 크기 WebP. 있으면 일반 이미지처럼 줌·팬 분기를 그대로 태운다.
+     (file_url 은 .psd 라 <img> 로 못 그리므로 절대 쓰지 않는다)
+     subtype 재판정에 기대지 않는다 — 저장된 PSD 는 mime 이 octet-stream 이고
+     title 에 확장자가 없어 docSubtypeOf 가 "psd" 를 못 잡는다. psdPreview 의
+     *존재* 자체가 "풀해상도 프리뷰 가능한 doc" 의 충분한 신호. */
+  const psdPreviewUrl =
+    item.kind === "doc"
+      ? ((item.ai_suggestions?.psdPreview as string | undefined) ?? null)
+      : null;
+  const imagePreviewUrl = psdPreviewUrl || item.file_url || item.thumbnail_url || "";
 
   /* GIF / 애니메이션 WebP / APNG — 별도 GifFramePlayer 분기로 처리. file_url
      이 없으면(레거시 link-only 자료) 일반 이미지 분기로 폴백. ImageDecoder
@@ -299,9 +320,14 @@ export function LibraryPreviewPanel({
     setCropMode(false);
     setCropRect({ x: 0, y: 0, w: 1, h: 1 });
     setCropPending(false);
+    setVideoUnplayable(false);
   }, [item.id]);
 
   const isVideo = item.kind === "video" && Boolean(item.file_url);
+  /* 인앱 <video> 가 코덱을 못 풀어 onError 가 뜬 경우(주로 ProRes/HEVC MOV).
+     패널에 안내 오버레이 + "기본 플레이어로 열기" 버튼을 띄우되, 자동
+     실행은 하지 않는다(사용자가 버튼을 직접 눌러야 OS 기본 플레이어 실행). */
+  const [videoUnplayable, setVideoUnplayable] = useState(false);
 
   /* video element 의 상태를 React 로 동기화. item 이 바뀌면 cleanup 후
      새 video 에 다시 등록(ref 가 같은 element 라도 src 변경으로 reset 됨). */
@@ -578,7 +604,9 @@ export function LibraryPreviewPanel({
   const isStillImageBranch = !isVideo
     && item.kind !== "youtube"
     && item.kind !== "link"
-    && item.kind !== "doc"
+    /* doc 은 자체 뷰어(PDF/audio/html) 또는 썸네일 카드라 줌·팬을 끄지만,
+       PSD 풀해상도 프리뷰는 일반 이미지와 동일하게 줌·팬을 허용한다. */
+    && (item.kind !== "doc" || Boolean(psdPreviewUrl))
     && Boolean(imagePreviewUrl)
     && !(isAnimatedGif && gifPlayerSupported);
 
@@ -599,6 +627,19 @@ export function LibraryPreviewPanel({
   useEffect(() => {
     resetImagePanZoom();
   }, [item.id, resetImagePanZoom]);
+
+  /* 인스펙터 영역 노트 클릭으로 진입한 경우 — 줌·팬을 fit 으로 되돌려(전체
+     이미지+영역 박스가 보이도록) 하이라이트 대상이 화면에 들어오게 하고,
+     잠시 후 부모에 소비를 알려 강조를 끈다. onHighlightRegionConsumed 의
+     identity 변화로 타이머가 리셋되지 않도록 ref 로 최신값을 참조한다. */
+  const highlightConsumedRef = useRef(onHighlightRegionConsumed);
+  highlightConsumedRef.current = onHighlightRegionConsumed;
+  useEffect(() => {
+    if (!highlightRegionNoteId) return;
+    resetImagePanZoom();
+    const timer = window.setTimeout(() => highlightConsumedRef.current?.(), 2600);
+    return () => window.clearTimeout(timer);
+  }, [highlightRegionNoteId, resetImagePanZoom]);
   const visibleRegionNotes = useMemo(() => {
     if (isVideo) {
       /* 재생 중에는 region 박스를 숨겨 영상 시청을 방해하지 않게 한다.
@@ -1019,8 +1060,16 @@ export function LibraryPreviewPanel({
                 "absolute inset-0 h-full w-full object-contain",
                 regionMode ? "cursor-default" : "cursor-pointer",
               )}
+              onError={() => {
+                /* 코덱 미지원(ProRes/HEVC MOV 등) — 인앱 재생 불가. 자동으로
+                   기본 플레이어를 열지 않고, 패널에 안내 오버레이 + "기본
+                   플레이어로 열기" 버튼만 노출한다(사용자 명시 클릭 필요). */
+                setVideoUnplayable(true);
+              }}
               onLoadedMetadata={(event) => {
                 event.currentTarget.playbackRate = Number(playbackRate);
+                /* 정상 디코드되면 미재생 상태 해제(다른 자료에서 돌아온 경우 등). */
+                setVideoUnplayable(false);
                 if (typeof initialSeekSec === "number" && Number.isFinite(initialSeekSec)) {
                   event.currentTarget.currentTime = initialSeekSec;
                   onInitialSeekConsumed?.();
@@ -1053,6 +1102,26 @@ export function LibraryPreviewPanel({
               onDeleteRegion={onDeleteTimestampNote}
               onEditRegion={onEditTimestampNote}
             />
+            {videoUnplayable ? (
+              /* 인앱 디코드 실패 — 포스터 위에 안내 + 기본 플레이어 열기 버튼.
+                 자동 위임은 하지 않으며, 사용자가 버튼을 직접 눌러야 OS 기본
+                 플레이어가 실행된다. */
+              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/70 p-6 text-center">
+                <Film className="h-10 w-10 text-white/70" aria-hidden />
+                <p className="max-w-xs text-caption text-white/90">
+                  {t("library.preview.videoUnplayable")}
+                </p>
+                {onOpenInDefaultApp ? (
+                  <Button
+                    className="h-8 px-3 text-meta"
+                    style={{ borderRadius: 0 }}
+                    onClick={() => onOpenInDefaultApp(item)}
+                  >
+                    {t("library.preview.openInDefaultPlayer")}
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
             </>
           ) : item.kind === "youtube" && youtubeEmbedUrl(item.source_url) ? (
             <iframe
@@ -1077,8 +1146,10 @@ export function LibraryPreviewPanel({
                webview 필수. 메인의 web-contents-created 가드가 권한/팝업/외부
                네비게이션을 OS 브라우저로 위임한다. */
             <LinkWebView item={item} />
-          ) : item.kind === "doc" ? (
+          ) : item.kind === "doc" && !psdPreviewUrl ? (
             /* doc 카테고리 큰 프리뷰 — sub-type 별 분기.
+               PSD 는 풀해상도 프리뷰가 있으면 이 분기를 건너뛰고 아래
+               imagePreviewUrl(이미지 줌·팬) 분기로 떨어진다.
                - pdf:   PDF.js 캔버스 뷰어 (페이지 네비/줌)
                - audio: native <audio controls>
                - html:  webview 게스트로 file_url 임베드
@@ -1209,6 +1280,7 @@ export function LibraryPreviewPanel({
                 onAfterCreate={handleAfterRegion}
                 onDeleteRegion={onDeleteTimestampNote}
                 onEditRegion={onEditTimestampNote}
+                highlightNoteId={highlightRegionNoteId}
                 panX={imagePanZoom.tx}
                 panY={imagePanZoom.ty}
                 scale={imagePanZoom.scale}
@@ -1816,18 +1888,22 @@ export function LibraryPreviewPanel({
                 <div className="mt-0.5 text-caption text-muted-foreground">{t("library.preview.cropSaveNewDesc")}</div>
               </div>
             </button>
-            <button
-              type="button"
-              onClick={() => void handleCropChoose("overwrite")}
-              className="flex w-full items-start gap-3 border border-border-subtle p-3 text-left transition-colors hover:border-primary/40 hover:bg-primary/5"
-              style={{ borderRadius: 0 }}
-            >
-              <Crop className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" strokeWidth={1.75} />
-              <div>
-                <div className="text-meta font-semibold text-foreground">{t("library.preview.cropOverwrite")}</div>
-                <div className="mt-0.5 text-caption text-muted-foreground">{t("library.preview.cropOverwriteDesc")}</div>
-              </div>
-            </button>
+            {/* PSD 는 원본(.psd)을 크롭 PNG 로 덮어쓸 수 없으므로 새 이름 저장만
+                허용한다(덮어쓰기 옵션 숨김). */}
+            {!psdPreviewUrl && (
+              <button
+                type="button"
+                onClick={() => void handleCropChoose("overwrite")}
+                className="flex w-full items-start gap-3 border border-border-subtle p-3 text-left transition-colors hover:border-primary/40 hover:bg-primary/5"
+                style={{ borderRadius: 0 }}
+              >
+                <Crop className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" strokeWidth={1.75} />
+                <div>
+                  <div className="text-meta font-semibold text-foreground">{t("library.preview.cropOverwrite")}</div>
+                  <div className="mt-0.5 text-caption text-muted-foreground">{t("library.preview.cropOverwriteDesc")}</div>
+                </div>
+              </button>
+            )}
           </div>
           <DialogFooter>
             <DialogClose asChild>

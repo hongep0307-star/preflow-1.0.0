@@ -529,6 +529,83 @@ ipcMain.on("preflow-video:transcode-cancel", (_event, id: string) => {
   }
 });
 
+// ── 영상 포스터(첫 프레임) 추출(ffmpeg) IPC ─────────────────────────────
+// 브라우저 <video> 가 디코드하지 못하는 코덱(ProRes/HEVC MOV 등) 의 첫 프레임을
+// ffmpeg 로 PNG 1장으로 뽑아 references 버킷의 scratch 에 쓴다. 렌더러는
+// /storage/file/ 로 다시 fetch 해 thumbnail 로 업로드한다. stderr 에서 길이/
+// 해상도도 함께 파싱해 돌려줘 렌더러가 VideoMeta 를 채울 수 있게 한다.
+ipcMain.handle(
+  "preflow-video:extract-poster",
+  async (
+    _event,
+    args: { id: string; inputPath: string },
+  ): Promise<
+    | { ok: true; scratchRelPath: string; durationSec: number; width: number; height: number }
+    | { ok: false; reason: string }
+  > => {
+    const { id, inputPath } = args;
+    try {
+      if (!inputPath || !fs.existsSync(inputPath)) {
+        return { ok: false, reason: "원본 파일 경로를 찾을 수 없습니다." };
+      }
+      const outDir = path.join(getStorageBasePath(), "references", ".scratch");
+      await fs.promises.mkdir(outDir, { recursive: true });
+      const outPath = path.join(outDir, `${id}.poster.png`);
+      const scratchRelPath = `.scratch/${id}.poster.png`;
+
+      const ffmpegBin = resolveFfmpegPath();
+      const ffmpegArgs = [
+        "-y",
+        // 0.1s 지점의 첫 프레임 — 완전 검은 첫 프레임을 피한다.
+        "-ss", "0.1",
+        "-i", inputPath,
+        "-frames:v", "1",
+        // 긴 변 1024로 다운스케일(짝수 유지). 일반 이미지 썸네일과 비슷한 무게.
+        "-vf", "scale='min(1024,iw)':-2",
+        outPath,
+      ];
+
+      const stderr = await new Promise<string>((resolve, reject) => {
+        let buf = "";
+        let child: ReturnType<typeof spawn>;
+        try {
+          child = spawn(ffmpegBin, ffmpegArgs);
+        } catch (e) {
+          reject(e);
+          return;
+        }
+        child.stderr?.on("data", (b: Buffer) => {
+          buf += b.toString();
+        });
+        child.on("error", reject);
+        child.on("close", () => resolve(buf));
+      });
+
+      if (!fs.existsSync(outPath)) {
+        return { ok: false, reason: "포스터 프레임 추출에 실패했습니다." };
+      }
+      const stat = await fs.promises.stat(outPath);
+      if (stat.size === 0) {
+        await fs.promises.rm(outPath, { force: true }).catch(() => undefined);
+        return { ok: false, reason: "포스터 프레임이 비어 있습니다." };
+      }
+
+      const durMatch = stderr.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
+      const durationSec = durMatch
+        ? Number(durMatch[1]) * 3600 + Number(durMatch[2]) * 60 + parseFloat(durMatch[3])
+        : 0;
+      // 스트림 해상도 — "1920x1080" 의 첫 매치(보통 비디오 스트림).
+      const dimMatch = stderr.match(/,\s*(\d{2,5})x(\d{2,5})/);
+      const width = dimMatch ? Number(dimMatch[1]) : 0;
+      const height = dimMatch ? Number(dimMatch[2]) : 0;
+
+      return { ok: true, scratchRelPath, durationSec, width, height };
+    } catch (err) {
+      return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+    }
+  },
+);
+
 /** 진행 중인 모든 ffmpeg 변환을 종료한다. 워크스페이스 전환(렌더러 reload) 시
  *  렌더러 측 변환 루프는 사라지지만 메인의 ffmpeg 자식은 살아남아 고아가 되므로,
  *  내비게이션 시점에 호출해 정리한다. */

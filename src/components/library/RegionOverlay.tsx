@@ -137,6 +137,10 @@ export interface RegionOverlayProps {
   /** 사용자가 드래그를 시작하는 순간 부모에게 알림 — 영상/GIF 일시정지 같은
    *  안전한 부수 효과를 위함. (image 자료는 사용처가 무시.) */
   onDrawStart?: () => void;
+  /** 잠깐 강조할 region 노트 id. 인스펙터 영역 노트 클릭으로 큰 프리뷰가
+   *  열렸을 때, 어떤 영역인지 한눈에 보이도록 해당 박스를 amber 링 + pulse 로
+   *  강조한다. 부모가 일정 시간 뒤 null 로 되돌린다. */
+  highlightNoteId?: string | null;
 }
 
 export function RegionOverlay({
@@ -150,6 +154,7 @@ export function RegionOverlay({
   onDeleteRegion,
   onEditRegion,
   onDrawStart,
+  highlightNoteId,
   panX = 0,
   panY = 0,
   scale = 1,
@@ -366,6 +371,12 @@ export function RegionOverlay({
      아니면 자식 region 박스만 인터랙티브. */
   const overlayInteractive = drawing || pendingRegion !== null || editingId !== null;
 
+  /* 편집 중인 노트 — popover 를 오버레이 루트에서 박스와 같은 좌표계로
+     렌더하기 위해 여기서 한 번만 찾는다. */
+  const editingNote = editingId
+    ? visibleNotes.find((note) => note.id === editingId) ?? null
+    : null;
+
   /* 미리보기 박스(드래그 중) px 좌표. */
   const pendingPx = pendingDraw
     ? {
@@ -396,6 +407,7 @@ export function RegionOverlay({
         if (!note.region) return null;
         const px = regionToPixels(note.region);
         const isEditing = editingId === note.id;
+        const isHighlighted = Boolean(highlightNoteId) && note.id === highlightNoteId;
         const canEdit = Boolean(onEditRegion || onDeleteRegion);
         return (
           <div
@@ -403,10 +415,16 @@ export function RegionOverlay({
             className={cn(
               "absolute transition-colors",
               /* 편집 중인 박스는 라인을 *가늘고 점선* 으로 약화시켜 popover 가
-                 시각 주체가 되도록 한다. 평소엔 두꺼운 실선 + hover 강조. */
+                 시각 주체가 되도록 한다. 평소엔 두꺼운 실선 + hover 강조.
+                 인스펙터에서 클릭해 진입한 하이라이트 박스는 amber 링 + pulse
+                 로 잠깐 강조해 어떤 영역인지 즉시 보이게 한다. */
               isEditing
                 ? "border border-dashed border-primary/60 bg-primary/15"
-                : "border-2 border-primary/70 bg-primary/10 hover:border-primary hover:bg-primary/20",
+                : isHighlighted
+                  /* 두께는 평소와 동일(border-2) — 라인만 amber 로. ring 을 더하면
+                     라벨 채우기 영역보다 밖으로 비져나와 어긋나 보여서 제거. */
+                  ? "border-2 border-amber-400 bg-amber-400/20 animate-pulse"
+                  : "border-2 border-primary/70 bg-primary/10 hover:border-primary hover:bg-primary/20",
             )}
             style={{
               left: px.left,
@@ -440,7 +458,12 @@ export function RegionOverlay({
             {!isEditing ? (
               <div
                 className={cn(
-                  "pointer-events-none absolute left-0 top-0 leading-snug bg-primary px-1.5 py-0.5 text-2xs text-primary-foreground shadow-sm",
+                  "pointer-events-none absolute left-0 top-0 leading-snug px-1.5 py-0.5 text-2xs shadow-sm",
+                  /* 하이라이트 시엔 박스 라인(amber)과 라벨 색을 함께 바꿔 일관성
+                     유지 — 라인만 노랑이고 라벨은 primary 라 어긋나 보이던 문제. */
+                  isHighlighted
+                    ? "bg-amber-400 text-amber-950"
+                    : "bg-primary text-primary-foreground",
                   /* 기본은 박스 *바로 위*. 단 박스가 컨테이너 상단에 가까우면
                      위로 뻗은 라벨이 스크롤 영역 밖으로 잘리므로, 그 경우
                      translate 를 빼서 박스 *안쪽 상단* 에 붙여 항상 보이게 한다.
@@ -475,21 +498,25 @@ export function RegionOverlay({
                 {note.text}
               </div>
             ) : null}
-
-            {isEditing ? (
-              <RegionEditPopover
-                anchorPx={px}
-                containerSize={containerSize}
-                text={editingText}
-                onTextChange={setEditingText}
-                onSave={handleSaveEdit}
-                onCancel={handleCancelEdit}
-                onDelete={onDeleteRegion ? handleDeleteEditing : undefined}
-              />
-            ) : null}
           </div>
         );
       })}
+
+      {/* 기존 region 편집 popover — 박스 *div 바깥*(오버레이 루트)에 렌더한다.
+          placePopover 는 컨테이너 좌표를 돌려주는데, 박스 div 안에 두면 그
+          좌표가 박스 기준으로 재해석돼 (px 만큼 이중 오프셋) 박스에서 멀리
+          떨어져 보였다. create popover 와 동일하게 루트에 두어 좌표계를 맞춘다. */}
+      {editingNote?.region ? (
+        <RegionEditPopover
+          anchorPx={regionToPixels(editingNote.region)}
+          containerSize={containerSize}
+          text={editingText}
+          onTextChange={setEditingText}
+          onSave={handleSaveEdit}
+          onCancel={handleCancelEdit}
+          onDelete={onDeleteRegion ? handleDeleteEditing : undefined}
+        />
+      ) : null}
 
       {/* 드래그 중 임시 박스 — pointer-events 없음, 이벤트는 글로벌 listener
           가 처리. 사이트 primary 톤(빨강) + dashed 로 "아직 확정 안 된" 상태를

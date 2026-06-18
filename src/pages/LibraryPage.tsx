@@ -255,7 +255,7 @@ import {
 } from "@/lib/referenceLibrary";
 import { docSubtypeOf } from "@/lib/docPresentation";
 import { DEFAULT_IMAGE_SEARCH_ENGINE, type ImageSearchEngineId } from "@/lib/imageSearchEngines";
-import { CONVERT_CANCELLED_FLAG, REFERENCE_UPLOAD_MAX_BYTES, VIDEO_CONVERT_TARGET_BYTES } from "@shared/constants";
+import { CONVERT_CANCELLED_FLAG, REFERENCE_UPLOAD_MAX_BYTES, VIDEO_CONVERT_TARGET_BYTES, VIDEO_CONVERT_THRESHOLD_BYTES } from "@shared/constants";
 import { MAX_DURATION_SEC } from "@/lib/videoFrames";
 import { probeVideoMeta, transcodeVideoFile, TranscodeCancelledError } from "@/lib/videoTranscode";
 import { VideoConvertDialog } from "@/components/library/VideoConvertDialog";
@@ -1268,6 +1268,9 @@ const LibraryPage = () => {
      이동할 페이지(1-based). GIF 의 pendingFrameIndex 와 같은 큐잉 패턴 —
      소비되면 onInitialPageConsumed() 로 null 로 클리어. */
   const [pendingPageIndex, setPendingPageIndex] = useState<number | null>(null);
+  /* 정지 이미지/PSD 의 인스펙터 영역 노트 클릭 → 큰 프리뷰 → RegionOverlay 가
+     해당 영역을 잠깐 하이라이트할 노트 id. 소비(타임아웃)되면 null 로 클리어. */
+  const [pendingRegionNoteId, setPendingRegionNoteId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [editTags, setEditTags] = useState("");
@@ -2112,6 +2115,54 @@ const LibraryPage = () => {
     return out;
   }, [toast, t]);
 
+  /* 변환 없이 원본 그대로 업로드하는 공통 루프 — 진행 토스트 + 성공/실패
+     집계. handleFiles 의 즉시 업로드 경로와 "원본 업로드" 선택 경로가 함께
+     쓴다. uploadReferenceFile 이 영상은 자체적으로 포스터(렌더러 또는 ffmpeg)
+     를 만들어 thumbnail_url 을 채운다. */
+  const uploadFilesDirect = useCallback(async (files: File[]) => {
+    if (files.length === 0) return;
+    let successCount = 0;
+    const failures: Array<{ name: string; message: string }> = [];
+    const total = files.length;
+    const loadingToast = toast({
+      title: t("library.toast.importProgress", { done: 0, total }),
+      duration: 600_000,
+    });
+    let processed = 0;
+    for (const file of files) {
+      try {
+        const item = await uploadReferenceFile(file, uploadOptions);
+        upsertUploadedItem(item);
+        maybeAutoClassifyImport(item);
+        successCount += 1;
+      } catch (err) {
+        failures.push({ name: file.name, message: err instanceof Error ? err.message : String(err) });
+      }
+      processed += 1;
+      loadingToast.update({ title: t("library.toast.importProgress", { done: processed, total }) });
+    }
+    loadingToast.dismiss();
+    if (successCount > 0) {
+      toast({
+        title: uploadFolderLabel ? t("library.toast.savedTo", { folder: uploadFolderLabel }) : t("library.toast.referenceSaved"),
+        description: t("library.toast.nItemsAdded", { n: successCount, s: successCount > 1 ? "s" : "" }),
+      });
+    }
+    for (const fail of failures.slice(0, 3)) {
+      toast({ variant: "destructive", title: t("library.toast.failedName", { name: fail.name }), description: fail.message });
+    }
+    if (failures.length > 3) {
+      toast({
+        variant: "destructive",
+        title: t("library.toast.moreFailures", { n: failures.length - 3 }),
+        description: t("library.toast.seeConsole"),
+      });
+      for (const fail of failures.slice(3)) {
+        console.warn("[library] upload failed", fail.name, fail.message);
+      }
+    }
+  }, [maybeAutoClassifyImport, toast, uploadFolderLabel, uploadOptions, upsertUploadedItem, t]);
+
   const handleFiles = useCallback(async (fileList: FileList | File[]) => {
     const all = Array.from(fileList);
     if (all.length === 0) return;
@@ -2136,10 +2187,15 @@ const LibraryPage = () => {
 
     if (mediaFiles.length === 0) return;
 
-    // 사전 분류 — 300MB 초과 영상은 변환 후보, 그 외는 즉시 업로드.
+    // 사전 분류:
+    //   - 비영상 또는 ≤300MB 영상       → directFiles (즉시 업로드)
+    //   - 300MB 초과 영상, 길이 ≤ 10분   → convertCands (변환/원본 선택 다이얼로그)
+    //   - 길이 > 10분                    → tooLong (변환·원본 모두 불가, 거부)
+    //  (1GB 초과 원본은 저장 불가지만 변환은 가능 — 다이얼로그에서 "원본 업로드"
+    //   버튼이 비활성/변환 경로로 처리한다.)
     const isOversizeVideo = (f: File) =>
       (f.type.startsWith("video/") || /\.(mp4|mov|webm)$/i.test(f.name)) &&
-      f.size > REFERENCE_UPLOAD_MAX_BYTES;
+      f.size > VIDEO_CONVERT_THRESHOLD_BYTES;
 
     const directFiles: File[] = [];
     const convertCands: File[] = [];
@@ -2174,54 +2230,13 @@ const LibraryPage = () => {
     }
 
     // 바로 업로드 가능한 파일(≤300MB 또는 비영상) — 진행 토스트와 함께.
-    if (directFiles.length > 0) {
-      let successCount = 0;
-      const failures: Array<{ name: string; message: string }> = [];
-      const total = directFiles.length;
-      const loadingToast = toast({
-        title: t("library.toast.importProgress", { done: 0, total }),
-        duration: 600_000,
-      });
-      let processed = 0;
-      for (const file of directFiles) {
-        try {
-          const item = await uploadReferenceFile(file, uploadOptions);
-          upsertUploadedItem(item);
-          maybeAutoClassifyImport(item);
-          successCount += 1;
-        } catch (err) {
-          failures.push({ name: file.name, message: err instanceof Error ? err.message : String(err) });
-        }
-        processed += 1;
-        loadingToast.update({ title: t("library.toast.importProgress", { done: processed, total }) });
-      }
-      loadingToast.dismiss();
-      if (successCount > 0) {
-        toast({
-          title: uploadFolderLabel ? t("library.toast.savedTo", { folder: uploadFolderLabel }) : t("library.toast.referenceSaved"),
-          description: t("library.toast.nItemsAdded", { n: successCount, s: successCount > 1 ? "s" : "" }),
-        });
-      }
-      for (const fail of failures.slice(0, 3)) {
-        toast({ variant: "destructive", title: t("library.toast.failedName", { name: fail.name }), description: fail.message });
-      }
-      if (failures.length > 3) {
-        toast({
-          variant: "destructive",
-          title: t("library.toast.moreFailures", { n: failures.length - 3 }),
-          description: t("library.toast.seeConsole"),
-        });
-        for (const fail of failures.slice(3)) {
-          console.warn("[library] upload failed", fail.name, fail.message);
-        }
-      }
-    }
+    await uploadFilesDirect(directFiles);
 
     // 300MB 초과 영상 — 다중 드랍이어도 한 번만 확인 다이얼로그를 띄운다.
     if (convertCands.length > 0) {
       setConvertCandidates(convertCands);
     }
-  }, [handlePackFile, maybeAutoClassifyImport, toast, uploadFolderLabel, uploadOptions, upsertUploadedItem, t]);
+  }, [handlePackFile, toast, uploadFilesDirect, t]);
 
   /* 확인 다이얼로그에서 "변환 후 업로드" 를 누르면 호출 — 후보를 순차 변환해
      업로드한다. ffmpeg 부하 때문에 병렬이 아닌 1개씩. 진행 표시는 *비차단
@@ -5661,15 +5676,18 @@ const LibraryPage = () => {
       pageIndexOverride?: number,
     ) => {
       if (!selected) return;
-      /* PDF doc 자료는 슬라이드 노트(pageIndex + region) 를 지원. 그 외 doc
-         (audio/html/문서 등) 은 노트 개념이 없어 제외. */
+      /* PDF doc 는 슬라이드 노트(pageIndex + region), PSD doc 는 이미지처럼
+         영역 노트(region only) 를 지원. 그 외 doc(audio/html/문서 등) 은 노트
+         개념이 없어 제외. */
       const isPdfDoc = selected.kind === "doc" && docSubtypeOf(selected) === "pdf";
+      const isPsdDoc = selected.kind === "doc" && Boolean(selected.ai_suggestions?.psdPreview);
       if (
         selected.kind !== "video"
         && selected.kind !== "gif"
         && selected.kind !== "image"
         && selected.kind !== "webp"
         && !isPdfDoc
+        && !isPsdDoc
       ) return;
       const rawText = textOverride !== undefined ? textOverride : timestampText;
       const text = rawText.trim();
@@ -5877,7 +5895,15 @@ const LibraryPage = () => {
   const handleCropImage = useCallback(
     async (rect: RegionRect, mode: "new" | "overwrite") => {
       if (!selected) return;
-      const src = selected.file_url || selected.thumbnail_url;
+      /* PSD 는 file_url 이 .psd(브라우저 디코드 불가)라 풀해상도 프리뷰
+         WebP(ai_suggestions.psdPreview)를 크롭 소스로 쓴다. 또한 원본을
+         크롭 PNG 로 덮어쓸 수 없으므로 항상 새 이름으로만 저장한다. */
+      const psdPreview =
+        selected.kind === "doc"
+          ? ((selected.ai_suggestions?.psdPreview as string | undefined) ?? null)
+          : null;
+      const effectiveMode: "new" | "overwrite" = psdPreview ? "new" : mode;
+      const src = psdPreview || selected.file_url || selected.thumbnail_url;
       if (!src) return;
       setSaving(true);
       try {
@@ -5896,7 +5922,7 @@ const LibraryPage = () => {
         ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
         const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
         if (!blob) throw new Error("Failed to encode cropped image.");
-        const saved = mode === "overwrite"
+        const saved = effectiveMode === "overwrite"
           ? await overwriteReferenceImage(selected, blob, sw, sh)
           : await saveCroppedImageAsNewReference(selected, blob, sw, sh);
         upsertUploadedItem(saved);
@@ -6195,7 +6221,14 @@ const LibraryPage = () => {
      GifFramePlayer 가 디코드 완료 시점에 그 프레임으로 1회 점프한다. 큰
      프리뷰가 이미 열려 있어도 GifFramePlayer 의 initialFrameIndex 갱신을
      통해 같은 경로로 점프(별도의 imperative ref 가 없어 큐잉 방식이 더 단순). */
-  const handleJumpToTimestamp = useCallback((atSec?: number, frameIndex?: number, pageIndex?: number) => {
+  const handleJumpToTimestamp = useCallback((atSec?: number, frameIndex?: number, pageIndex?: number, regionNoteId?: string) => {
+    // 정지 이미지/PSD 영역 노트 — 시점/프레임/페이지 anchor 가 없다. 큰 프리뷰를
+    // 켜고(이미 region 박스는 항상 표시) 해당 노트를 잠깐 하이라이트한다.
+    if (regionNoteId) {
+      setPendingRegionNoteId(regionNoteId);
+      if (!previewMode) setPreviewMode(true);
+      return;
+    }
     // PDF 슬라이드 노트 — pageIndex 우선. 큰 프리뷰가 닫혀 있으면 켜고,
     // pendingPageIndex 를 세팅해 PdfViewer 의 initialPageIndex 가 갱신되어
     // 해당 페이지로 1회 이동한다(consumed 시 즉시 null 로 되돌림).
@@ -7774,6 +7807,9 @@ const LibraryPage = () => {
                 onInitialFrameConsumed={() => setPendingFrameIndex(null)}
                 initialPageIndex={pendingPageIndex}
                 onInitialPageConsumed={() => setPendingPageIndex(null)}
+                highlightRegionNoteId={pendingRegionNoteId}
+                onHighlightRegionConsumed={() => setPendingRegionNoteId(null)}
+                onOpenInDefaultApp={handleOpenDefault}
               />
             ) : viewMode === "canvas" && activeTag?.startsWith("folder:") ? (
               /* Canvas 뷰 — 같은 filteredItems 를 받지만 grid/list 와 달리
@@ -8134,10 +8170,20 @@ const LibraryPage = () => {
         open={convertCandidates != null}
         files={convertCandidates ?? []}
         targetBytes={VIDEO_CONVERT_TARGET_BYTES}
+        maxOriginalBytes={REFERENCE_UPLOAD_MAX_BYTES}
         onConfirm={() => {
           const files = convertCandidates ?? [];
           setConvertCandidates(null);
           void runVideoConversions(files);
+        }}
+        onUploadOriginal={() => {
+          const files = convertCandidates ?? [];
+          setConvertCandidates(null);
+          // 1GB 이하만 원본 업로드, 초과분은 원본 저장 불가라 변환 경로로.
+          const originals = files.filter((f) => f.size <= REFERENCE_UPLOAD_MAX_BYTES);
+          const mustConvert = files.filter((f) => f.size > REFERENCE_UPLOAD_MAX_BYTES);
+          if (originals.length > 0) void uploadFilesDirect(originals);
+          if (mustConvert.length > 0) void runVideoConversions(mustConvert);
         }}
         onCancel={() => setConvertCandidates(null)}
       />

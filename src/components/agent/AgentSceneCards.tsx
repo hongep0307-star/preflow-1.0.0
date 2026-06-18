@@ -292,7 +292,7 @@ export const MentionDropdown = React.memo(function MentionDropdown({
               style={{
                 width: 28,
                 height: 28,
-                borderRadius: "50%",
+                borderRadius: 2,
                 flexShrink: 0,
                 overflow: "hidden",
                 position: "relative",

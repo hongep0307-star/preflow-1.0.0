@@ -161,6 +161,19 @@ const api = {
   cancelTranscode: (id: string): void => {
     ipcRenderer.send("preflow-video:transcode-cancel", id);
   },
+  /**
+   * 영상 포스터(첫 프레임) 추출 — 브라우저 <video> 가 디코드 못 하는 코덱
+   * (ProRes/HEVC MOV 등) 의 첫 프레임을 ffmpeg 로 PNG 로 뽑아 references 버킷
+   * scratch 경로(상대) + 길이/해상도를 돌려준다. 렌더러는 /storage/file/ 로
+   * 다시 fetch 해 thumbnail 로 업로드한다.
+   */
+  extractVideoPoster: (args: {
+    id: string;
+    inputPath: string;
+  }): Promise<
+    | { ok: true; scratchRelPath: string; durationSec: number; width: number; height: number }
+    | { ok: false; reason: string }
+  > => ipcRenderer.invoke("preflow-video:extract-poster", args),
 };
 
 contextBridge.exposeInMainWorld("preflowWindow", api);

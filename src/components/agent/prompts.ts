@@ -1,7 +1,7 @@
 import { KNOWLEDGE_SCENE_DESIGN, KNOWLEDGE_GENRE_CONVENTIONS } from "@/lib/directorKnowledgeBase";
 import { KNOWLEDGE_TRANSITION_GRAMMAR } from "@/lib/transitionGrammar";
 import { buildHookExecutionGuide } from "@/lib/hookLibrary";
-import { briefFieldToString, type Asset, type Analysis, type DirectionMode } from "./agentTypes";
+import { briefFieldToString, type Asset, type Analysis, type DirectionMode, type ParsedScene } from "./agentTypes";
 
 export const FORMAT_CONTEXT: Record<string, string> = {
   vertical: "세로형(9:16) 영상. 모바일 퍼스트 플랫폼.",
@@ -431,6 +431,48 @@ export const buildAssetUsageReminder = (assets: Asset[], lang: "ko" | "en" = "ko
     "4) description·location에 등록 에셋이 등장할 때는 반드시 해당 @tag_name 을 정확히 표기한다.",
     "5) 각 Shot의 tagged_assets 배열에는 그 Shot에서 등장한 등록 태그를 전부 포함한다.",
     "6) 등록되지 않은 임의의 태그는 절대 쓰지 않는다.",
+    "",
+  ].join("\n");
+};
+
+// 매 user 메시지 직전에, 사용자가 인라인으로 직접 수정한 내용까지 반영된 "현재 드래프트
+// 컷 목록"을 진실 소스(source of truth)로 주입한다. 대화 히스토리의 옛 scene 블록은
+// 사용자 수동 편집을 echo 하지 않으므로, 이 블록이 없으면 "#1만 고쳐줘" 요청에 에이전트가
+// 전체 컷을 다시 뱉을 때 사용자가 고친 #3이 옛 버전으로 리셋되는 문제가 있다.
+// (chat UI / DB 에는 저장하지 않고 API payload 에만 prepend)
+export const buildDraftSnapshotReminder = (
+  draft: ParsedScene[],
+  lang: "ko" | "en" = "ko",
+): string => {
+  if (!draft?.length) return "";
+  // 모델이 자신의 출력 포맷(scene JSON)으로 현재 상태를 읽도록, scene_number 순으로 정렬해
+  // 컴팩트 JSON 배열로 직렬화한다. (extractScenesFromText 는 assistant 응답에만 적용되므로
+  // user 메시지에 JSON 을 넣어도 재파싱 부작용은 없다.)
+  const ordered = [...draft]
+    .filter((s) => typeof s.scene_number === "number")
+    .sort((a, b) => a.scene_number - b.scene_number);
+  let json = "";
+  try {
+    json = JSON.stringify(ordered);
+  } catch {
+    return "";
+  }
+  if (lang === "en") {
+    return [
+      "[CURRENT DRAFT CUTS — LATEST STATE (SOURCE OF TRUTH)]",
+      "The list below is the user's CURRENT storyboard draft, INCLUDING any edits the user made directly in the app. It is more up to date than any scene block earlier in this conversation.",
+      "- Always treat this list as the authoritative current state. If an earlier scene block conflicts with it, THIS list wins.",
+      "- When the user asks to change/add/remove/reorder cuts and you re-emit the full cut list, base every cut on THIS list — preserve the exact contents of cuts the user did not ask to change.",
+      json,
+      "",
+    ].join("\n");
+  }
+  return [
+    "[현재 드래프트 컷 목록 — 최신 상태 (SOURCE OF TRUTH)]",
+    "아래는 사용자가 앱에서 직접 수정한 내용까지 반영된 현재 스토리보드 드래프트다. 이전 대화에 등장한 어떤 scene 블록보다 최신이다.",
+    "- 이 목록을 항상 권위 있는 현재 상태로 신뢰하라. 이전 scene 블록과 충돌하면 이 목록을 우선한다.",
+    "- 사용자가 컷을 수정/추가/삭제/재정렬해 전체 컷 목록을 다시 출력할 때는, 반드시 이 목록을 기준으로 변경하고, 사용자가 바꿔달라고 하지 않은 컷의 내용은 그대로 보존하라.",
+    json,
     "",
   ].join("\n");
 };

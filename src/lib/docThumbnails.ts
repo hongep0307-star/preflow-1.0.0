@@ -26,6 +26,44 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 const THUMB_LONGER_EDGE = 512;
 
+/* PSD 풀해상도 프리뷰의 긴 변 상한. Eagle 처럼 원본 크기로 줌·팬 하려면
+   합성 이미지를 가능한 한 큰 해상도로 굽되, 브라우저 <canvas> 한 변 제한
+   (Chromium ~16384px, 총면적 ~268M px) 과 메모리를 고려해 8192px 로 캡한다.
+   native 가 이보다 작으면 다운스케일 없이 원본 해상도 그대로 굽는다. */
+const PSD_PREVIEW_LONGER_EDGE = 8192;
+
+/* PSD 그리드/폴백용 작은 썸네일 — 일반 이미지 다운스케일(1024)과 동일 톤.
+   풀해상도 프리뷰는 별도(preview.webp)로 저장하므로 그리드 카드는 가벼운
+   썸네일만 디코드한다. */
+const PSD_THUMB_LONGER_EDGE = 1024;
+
+/* 합성 소스를 지정 크기 캔버스에 흰 배경 위로 그려 Blob 으로 굽는 헬퍼. */
+async function rasterizePsdSource(
+  source: CanvasImageSource,
+  srcW: number,
+  srcH: number,
+  maxEdge: number,
+  type: string,
+  quality: number,
+): Promise<Blob | null> {
+  const longest = Math.max(srcW, srcH);
+  if (longest <= 0) return null;
+  const scale = Math.min(1, maxEdge / longest);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(srcW * scale));
+  canvas.height = Math.max(1, Math.round(srcH * scale));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+  return await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob((blob) => resolve(blob), type, quality);
+  });
+}
+
 /**
  * PDF 첫 페이지를 PNG 썸네일로 렌더. 페이지의 자연 폭/높이에 비례해 긴 변
  * 이 THUMB_LONGER_EDGE 가 되도록 scale 조정 — 가로/세로 어떤 페이지든
@@ -123,6 +161,53 @@ export async function renderPsdThumbnail(file: File): Promise<Blob | null> {
     });
   } catch (err) {
     console.warn("[docThumbnails] psd render failed", err);
+    return null;
+  }
+}
+
+/**
+ * PSD/PSB → 풀해상도 프리뷰 + 작은 썸네일을 *한 번의 파싱* 으로 생성.
+ *
+ * Eagle 식 동작(원본 크기 로드 → 휠 줌인/줌아웃, 드래그 팬) 을 위해 합성
+ * 이미지를 PSD_PREVIEW_LONGER_EDGE(최대 8192px) 해상도의 WebP 로 굽고
+ * (`full`), 그리드 카드용으로 PSD_THUMB_LONGER_EDGE(1024px) PNG 도 함께
+ * 굽는다(`thumb`). 풀해상도는 file_url 옆 preview.webp 로 저장되어 프리뷰
+ * 패널의 이미지 줌·팬 분기가 그대로 재사용한다.
+ *
+ * `width`/`height` 는 합성 native 해상도라 인스펙터 "해상도" 가 썸네일이
+ * 아닌 실제 PSD 크기를 표시한다.
+ *
+ * 합성/임베디드 썸네일 둘 다 없으면 null → 호출부가 셸 아이콘으로 폴백.
+ */
+export async function renderPsdRasters(file: File): Promise<{
+  full: Blob;
+  thumb: Blob;
+  width: number;
+  height: number;
+} | null> {
+  try {
+    const buffer = await file.arrayBuffer();
+    const { readPsd } = await import("ag-psd");
+    const psd = readPsd(buffer, {
+      skipLayerImageData: true,
+      skipCompositeImageData: false,
+      skipThumbnail: false,
+      useImageData: false,
+    });
+    const source: CanvasImageSource | null =
+      (psd.canvas as CanvasImageSource | undefined)
+      ?? (psd.imageResources?.thumbnail as CanvasImageSource | undefined)
+      ?? null;
+    if (!source) return null;
+    const srcW = psd.canvas?.width ?? psd.imageResources?.thumbnail?.width ?? psd.width;
+    const srcH = psd.canvas?.height ?? psd.imageResources?.thumbnail?.height ?? psd.height;
+    if (!srcW || !srcH) return null;
+    const full = await rasterizePsdSource(source, srcW, srcH, PSD_PREVIEW_LONGER_EDGE, "image/webp", 0.9);
+    const thumb = await rasterizePsdSource(source, srcW, srcH, PSD_THUMB_LONGER_EDGE, "image/png", 0.92);
+    if (!full || !thumb) return null;
+    return { full, thumb, width: srcW, height: srcH };
+  } catch (err) {
+    console.warn("[docThumbnails] psd rasterize failed", err);
     return null;
   }
 }

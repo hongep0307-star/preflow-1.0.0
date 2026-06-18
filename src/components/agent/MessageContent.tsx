@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import {
   KR,
@@ -9,6 +9,7 @@ import {
   resolveAsset,
 } from "./agentTypes";
 import { TagChip } from "./AgentSceneCards";
+import { AssetMentionHover } from "@/components/AssetMentionHover";
 import { isBriefAnalysisMsg } from "./prompts";
 import { BriefAnalysisCard } from "./BriefAnalysisCard";
 import { StorylinesCard } from "./StorylinesCard";
@@ -25,6 +26,8 @@ interface Props {
   onPickDirection?: (mode: DirectionMode) => void;
   /** Currently confirmed direction mode (for the card's selected state). */
   activeDirectionMode?: DirectionMode | null;
+  /** 방금 완료된 메시지면 true — 긴 본문이라도 접지 않고 펼친 채로 시작한다. */
+  defaultOpen?: boolean;
 }
 
 const normalizeShotRefs = (text: string) => text.replace(/#(\d{1,2})(?!\d)/g, (_, n) => `#${String(n).padStart(2, "0")}`);
@@ -41,10 +44,23 @@ const normalizeMentions = (text: string) =>
 // 임계치를 넘는 본문만 max-height + 하단 페이드로 클램프하고 더보기/접기 토글을 노출.
 const PROSE_COLLAPSE_CHARS = 700;
 
-const ProseBlock = ({ source, components }: { source: string; components: Components }) => {
+const ProseBlock = ({
+  source,
+  components,
+  defaultOpen = false,
+}: {
+  source: string;
+  components: Components;
+  defaultOpen?: boolean;
+}) => {
   const t = useT();
   const collapsible = source.length > PROSE_COLLAPSE_CHARS;
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
+  // 부모가 펼침 여부를 바꾸면(완료 직후 true → 탭 복귀 시 false) 동기화한다.
+  // 탭 전환은 컴포넌트가 언마운트되지 않아 초기 useState 값만으로는 반영되지 않는다.
+  useEffect(() => {
+    setOpen(defaultOpen);
+  }, [defaultOpen]);
   const clamp = collapsible && !open;
   return (
     <div className="relative">
@@ -75,6 +91,14 @@ const ProseBlock = ({ source, components }: { source: string; components: Compon
   );
 };
 
+/** 채팅 본문의 @멘션 칩 — hover 시 에셋 썸네일(원본 비율, 큼직하게) + 이름/설명
+ *  프리뷰를 띄운다. 썸네일/설명이 둘 다 없으면 칩만 렌더한다. */
+const MentionChip = ({ asset, name }: { asset: Asset; name: string }) => (
+  <AssetMentionHover asset={asset} name={name}>
+    <TagChip name={name} assetType={asset.asset_type || "character"} />
+  </AssetMentionHover>
+);
+
 export const MessageContent = ({
   content,
   assets,
@@ -82,6 +106,7 @@ export const MessageContent = ({
   segments: preSegments,
   onPickDirection,
   activeDirectionMode,
+  defaultOpen = false,
 }: Props) => {
   const t = useT();
   if (isBriefAnalysisMsg(content)) return <BriefAnalysisCard content={content} />;
@@ -95,7 +120,7 @@ export const MessageContent = ({
           const suffix = clean.slice(resolved.name.length);
           return (
             <React.Fragment key={i}>
-              <TagChip name={resolved.name} assetType={resolved.asset.asset_type || "character"} />
+              <MentionChip asset={resolved.asset} name={resolved.name} />
               {suffix}
             </React.Fragment>
           );
@@ -121,14 +146,15 @@ export const MessageContent = ({
       return child;
     });
   const markdownComponents: Components = {
+    // 헤더는 앞 단락과 시각적으로 끊어지도록 위쪽 여백을 크게 줘서 "섹션" 으로 묶이게 한다.
     h1: ({ children }) => (
-      <h1 className="text-heading font-bold text-foreground mt-3 mb-1.5 first:mt-0">{processChildren(children)}</h1>
+      <h1 className="text-heading font-bold text-foreground mt-9 mb-2.5 first:mt-0">{processChildren(children)}</h1>
     ),
     h2: ({ children }) => (
-      <h2 className="text-subhead font-bold text-foreground mt-3 mb-1 first:mt-0">{processChildren(children)}</h2>
+      <h2 className="text-subhead font-bold text-foreground mt-9 mb-2 first:mt-0">{processChildren(children)}</h2>
     ),
     h3: ({ children }) => (
-      <h3 className="text-title font-bold text-foreground mt-3 mb-1 first:mt-0 flex items-center gap-1.5">
+      <h3 className="text-title font-bold text-foreground mt-8 mb-2 first:mt-0 flex items-center gap-1.5">
         <span className="inline-block w-1 h-3.5 shrink-0" style={{ background: KR }} />
         {processChildren(children)}
       </h3>
@@ -141,18 +167,20 @@ export const MessageContent = ({
     strong: ({ children }) => <strong className="font-bold text-foreground">{processChildren(children)}</strong>,
     em: ({ children }) => <em>{processChildren(children)}</em>,
     p: ({ children }) => (
-      <p className="text-label leading-[1.7] mb-2.5 last:mb-0 text-foreground/80">{processChildren(children)}</p>
+      <p className="text-label leading-[1.75] mb-3.5 last:mb-0 text-foreground/80">{processChildren(children)}</p>
     ),
     ul: ({ children }) => (
-      <ul className="list-disc pl-4 mb-2.5 space-y-1.5 marker:text-[#f9423a]/70">{children}</ul>
+      <ul className="list-disc pl-4 my-3 space-y-2.5 marker:text-[#f9423a]/70">{children}</ul>
     ),
     ol: ({ children }) => (
-      <ol className="list-decimal pl-4 mb-2.5 space-y-1.5 marker:text-[#f9423a]/70 marker:font-bold">{children}</ol>
+      <ol className="list-decimal pl-4 my-3 space-y-2.5 marker:text-[#f9423a]/70 marker:font-bold">{children}</ol>
     ),
     li: ({ children }) => (
-      <li className="text-label leading-[1.6] text-foreground/80 pl-0.5">{processChildren(children)}</li>
+      <li className="text-label leading-[1.65] text-foreground/80 pl-1 [&>p]:mb-1 [&>ul]:my-1 [&>ul]:space-y-1 [&>ol]:my-1 [&>ol]:space-y-1">
+        {processChildren(children)}
+      </li>
     ),
-    hr: () => <hr className="border-border/30 my-3" />,
+    hr: () => <hr className="border-border/30 my-4" />,
     blockquote: ({ children }) => (
       <blockquote
         className="my-2 px-3 py-2 text-label font-medium text-foreground/90 not-italic"
@@ -164,7 +192,7 @@ export const MessageContent = ({
   };
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-2">
       {segments.map((seg, i) => {
         if (seg.type === "strategy") return <StrategyCard key={i} content={seg.content} renderText={renderWithTags} />;
         if (seg.type === "direction") {
@@ -297,7 +325,14 @@ export const MessageContent = ({
             </div>
           );
         }
-        return <ProseBlock key={i} source={normalizeShotRefs(seg.content)} components={markdownComponents} />;
+        return (
+          <ProseBlock
+            key={i}
+            source={normalizeShotRefs(seg.content)}
+            components={markdownComponents}
+            defaultOpen={defaultOpen}
+          />
+        );
       })}
     </div>
   );

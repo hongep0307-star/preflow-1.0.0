@@ -50,20 +50,24 @@ export const LOCAL_SERVER_AUTH_HEADERS: Record<string, string> = LOCAL_SERVER_AU
   : {};
 
 /** Reference Library 업로드의 절대 상한 (bytes).
- *  렌더러와 local-server 양쪽이 동일한 값을 써야 한쪽 우회로 300 MiB 를 넘는
- *  파일이 디스크에 들어가는 일을 막을 수 있다. UX 메시지("300MB 이하…") 도
- *  여기서 파생된다. */
-export const REFERENCE_UPLOAD_MAX_BYTES = 300 * 1024 * 1024;
-export const REFERENCE_UPLOAD_MAX_LABEL = "300MB";
+ *  렌더러와 local-server 양쪽이 동일한 값을 써야 한쪽 우회로 1 GiB 를 넘는
+ *  파일이 디스크에 들어가는 일을 막을 수 있다. UX 메시지("1GB 이하…") 도
+ *  여기서 파생된다. (로컬 전용이라 Supabase 스토리지 파일 크기 제한과 무관) */
+export const REFERENCE_UPLOAD_MAX_BYTES = 1024 * 1024 * 1024;
+export const REFERENCE_UPLOAD_MAX_LABEL = "1GB";
 
 /** 영상 reference 의 절대 용량 상한 (bytes).
- *  영상은 전체 업로드 상한과 동일한 천장을 쓴다 — videoFrames(렌더러) /
- *  eagle-import(main) 가 각자 200MB 를 하드코딩해 드리프트하던 것을 한 곳으로
- *  통일한다. 이 값을 넘는 *원본* 은 저장하지 않으며, 컨버팅된 결과만 저장된다. */
+ *  영상 *원본* 도 전체 업로드 상한(1GB)까지 그대로 저장할 수 있다. 이 값을
+ *  넘는 영상은 원본 저장 불가 — 컨버팅(VIDEO_CONVERT_TARGET_BYTES)만 가능하다. */
 export const MAX_VIDEO_BYTES = REFERENCE_UPLOAD_MAX_BYTES;
 
-/** 300MB 초과 영상을 컨버팅할 때의 목표 용량 (bytes).
- *  300MB 한도에 약간의 여유를 둔 290MB — ffmpeg 비트레이트 계산의 타깃이다. */
+/** 영상 변환 *선택지* 를 제공하는 임계 용량 (bytes).
+ *  이 크기를 넘는 영상은 업로드 시 "변환할지 / 원본 그대로 올릴지" 를 사용자가
+ *  고르게 한다(VideoConvertDialog). 이하 영상은 묻지 않고 즉시 업로드. */
+export const VIDEO_CONVERT_THRESHOLD_BYTES = 300 * 1024 * 1024;
+
+/** 영상을 컨버팅할 때의 목표 용량 (bytes).
+ *  300MB 임계에 약간의 여유를 둔 290MB — ffmpeg 비트레이트 계산의 타깃이다. */
 export const VIDEO_CONVERT_TARGET_BYTES = 290 * 1024 * 1024;
 
 /** 영상 reference 의 최대 재생 길이 (초). 길이는 컨버팅으로 줄일 수 없으므로

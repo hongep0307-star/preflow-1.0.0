@@ -62,7 +62,7 @@ import {
 import type { LibraryFolderRow } from "@/components/library/LibrarySidebar";
 import { withReferenceVersion, type ReferenceItem } from "@/lib/referenceLibrary";
 import { docExtensionTag, docHueClasses, docPresentationOf, docSubtypeOf } from "@/lib/docPresentation";
-import { resolveTypeLabel } from "@/lib/linkPlatform";
+import { resolveFormatLabel, resolveTypeLabel } from "@/lib/linkPlatform";
 import { friendlyClassifyError, type ClassifyProgress, type ClassifyStage, type ReferenceAiSuggestions } from "@/lib/referenceAi";
 import type { ExtractedFrame } from "@/lib/videoFrames";
 
@@ -231,8 +231,10 @@ interface LibraryInspectorProps {
   /** 타임스탬프 노트 행 클릭 시 호출 — LibraryPage 가 previewMode 를 켜고
    *  해당 anchor 로 큰 프리뷰를 자동 점프한다(이미 previewMode 면 즉시 점프).
    *  v3 — 영상은 atSec, GIF 는 frameIndex, PDF 는 pageIndex 를 사용. 셋 중
-   *  하나만 들어옴. */
-  onJumpToTimestamp?: (atSec?: number, frameIndex?: number, pageIndex?: number) => void;
+   *  하나만 들어옴.
+   *  v4 — image/PSD region 노트는 regionNoteId 를 넘겨 큰 프리뷰 진입 +
+   *  해당 영역 하이라이트. */
+  onJumpToTimestamp?: (atSec?: number, frameIndex?: number, pageIndex?: number, regionNoteId?: string) => void;
 }
 
 export function LibraryInspector({
@@ -971,7 +973,17 @@ export function LibraryInspector({
                 </>
               ) : null}
               <div className="text-muted-foreground">{t("library.inspector.props.type")}</div>
-              <div className="text-right font-mono">{selected.mime_type ?? resolveTypeLabel(selected)}</div>
+              <div className="text-right font-mono">
+                {/* 종류는 포맷/kind 기준으로 정리해 표기한다(raw mime 금지):
+                    - doc: 확장자/타입 태그(PSD/PDF/ZIP …). mime 유실 PSD 도
+                      docSubtypeOf 의 psdPreview 보정으로 PSD 로 표시.
+                    - URL(youtube/link): 썸네일 mime(image/png) 대신 플랫폼
+                      라벨(URL/YouTube/…).
+                    - 미디어: 실제 포맷 확장자 대문자(PNG/MP4/MOV/…). */}
+                {selected.kind === "doc"
+                  ? docExtensionTag(selected)
+                  : resolveFormatLabel(selected)}
+              </div>
               <div className="text-muted-foreground">{t("library.inspector.props.size")}</div>
               <div className="text-right font-mono">{formatBytes(selected.file_size, t("common.unknown"))}</div>
               <div className="text-muted-foreground">{t("library.inspector.props.imported")}</div>
@@ -1003,7 +1015,8 @@ export function LibraryInspector({
               들어온다. note.region 이 있는 video/gif 노트는 라벨 옆에 작은
               BoxSelect 인디케이터를 표시해 시점-only 노트와 시각 구분. */}
           {selected.kind === "video" || selected.kind === "gif" || selected.kind === "image" || selected.kind === "webp"
-            || (selected.kind === "doc" && docSubtypeOf(selected) === "pdf") ? (
+            || (selected.kind === "doc" && docSubtypeOf(selected) === "pdf")
+            || (selected.kind === "doc" && Boolean(selected.ai_suggestions?.psdPreview)) ? (
             <TimestampNotesSection
               selected={selected}
               videoRef={videoRef}
@@ -2118,7 +2131,7 @@ interface TimestampNotesSectionProps {
   ) => void;
   /** v3 — atSec(영상)/frameIndex(GIF)/pageIndex(PDF) 중 하나만 들어옴. 자료
    *  종류에 맞춰 큰 프리뷰가 자동 점프한다. */
-  onJumpToTimestamp?: (atSec?: number, frameIndex?: number, pageIndex?: number) => void;
+  onJumpToTimestamp?: (atSec?: number, frameIndex?: number, pageIndex?: number, regionNoteId?: string) => void;
   onDeleteTimestampNote?: (noteId: string) => void;
   onEditTimestampNote?: (noteId: string, text: string) => void;
 }
@@ -2142,6 +2155,67 @@ interface TimestampNotesSectionProps {
 
 const HOVER_PREVIEW_WIDTH = 192;
 const HOVER_PREVIEW_GAP = 8;
+
+/* region 의 실제 픽셀 종횡비(가로/세로). native width/height 를 알면 정확히,
+   모르면 정규화 비율로 근사. NaN/0 방어 + 합리적 범위로 clamp. */
+function regionAspect(
+  r: { w: number; h: number },
+  naturalW?: number | null,
+  naturalH?: number | null,
+): number {
+  const raw = naturalW && naturalH
+    ? (r.w * naturalW) / (r.h * naturalH)
+    : r.w / Math.max(r.h, 0.0001);
+  if (!Number.isFinite(raw) || raw <= 0) return 1;
+  return Math.min(2.6, Math.max(0.5, raw));
+}
+
+/* 정규화 region(0~1) 한 조각이 박스를 *정확히 채우도록*(fill) background 를
+   확대·이동. 박스의 종횡비를 region 픽셀 종횡비(regionAspect)에 맞추면 왜곡
+   없이 영역 전체가 보인다 — 호버 확대 팝오버처럼 잘림 없이 보여줄 때 사용. */
+function regionFillStyle(src: string, r: { x: number; y: number; w: number; h: number }) {
+  const w = Math.max(r.w, 0.0001);
+  const h = Math.max(r.h, 0.0001);
+  const denomX = 1 - w;
+  const denomY = 1 - h;
+  return {
+    backgroundImage: `url("${src}")`,
+    backgroundRepeat: "no-repeat",
+    backgroundSize: `${(100 / w).toFixed(2)}% ${(100 / h).toFixed(2)}%`,
+    backgroundPosition: `${denomX > 0.0001 ? ((r.x / denomX) * 100).toFixed(2) : "0"}% ${denomY > 0.0001 ? ((r.y / denomY) * 100).toFixed(2) : "0"}%`,
+  } as const;
+}
+
+/* 정규화 region(0~1) 한 조각이 *박스를 cover* 하도록 background 를 확대·이동.
+   행마다 같은 정사각 박스에 담아도(= 같은 비율) 단일 스케일이라 왜곡 없이
+   영역 중심을 보여준다(잘림은 cover 특성상 발생). 정확한 cover 를 위해 자료의
+   native width/height(=이미지 종횡비)가 필요하며, 모르면 region 정규화 비율로
+   근사한다. position 분모가 0 에 가까우면(영역이 거의 전체) 50% 로 가드. */
+function regionCoverStyle(
+  src: string,
+  r: { x: number; y: number; w: number; h: number },
+  naturalW?: number | null,
+  naturalH?: number | null,
+) {
+  const w = Math.min(Math.max(r.w, 0.0001), 1);
+  const h = Math.min(Math.max(r.h, 0.0001), 1);
+  const imgAspect = naturalW && naturalH ? naturalW / naturalH : w / h;
+  /* 이미지 표시 폭 / 정사각 박스폭 (%) — region 이 양축 모두 박스를 덮는 최소. */
+  const sizePct = Math.max(1 / w, imgAspect / h) * 100;
+  const iwR = sizePct / 100;          // 이미지폭 / 박스폭
+  const ihR = iwR / imgAspect;        // 이미지높이 / 박스폭(정사각)
+  const cx = r.x + w / 2;
+  const cy = r.y + h / 2;
+  const clampPct = (v: number) => Math.min(100, Math.max(0, v));
+  const px = Math.abs(1 - iwR) < 1e-4 ? 50 : clampPct(((0.5 - cx * iwR) / (1 - iwR)) * 100);
+  const py = Math.abs(1 - ihR) < 1e-4 ? 50 : clampPct(((0.5 - cy * ihR) / (1 - ihR)) * 100);
+  return {
+    backgroundImage: `url("${src}")`,
+    backgroundRepeat: "no-repeat",
+    backgroundSize: `${sizePct.toFixed(2)}% auto`,
+    backgroundPosition: `${px.toFixed(2)}% ${py.toFixed(2)}%`,
+  } as const;
+}
 
 interface HoverPreviewPos {
   top: number;
@@ -2170,9 +2244,24 @@ function TimestampNotesSection({
   /* PDF 슬라이드 노트 — region + pageIndex anchored. label 은 페이지 번호(p.N),
      클릭 시 그 페이지로 점프. */
   const isPdf = selected.kind === "doc" && docSubtypeOf(selected) === "pdf";
-  /* Phase 4 — image / static webp 분기. 이 자료의 노트는 region anchored 만
-     의미가 있고 시점/프레임 개념이 없다. label 은 BoxSelect 아이콘. */
-  const isStillImage = selected.kind === "image" || selected.kind === "webp";
+  /* PSD 풀해상도 프리뷰 — 이미지처럼 region anchored 노트만 의미가 있다. */
+  const isPsdDoc = selected.kind === "doc" && Boolean(selected.ai_suggestions?.psdPreview);
+  /* Phase 4 — image / static webp / PSD 분기. 이 자료의 노트는 region anchored
+     만 의미가 있고 시점/프레임 개념이 없다. label 은 BoxSelect 아이콘. */
+  const isStillImage = selected.kind === "image" || selected.kind === "webp" || isPsdDoc;
+
+  /* 영역 노트 썸네일 — 박스친 영역만 잘라 보여줄 이미지 소스. 영상은 호버
+     비디오 프리뷰가 이미 그 역할을 하므로 제외하고, 정지 이미지/GIF 만 대상.
+       - PSD: 풀해상도 프리뷰 WebP
+       - image/webp: 썸네일(다운스케일) → 원본 폴백
+       - gif: 포스터 썸네일(정지) → 원본 폴백(원본은 잘린 영역이 애니메이션됨) */
+  const regionThumbBase = isPsdDoc
+    ? ((selected.ai_suggestions?.psdPreview as string | undefined) ?? null)
+    : (selected.kind === "image" || selected.kind === "webp" || selected.kind === "gif")
+      ? (selected.thumbnail_url || selected.file_url || null)
+      : null;
+  const regionThumbSrc = regionThumbBase ? withReferenceVersion(regionThumbBase, selected) : null;
+  const showsRegionThumb = Boolean(regionThumbSrc) && (isStillImage || isGif);
 
   /* 노트 목록 정렬 키 — 자료 종류에 따라 다름:
        video: atSec 오름차순(시간 순서)
@@ -2341,6 +2430,28 @@ function TimestampNotesSection({
         )
         : null}
 
+      {/* 영역 노트 호버 확대 — 정지 이미지/GIF 의 region 노트에 마우스를 올리면
+          박스친 영역을 크게 보여주는 포털 팝오버. 영상의 호버 비디오 프리뷰와
+          동일한 위치 로직(hoverPos)을 공유한다. 박스 종횡비를 region 픽셀
+          종횡비에 맞춰 왜곡 없이 표시. */}
+      {portalTarget && hoverPos && regionThumbSrc && (isStillImage || isGif) && hoveredNote?.region
+        ? createPortal(
+          <div
+            className="pointer-events-none fixed z-[60] border border-border-subtle bg-background shadow-xl"
+            style={{ borderRadius: 0, top: hoverPos.top, left: hoverPos.left, width: HOVER_PREVIEW_WIDTH }}
+          >
+            <div
+              className="w-full bg-muted"
+              style={{
+                height: Math.round(HOVER_PREVIEW_WIDTH / regionAspect(hoveredNote.region, selected.width, selected.height)),
+                ...regionFillStyle(regionThumbSrc, hoveredNote.region),
+              }}
+            />
+          </div>,
+          portalTarget,
+        )
+        : null}
+
       <div className="relative mt-2 space-y-1.5">
 
         {sortedNotes.length > 0 ? sortedNotes.map((note) => {
@@ -2360,9 +2471,10 @@ function TimestampNotesSection({
                       안 일어나도 OK — 사용자가 자료 클릭으로 자연스레 진입함). */
           const jump = () => {
             if (isStillImage) {
-              /* image: 시점 점프 인자가 없어 부모가 무시 — 별도 동작 없음.
-                 사용자가 행을 클릭해도 큰 프리뷰가 자동으로 안 켜지므로,
-                 자료 카드를 더블클릭해 큰 프리뷰로 진입하도록 안내(title). */
+              /* image/PSD: 시점/프레임 anchor 가 없으므로 region 노트 id 를 넘겨
+                 큰 프리뷰를 켜고 해당 영역을 잠깐 하이라이트한다(부모
+                 handleJumpToTimestamp 의 regionNoteId 분기). */
+              onJumpToTimestamp?.(undefined, undefined, undefined, note.id);
               return;
             }
             if (isPdf) onJumpToTimestamp?.(undefined, undefined, note.pageIndex);
@@ -2384,6 +2496,20 @@ function TimestampNotesSection({
               onMouseEnter={(event) => handleRowEnter(note.id, event)}
               onMouseLeave={() => setHoveredNoteId(null)}
             >
+              {/* 영역 썸네일 — 박스친 영역만 잘라 행 좌측에 미리보기. 정지
+                  이미지/GIF 의 region 노트에만 노출(영상은 호버 비디오 프리뷰가
+                  담당). 박스 종횡비를 region 픽셀 종횡비에 맞춰 왜곡 없이 표시.
+                  호버하면 우측 포털 팝오버로 크게 보인다. */}
+              {showsRegionThumb && hasRegion && note.region ? (
+                <button
+                  type="button"
+                  onClick={jump}
+                  title={labelTitle}
+                  aria-label={labelTitle}
+                  className="ml-1 mr-0.5 h-9 w-9 shrink-0 self-center border border-border-subtle bg-muted transition-[border-color] hover:border-primary"
+                  style={regionCoverStyle(regionThumbSrc as string, note.region, selected.width, selected.height)}
+                />
+              ) : null}
               {/* 라벨 — video/gif 노트는 시간/프레임 텍스트(+ region 이 있으면
                   BoxSelect 인디케이터). still image 는 섹션 헤더가 이미
                   "Region Notes" 라 행마다 표시할 라벨 자체가 중복이고, image

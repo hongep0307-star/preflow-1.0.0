@@ -48,8 +48,96 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   });
 }
 
+/** Near-white threshold (0-255, every channel) for gutter detection. */
+const GUTTER_WHITE = 238;
+/** A row/column counts as "gutter" when at least this fraction is near-white. */
+const GUTTER_MIN_FRAC = 0.55;
+
+/** Even (fixed-fraction) boundaries: [0, total/n, 2*total/n, ..., total]. */
+function evenBoundaries(n: number, total: number): number[] {
+  const tile = Math.floor(total / n);
+  const bounds: number[] = [];
+  for (let i = 0; i < n; i++) bounds.push(i * tile);
+  bounds.push(total);
+  return bounds;
+}
+
+/**
+ * Per-column / per-row near-white fraction over the whole sheet, in ONE pass.
+ * A gutter line is near-white across (almost) the full opposite axis, so these
+ * profiles let us locate the model's ACTUAL panel separators.
+ */
+function computeWhiteProfiles(
+  data: Uint8ClampedArray,
+  W: number,
+  H: number,
+): { colFrac: Float32Array; rowFrac: Float32Array } {
+  const colCount = new Float32Array(W);
+  const rowFrac = new Float32Array(H);
+  for (let y = 0; y < H; y++) {
+    const rowBase = y * W * 4;
+    let rc = 0;
+    for (let x = 0; x < W; x++) {
+      const i = rowBase + x * 4;
+      if (data[i] >= GUTTER_WHITE && data[i + 1] >= GUTTER_WHITE && data[i + 2] >= GUTTER_WHITE) {
+        colCount[x] += 1;
+        rc += 1;
+      }
+    }
+    rowFrac[y] = rc / W;
+  }
+  const colFrac = new Float32Array(W);
+  for (let x = 0; x < W; x++) colFrac[x] = colCount[x] / H;
+  return { colFrac, rowFrac };
+}
+
+/**
+ * Snap each of the (n-1) internal cut boundaries to the model's real gutter.
+ * For every expected boundary (i*total/n) we search a window around it for the
+ * LONGEST run of near-white lines and cut at its center. When no gutter-like
+ * run is found in the window (e.g. the boundary touches a dark empty cell, or
+ * the model drew no clean gutter) we keep the even position — so this never
+ * does worse than the fixed-fraction split. Windows are narrow enough
+ * (±18% of a tile) that boundaries stay ordered and cells stay positive.
+ */
+function snapBoundaries(frac: Float32Array, n: number, total: number): number[] {
+  const bounds: number[] = [0];
+  const tile = total / n;
+  const tol = Math.max(4, Math.round(tile * 0.18));
+  for (let i = 1; i < n; i++) {
+    const expected = Math.round(i * tile);
+    const lo = Math.max(1, expected - tol);
+    const hi = Math.min(total - 2, expected + tol);
+    let bestCenter = -1;
+    let bestLen = 0;
+    let runStart = -1;
+    for (let x = lo; x <= hi; x++) {
+      if (frac[x] >= GUTTER_MIN_FRAC) {
+        if (runStart < 0) runStart = x;
+        const len = x - runStart + 1;
+        if (len > bestLen) {
+          bestLen = len;
+          bestCenter = Math.round((runStart + x) / 2);
+        }
+      } else {
+        runStart = -1;
+      }
+    }
+    bounds.push(bestCenter >= 0 ? bestCenter : expected);
+  }
+  bounds.push(total);
+  return bounds;
+}
+
 /**
  * Split a contact-sheet image URL into rows*cols data URLs.
+ *
+ * Gutter-aware: generative models (NB2 / gpt-image) do NOT draw mathematically
+ * equal cells, so a fixed `W/cols` × `H/rows` slice cuts THROUGH panels and
+ * bleeds a sliver of the neighbouring cut into each tile ("tiling"/seam
+ * artifacts). We instead detect the real white gutters and cut along them,
+ * falling back to even fractions per-axis when no gutter is found.
+ *
  * Throws on decode / canvas failure; callers should surface the error
  * to the user via their existing toast/error UI.
  */
@@ -71,26 +159,53 @@ export async function splitContactSheetDataUrl(
     throw new Error(`Contact-sheet too small to split (${W}x${H}).`);
   }
 
-  // Clamp the bleed to something sane so we never accidentally inset
-  // past the centre of a tile.
+  // Draw the full sheet once so we can both read pixels (gutter detection) and
+  // crop cells from the same canvas.
+  const sheet = document.createElement("canvas");
+  sheet.width = W;
+  sheet.height = H;
+  const sctx = sheet.getContext("2d");
+  if (!sctx) throw new Error("Failed to allocate 2D canvas context for contact-sheet split");
+  sctx.drawImage(img, 0, 0);
+
+  // Gutter-aware boundaries; fall back to even fractions if pixels can't be
+  // read (e.g. a tainted canvas) or detection is unavailable.
+  let xs: number[];
+  let ys: number[];
+  try {
+    const { data } = sctx.getImageData(0, 0, W, H);
+    const { colFrac, rowFrac } = computeWhiteProfiles(data, W, H);
+    xs = snapBoundaries(colFrac, cols, W);
+    ys = snapBoundaries(rowFrac, rows, H);
+  } catch {
+    xs = evenBoundaries(cols, W);
+    ys = evenBoundaries(rows, H);
+  }
+
+  // Small inset to drop the half-gutter each cell keeps at a snapped boundary;
+  // the per-tile white-border trim downstream removes any residual edge.
   const autoBleed = Math.max(2, Math.min(16, Math.round(tileW * 0.01)));
   const bleed = Math.max(0, Math.min(Math.floor(tileW / 4), opts.bleedPx ?? autoBleed));
 
   const tiles: string[] = [];
   const canvas = document.createElement("canvas");
-  canvas.width = tileW - bleed * 2;
-  canvas.height = tileH - bleed * 2;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Failed to allocate 2D canvas context for contact-sheet split");
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      const sx = c * tileW + bleed;
-      const sy = r * tileH + bleed;
-      const sw = tileW - bleed * 2;
-      const sh = tileH - bleed * 2;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      const cellX = xs[c];
+      const cellY = ys[r];
+      const cellW = xs[c + 1] - xs[c];
+      const cellH = ys[r + 1] - ys[r];
+      // Per-cell bleed, never more than a quarter of the (possibly small) cell.
+      const b = Math.max(0, Math.min(bleed, Math.floor(cellW / 4), Math.floor(cellH / 4)));
+      const sw = Math.max(1, cellW - b * 2);
+      const sh = Math.max(1, cellH - b * 2);
+      canvas.width = sw;
+      canvas.height = sh;
+      ctx.clearRect(0, 0, sw, sh);
+      ctx.drawImage(sheet, cellX + b, cellY + b, sw, sh, 0, 0, sw, sh);
       tiles.push(canvas.toDataURL("image/png"));
     }
   }

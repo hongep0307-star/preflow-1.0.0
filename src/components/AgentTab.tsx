@@ -2,11 +2,16 @@ import React, { useEffect, useState, useRef, useCallback, useMemo } from "react"
 import type { VideoFormat } from "@/lib/conti";
 import { supabase } from "@/lib/supabase";
 import { deleteStoredFileIfUnreferenced, normalizeStorageUrl } from "@/lib/storageUtils";
-import { callLLM } from "@/lib/llm";
+import { callLLMStream } from "@/lib/llm";
 import { getModel } from "@/lib/modelPreference";
 import { getModelMeta } from "@/lib/modelCatalog";
 import { getSettingsCached, ensureSettingsLoaded } from "@/lib/settingsCache";
 import { pruneHistoryForBudget } from "@/lib/historyBudget";
+import {
+  loadPendingSpecFromLS,
+  savePendingSpecToLS,
+  type ProductionSpec,
+} from "@/lib/productionSpec";
 import { useToast } from "@/hooks/use-toast";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
@@ -66,6 +71,7 @@ import {
   CHAT_IMAGE_MAX,
   toMoodImages,
   extractScenesFromText,
+  extractSpecFromText,
   resolveAsset,
   _pendingScenesByProject,
   loadPendingFromLS,
@@ -224,6 +230,128 @@ const SceneGroupHeader = ({ label }: { label: string }) => (
     <div className="flex-1 h-px" style={{ background: `${KR}33` }} />
   </div>
 );
+
+/**
+ * 턴별 GPT-5.x reasoning 강도 분류. 컷 기획/재구성처럼 사고가 필요한 무거운
+ * 턴은 "medium", 인사·방향 확정·단순 질의응답 등 가벼운 턴은 "low" 로 잡아
+ * 추론 시간을 줄인다. (휴리스틱이라 필요 시 키워드 보강 가능.)
+ */
+const classifyAgentTurn = (text: string): "low" | "medium" => {
+  const t = text ?? "";
+  // 스토리라인 선택 신호 (handleSend 의 looksLikeStorylinePick 패턴과 동일 계열)
+  const picksStoryline =
+    /\b[A-Z]안\b[\s\S]*(선택|진행|결정|가자|갈게|갈래)/.test(t) ||
+    /\b(pick|go\s+with|choose|proceed)\b/i.test(t);
+  // 컷/스토리보드 생성·재구성·정리 의도
+  const cutWork =
+    /(컷|씬|스토리보드|보드|구성|재구성|정리|추가|수정|쪼개|나눠|만들)/.test(t) ||
+    /\b(scene|shot|storyboard|cut|restructure|rebuild|outline)\b/i.test(t);
+  return picksStoryline || cutWork ? "medium" : "low";
+};
+
+/**
+ * 스트리밍 미리보기용 — 완료/미완료 코드펜스(```scene 등)를 제거해 임시 버블에
+ * 평문만 보여준다. 반쪽 JSON 펜스가 카드로 깨져 보이는 것을 막는다.
+ */
+const stripFencesForPreview = (s: string): string =>
+  (s ?? "")
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/```[\s\S]*$/, "")
+    .trim();
+
+/**
+ * 값이 바뀌어도 최소 `ms` 간격으로만 갱신하는 throttle 훅. 스트리밍 중
+ * 토큰마다 무거운 파싱·리렌더가 도는 걸 막기 위해 streamingText 를 throttle 한 뒤
+ * 완성된 펜스를 추출한다(평문 프리뷰는 기존대로 매 토큰 갱신).
+ */
+function useThrottledValue<T>(value: T, ms: number): T {
+  const [throttled, setThrottled] = useState(value);
+  const lastRef = useRef(0);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const commit = () => {
+      lastRef.current = Date.now();
+      setThrottled(value);
+    };
+    const elapsed = Date.now() - lastRef.current;
+    if (elapsed >= ms) {
+      commit();
+    } else {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(commit, ms - elapsed);
+    }
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [value, ms]);
+  return throttled;
+}
+
+/**
+ * 스트리밍 중 점진 렌더 패널 — 닫힌 ```scene 펜스를 컷 카드로 하나씩 보여주고,
+ * 전략/스펙 블록이 닫히면 칩으로 표시한다. 맨 아래엔 "쓰는 중" 스켈레톤 한 장을
+ * 둬서 다음 블록이 작성 중임을 알린다. 완료되면 isLoading 이 풀려 정식 카드로 교체된다.
+ */
+const StreamingScenesPreview = React.memo(function StreamingScenesPreview({
+  scenes,
+  hasSpec,
+  hasStrategy,
+}: {
+  scenes: ParsedScene[];
+  hasSpec: boolean;
+  hasStrategy: boolean;
+}) {
+  const clamp2: React.CSSProperties = {
+    display: "-webkit-box",
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: "vertical",
+    overflow: "hidden",
+  };
+  return (
+    <div className="mt-2 space-y-1.5">
+      <div className="flex flex-wrap items-center gap-1.5 text-meta text-muted-foreground">
+        {hasStrategy && <span className="px-1.5 py-0.5 border border-border">전략</span>}
+        {hasSpec && <span className="px-1.5 py-0.5 border border-border">스펙</span>}
+        {scenes.length > 0 && (
+          <span className="font-semibold" style={{ color: KR }}>
+            컷 {scenes.length}개 생성됨
+          </span>
+        )}
+      </div>
+      {scenes.map((s) => (
+        <div key={s.scene_number} className="bg-card border border-border px-3 py-2" style={{ borderRadius: 0 }}>
+          <div className="flex items-center gap-1.5 mb-1">
+            <span
+              className="font-mono text-meta font-bold px-1.5 py-0.5 text-white shrink-0"
+              style={{ background: KR }}
+            >
+              #{String(s.scene_number).padStart(2, "0")}
+            </span>
+            {s.title && <span className="text-body font-semibold text-foreground truncate">{s.title}</span>}
+          </div>
+          {s.description && (
+            <p className="text-body text-foreground/75 leading-snug" style={clamp2}>
+              {s.description}
+            </p>
+          )}
+          {(s.camera_angle || s.mood) && (
+            <p className="text-meta text-muted-foreground mt-1 truncate">
+              {[s.camera_angle, s.mood].filter(Boolean).join(" · ")}
+            </p>
+          )}
+        </div>
+      ))}
+      <div className="bg-card border border-border px-3 py-2 animate-pulse" style={{ borderRadius: 0 }}>
+        <div className="flex items-center gap-1.5 mb-1.5">
+          <span className="h-4 w-7 shrink-0" style={{ background: "rgba(249,66,58,0.5)" }} />
+          <span className="h-3 w-24 bg-muted-foreground/30" />
+        </div>
+        <div className="h-3 w-full bg-muted-foreground/20 mb-1" />
+        <div className="h-3 w-3/5 bg-muted-foreground/20" />
+      </div>
+    </div>
+  );
+});
 
 export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onSwitchToContiTab, isActive = true }: Props) => {
   const { toast } = useToast();
@@ -389,6 +517,20 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
     },
     [projectId],
   );
+
+  // Agent-authored production spec (set/palette/cast/cinematography) for this
+  // project's draft. Persisted to localStorage alongside pendingScenes so it
+  // survives tab switches, then handed to Send-to-Conti to store on the version.
+  const [pendingSpec, setPendingSpecState] = useState<ProductionSpec | null>(
+    () => loadPendingSpecFromLS(projectId),
+  );
+  const setPendingSpec = useCallback(
+    (val: ProductionSpec | null) => {
+      setPendingSpecState(val);
+      savePendingSpecToLS(projectId, val);
+    },
+    [projectId],
+  );
   const abcdScenes = useMemo<Scene[]>(
     () => [
       ...scenes,
@@ -454,6 +596,25 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
     [persistDirectionMode],
   );
   const [isLoading, setIsLoading] = useState(false);
+  // 스트리밍 중 누적되는 어시스턴트 텍스트(임시 버블). 완료 시 chatHistory 로
+  // 커밋하고 초기화한다. 빈 문자열이면 기존 점멸 인디케이터를 보여준다.
+  const [streamingText, setStreamingText] = useState("");
+  // 점진 렌더용: streamingText 를 throttle 해서 완성된 펜스만 파싱한다. 평문
+  // 프리뷰(stripFencesForPreview)는 기존대로 매 토큰 갱신하고, 무거운 추출만
+  // 120ms 간격으로 돌려 컷 카드를 하나씩 차오르게 한다.
+  const throttledStreamingText = useThrottledValue(streamingText, 120);
+  const liveStreamScenes = useMemo(
+    () => (isLoading ? extractScenesFromText(throttledStreamingText) : []),
+    [isLoading, throttledStreamingText],
+  );
+  const liveStreamHasSpec = useMemo(
+    () => (isLoading ? !!extractSpecFromText(throttledStreamingText) : false),
+    [isLoading, throttledStreamingText],
+  );
+  const liveStreamHasStrategy = useMemo(
+    () => (isLoading ? /```strategy(?![a-z_])[\s\S]*?```/.test(throttledStreamingText) : false),
+    [isLoading, throttledStreamingText],
+  );
   const [initialLoaded, setInitialLoaded] = useState(false);
   // 브리프 재조회 트리거. (1) 분석 완료 알림 (2) 탭 활성화 시점에 증가시켜
   // 아래 auto-init load() 이펙트를 다시 돌린다. 백그라운드 prefetch 로 분석 전에
@@ -778,6 +939,7 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
     await supabase.from("scenes").delete().eq("project_id", projectId).eq("source", "agent");
     setScenes([]);
     setPendingScenes([]);
+    setPendingSpec(null);
     const unlinkedMood = moodImagesRef.current.map((img) =>
       img.sceneRef === null ? img : { ...img, sceneRef: null },
     );
@@ -874,6 +1036,7 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
             camera_angle: s.camera_angle ?? "",
             location: s.location ?? "",
             mood: s.mood ?? "",
+            emotional_beat: s.emotional_beat ?? null,
             duration_sec: typeof s.duration_sec === "number" ? s.duration_sec : null,
             tagged_assets: registeredTags,
             is_highlight: s.is_highlight ?? false,
@@ -999,17 +1162,29 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
           await ensureSettingsLoaded();
           const agentModelId = getModel("agent");
           const agentMeta = getModelMeta(agentModelId, getSettingsCached());
-          const llmResult = await callLLM({
-            model: agentModelId,
-            // OpenAI 1M ctx 모델 등 메타가 있으면 카탈로그 기준 max_tokens 사용,
-            // 없으면 callLLM 이 카탈로그 디폴트로 폴백.
-            max_tokens: agentMeta?.maxOutputTokens ?? 4096,
-            system: buildSystemPrompt(videoFormat, assets ?? undefined, analysis, initLang, agentMeta?.provider, initMode),
-            messages: [{ role: "user", content: autoPrompt }],
-          });
+          if (mountedRef.current) setStreamingText("");
+          const llmResult = await callLLMStream(
+            {
+              model: agentModelId,
+              // OpenAI 1M ctx 모델 등 메타가 있으면 카탈로그 기준 max_tokens 사용,
+              // 없으면 callLLMStream 이 카탈로그 디폴트로 폴백.
+              max_tokens: agentMeta?.maxOutputTokens ?? 4096,
+              system: buildSystemPrompt(videoFormat, assets ?? undefined, analysis, initLang, agentMeta?.provider, initMode),
+              messages: [{ role: "user", content: autoPrompt }],
+              // 진입 첫 응답: 방향 선제안(미확정)은 가볍게, 시놉시스 제안은 보통.
+              reasoningEffort: initMode ? "medium" : "low",
+            },
+            {
+              onDelta: (full) => {
+                if (mountedRef.current) setStreamingText(full);
+              },
+            },
+          );
           const msg = llmResult.text;
           await supabase.from("chat_logs").insert({ project_id: projectId, role: "assistant", content: msg });
           applyConfirmedDirection(msg);
+          const extractedSpec = extractSpecFromText(msg);
+          if (extractedSpec) setPendingSpec(extractedSpec);
           const extracted = extractScenesFromText(msg);
           if (extracted.length > 0) {
             if (mountedRef.current) {
@@ -1032,6 +1207,7 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
         } finally {
           if (mountedRef.current) {
             setIsLoading(false);
+            setStreamingText("");
           }
           const cur = getChatGen(projectId);
           if (cur?.pendingExtractedScenes && cur.pendingExtractedScenes.length) {
@@ -1367,12 +1543,22 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
         reserveOutputTokens: agentMeta?.maxOutputTokens ?? 4096,
         systemPromptChars: systemPrompt.length,
       });
-      const llmResult = await callLLM({
-        model: agentModelId,
-        max_tokens: agentMeta?.maxOutputTokens ?? 4096,
-        system: systemPrompt,
-        messages: prunedHistory,
-      });
+      if (mountedRef.current) setStreamingText("");
+      const llmResult = await callLLMStream(
+        {
+          model: agentModelId,
+          max_tokens: agentMeta?.maxOutputTokens ?? 4096,
+          system: systemPrompt,
+          messages: prunedHistory,
+          // 가벼운 턴은 추론을 줄여 빠르게, 컷 기획/재구성 턴만 medium.
+          reasoningEffort: classifyAgentTurn(text),
+        },
+        {
+          onDelta: (full) => {
+            if (mountedRef.current) setStreamingText(full);
+          },
+        },
+      );
       const assistantContent = llmResult.text;
       await supabase.from("chat_logs").insert({ project_id: projectId, role: "assistant", content: assistantContent });
       // 자유 채팅으로 방향을 정한 경우 direction.confirmed 펜스를 읽어 모드 확정.
@@ -1383,6 +1569,8 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
           { project_id: projectId, role: "assistant", content: assistantContent, created_at: new Date().toISOString() },
         ]);
       }
+      const extractedSpec = extractSpecFromText(assistantContent);
+      if (extractedSpec) setPendingSpec(extractedSpec);
       const extracted = extractScenesFromText(assistantContent);
       // Storyline-selection 응답에서 씬이 하나도 추출되지 않으면 Phase 2 전환 실패일 가능성이 높다.
       // 실제 어시스턴트가 어떤 포맷으로 응답했는지 디버깅할 수 있도록 로그를 남긴다.
@@ -1425,6 +1613,7 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
     } finally {
       if (mountedRef.current) {
         setIsLoading(false);
+        setStreamingText("");
       }
       // in-flight 플래그 해제 — 단, pendingExtractedScenes 가 남아있으면 리마운트가 소비할 때까지 유지
       const cur = getChatGen(projectId);
@@ -1737,23 +1926,48 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
             );
           });
         })()}
-        {isLoading && (
-          <div className="flex justify-start">
-            <CdAvatar size="w-6 h-6" iconSize={14} />
-            <div className="ml-2">
-              <div className="bg-secondary rounded-none border border-border px-4 py-3 flex items-center gap-1">
-                {[0, 1, 2].map((j) => (
-                  <span
-                    key={j}
-                    className="w-1.5 h-1.5 rounded-none animate-bounce"
-                    style={{ background: KR, animationDelay: `${j * 150}ms` }}
+        {isLoading && (() => {
+          const streamPreview = stripFencesForPreview(streamingText);
+          // 펜스가 하나라도 닫혔으면(전략/스펙/컷) 점진 렌더 패널을 보여준다.
+          const hasLive =
+            liveStreamScenes.length > 0 || liveStreamHasSpec || liveStreamHasStrategy;
+          return (
+            <div className="flex justify-start">
+              <CdAvatar size="w-6 h-6" iconSize={14} />
+              <div className="ml-2 max-w-[85%]">
+                {streamPreview ? (
+                  // 스트리밍 중 평문 미리보기(펜스 제거). 완료 시 chatHistory 로 커밋되며
+                  // scene/spec 카드가 정상 파싱·렌더된다.
+                  <div
+                    className="px-3.5 py-2.5 text-label leading-relaxed bg-card text-foreground border border-border whitespace-pre-wrap"
+                    style={{ borderRadius: 0 }}
+                  >
+                    {streamPreview}
+                    <span className="inline-block w-1.5 h-3.5 ml-0.5 align-text-bottom animate-pulse" style={{ background: KR }} />
+                  </div>
+                ) : hasLive ? null : (
+                  <div className="bg-secondary rounded-none border border-border px-4 py-3 flex items-center gap-1">
+                    {[0, 1, 2].map((j) => (
+                      <span
+                        key={j}
+                        className="w-1.5 h-1.5 rounded-none animate-bounce"
+                        style={{ background: KR, animationDelay: `${j * 150}ms` }}
+                      />
+                    ))}
+                  </div>
+                )}
+                {hasLive && (
+                  <StreamingScenesPreview
+                    scenes={liveStreamScenes}
+                    hasSpec={liveStreamHasSpec}
+                    hasStrategy={liveStreamHasStrategy}
                   />
-                ))}
+                )}
+                <div className="text-meta text-muted-foreground mt-1">{t("agent.craftingScenario")}</div>
               </div>
-              <div className="text-meta text-muted-foreground mt-1">{t("agent.craftingScenario")}</div>
             </div>
-          </div>
-        )}
+          );
+        })()}
         <div ref={messagesEndRef} />
       </div>
       {chatImages.length > 0 && (
@@ -2460,6 +2674,7 @@ export const AgentTab = ({ projectId, videoFormat = "vertical", lang = "en", onS
       {showSendModal && (
         <SendToContiModal
           scenes={scenes}
+          productionSpec={pendingSpec}
           projectId={projectId}
           onClose={() => setShowSendModal(false)}
           onSent={async (_, name) => {

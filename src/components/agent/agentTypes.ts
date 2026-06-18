@@ -1,5 +1,6 @@
 import type { VideoFormat } from "@/lib/conti";
 import { KR, KR_BG } from "@/lib/brand";
+import { parseProductionSpec, type ProductionSpec } from "@/lib/productionSpec";
 
 export { KR, KR_BG };
 export const KR_BG2 = "rgba(249,66,58,0.14)";
@@ -71,6 +72,8 @@ export interface Scene {
   camera_angle: string | null;
   location: string | null;
   mood: string | null;
+  /** 컷의 감정 비트 / 드라마적 의도. 시트 패널 연출 지시로 쓰임. */
+  emotional_beat?: string | null;
   duration_sec: number | null;
   tagged_assets: string[];
   conti_image_url: string | null;
@@ -295,6 +298,8 @@ export type ParsedScene = {
   camera_angle?: string;
   location?: string;
   mood?: string;
+  /** 컷의 감정 비트 / 드라마적 의도(예: 위압, 충격, 해방). 시트 패널 연출 지시로 쓰임. */
+  emotional_beat?: string;
   duration_sec?: number;
   tagged_assets?: string[];
   is_highlight?: boolean;
@@ -351,6 +356,7 @@ export type MessageSegment =
   | { type: "scene_alt"; data: ParsedSceneAlt | null }
   | { type: "scene_audit"; data: ParsedSceneAudit | null }
   | { type: "reference_decomposition"; data: ParsedReferenceDecomposition | null }
+  | { type: "spec"; data: ProductionSpec | null }
   | { type: "direction"; data: ParsedDirection | null };
 
 export type RightPanel = "scenes" | "mood";
@@ -618,7 +624,7 @@ export function parseMessageSegments(text: string, usedIds?: Set<string>): Messa
   const segments: MessageSegment[] = [];
   // ★ scene_alt 와 scene 의 매칭 우선순위 — `scene_alt` 가 더 길어 alternation 앞에 둔다.
   // ★ reference_decomposition 도 추가.
-  const regex = /```(reference_decomposition|scene_audit|scene_alt|scene|strategy|storylines|direction)\s*([\s\S]*?)```/g;
+  const regex = /```(reference_decomposition|scene_audit|scene_alt|scene|strategy|storylines|direction|spec)\s*([\s\S]*?)```/g;
   let lastIndex = 0,
     match: RegExpExecArray | null;
   let idMap: Record<string, string> = {};
@@ -635,9 +641,12 @@ export function parseMessageSegments(text: string, usedIds?: Set<string>): Messa
       | "scene_alt"
       | "scene_audit"
       | "reference_decomposition"
+      | "spec"
       | "direction";
     const bc = match[2].trim();
-    if (bt === "direction") {
+    if (bt === "spec") {
+      segments.push({ type: "spec", data: parseProductionSpec(cleanJsonString(bc)) });
+    } else if (bt === "direction") {
       try {
         segments.push({ type: "direction", data: JSON.parse(cleanJsonString(bc)) });
       } catch {
@@ -743,6 +752,16 @@ export function remapMessageForHistory(text: string, usedIds: Set<string>): stri
   return result;
 }
 
+/**
+ * 컷 카드 제목 전용 — `@태그` 의 선행 `@` 만 제거해 이름만 남긴다.
+ * 제목 필드는 태그 뱃지 렌더가 없어 `@bag` 처럼 raw @ 가 그대로 노출되기 때문.
+ * (description/location 등 뱃지로 렌더되는 필드에는 적용하지 않는다.)
+ * 토큰 시작(문자열 머리 또는 공백 뒤)의 `@` 만 떼어 이메일 등 중간 `@` 는 보존하고,
+ * 한글 조사("@bag이" → "bag이")는 자연스럽게 그대로 남긴다.
+ */
+const stripTitleMentionAt = (title: unknown): unknown =>
+  typeof title === "string" ? title.replace(/(^|\s)@([\p{L}\p{N}_]+)/gu, "$1$2") : title;
+
 export function extractScenesFromText(text: string): ParsedScene[] {
   const result: ParsedScene[] = [];
   // ★ `scene_alt` 와 충돌 방지: 정확히 ```scene\n 또는 ```scene\s 로 시작하되,
@@ -750,10 +769,29 @@ export function extractScenesFromText(text: string): ParsedScene[] {
   for (const m of [...text.matchAll(/```scene(?![a-z_])\s*([\s\S]*?)```/g)]) {
     try {
       const s = JSON.parse(cleanJsonString(m[1]));
-      if (s.scene_number && typeof s.scene_number === "number") result.push(s);
+      if (s.scene_number && typeof s.scene_number === "number") {
+        // 제목에서만 @ 제거 (태그를 끌어다 써도 제목엔 @ 가 노출되지 않게).
+        if (s.title != null) s.title = stripTitleMentionAt(s.title);
+        result.push(s);
+      }
     } catch {}
   }
   return result;
+}
+
+/**
+ * Extract the single production-spec fence from an assistant message. The agent
+ * emits at most one ```spec block per Phase-2 turn; if several appear (e.g. a
+ * re-issued spec on cut restructuring) the LAST valid one wins. Returns null when
+ * no usable spec parses, so callers leave any existing draft untouched.
+ */
+export function extractSpecFromText(text: string): ProductionSpec | null {
+  let latest: ProductionSpec | null = null;
+  for (const m of [...text.matchAll(/```spec(?![a-z_])\s*([\s\S]*?)```/g)]) {
+    const parsed = parseProductionSpec(cleanJsonString(m[1]));
+    if (parsed) latest = parsed;
+  }
+  return latest;
 }
 
 // ── Pending scenes persistence ──

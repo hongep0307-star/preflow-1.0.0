@@ -21,13 +21,13 @@
  */
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { Loader2, X, Trash2 } from "lucide-react";
+import { Loader2, X, Trash2, RefreshCw } from "lucide-react";
 import { DotGrid3x3 } from "@/components/icons/DotGrid3x3";
 import { Button } from "@/components/ui/button";
 import type { Scene } from "./contiTypes";
 import { normalizeGridHistory } from "./contiTypes";
 import { IMAGE_SIZE_MAP, FORMAT_RATIO } from "@/lib/conti";
-import { buildContactSheetPrompt } from "@/lib/cameraLibrary";
+import { buildContactSheetPrompt, CONTACT_SHEET_IDS, getPreset } from "@/lib/cameraLibrary";
 import { splitContactSheetDataUrl } from "@/lib/contactSheet";
 import { subscribeCamVarGen, getCamVarGen } from "./camVarGridState";
 import { useT } from "@/lib/uiLanguage";
@@ -102,6 +102,14 @@ const FOOTER_STYLE: React.CSSProperties = {
   background: "hsl(var(--surface-nav))",
 };
 
+const FOOTER_DIVIDER_STYLE: React.CSSProperties = {
+  width: 1,
+  height: 20,
+  background: "hsl(var(--border-subtle))",
+  margin: "0 2px",
+  flexShrink: 0,
+};
+
 const sectionLabelStyle: React.CSSProperties = {
   color: "hsl(var(--foreground) / 0.55)",
   fontSize: 10,
@@ -124,6 +132,16 @@ export interface CameraVariationsModalProps {
   /** Apply the chosen tile (ContiTab refines in the background + shows the
    *  scene card overlay); the modal closes right after. */
   onApplyTile: (tileDataUrl: string) => void;
+  /** Save the chosen tile as a NEW neighbouring cut (before/after this one),
+   *  inheriting the source cut's scene group + location. `cameraAngle` is the
+   *  selected tile's preset label (the 9 tiles map 1:1 to fixed angles) so the
+   *  new cut's camera_angle is pre-filled. The modal closes right after;
+   *  ContiTab does the crop/save/insert in the background. */
+  onSaveTileAsNeighbor: (
+    tileDataUrl: string,
+    position: "before" | "after",
+    cameraAngle?: string,
+  ) => void;
 }
 
 type Selection = { gridId: string; index: number } | null;
@@ -135,6 +153,7 @@ export function CameraVariationsModal({
   onGenerateGrid,
   onDeleteGrid,
   onApplyTile,
+  onSaveTileAsNeighbor,
 }: CameraVariationsModalProps) {
   const t = useT();
   const sourceUrl = scene.conti_image_url;
@@ -230,6 +249,19 @@ export function CameraVariationsModal({
     const tile = grid ? tilesByUrl[grid.rawUrl]?.[selected.index] : undefined;
     if (!tile) return;
     onApplyTile(tile);
+    onClose();
+  };
+
+  const handleSaveNeighbor = (position: "before" | "after") => {
+    if (!selected) return;
+    const grid = grids.find((g) => g.id === selected.gridId);
+    const tile = grid ? tilesByUrl[grid.rawUrl]?.[selected.index] : undefined;
+    if (!tile) return;
+    // The 9 tiles map 1:1 to fixed contact-sheet angles, so the tile index tells
+    // us which camera angle the user picked — pre-fill the new cut's angle.
+    const angleId = CONTACT_SHEET_IDS[selected.index];
+    const cameraAngle = angleId ? getPreset(angleId)?.label : undefined;
+    onSaveTileAsNeighbor(tile, position, cameraAngle);
     onClose();
   };
 
@@ -521,24 +553,52 @@ export function CameraVariationsModal({
             picker here; configured (quality only) in Settings, like the sheet. */}
         {sourceUrl && (
           <div style={FOOTER_STYLE}>
-            {selected && (
-              <div style={{ fontSize: 11, color: "hsl(var(--foreground) / 0.6)", marginRight: "auto" }}>
-                {t("cameraVar.selected")}{" "}
-                <b style={{ color: "hsl(var(--primary) / 0.9)" }}>
-                  {t("cameraVar.gridN", { n: total - grids.findIndex((g) => g.id === selected.gridId) })} ·{" "}
-                  {t("cameraVar.panelN", { n: selected.index + 1 })}
-                </b>
-              </div>
-            )}
+            {/* Left group: generate a (new) grid — separated from the
+                selection actions by the auto margin below. */}
             <Button
               variant={total > 0 || generating ? "outline" : "default"}
               size="sm"
               onClick={handleGenerate}
               disabled={generating}
+              style={{ marginRight: "auto" }}
             >
-              {generating && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+              {generating ? (
+                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+              )}
               {total > 0 ? t("cameraVar.generateAgain") : t("cameraVar.generate")}
             </Button>
+            {/* Right group: act on the selected tile. The divider visually
+                splits the "new cut" inserts from the "replace" apply. */}
+            {selected && (
+              <>
+                <div style={{ fontSize: 11, color: "hsl(var(--foreground) / 0.6)" }}>
+                  {t("cameraVar.selected")}{" "}
+                  <b style={{ color: "hsl(var(--primary) / 0.9)" }}>
+                    {t("cameraVar.gridN", { n: total - grids.findIndex((g) => g.id === selected.gridId) })} ·{" "}
+                    {t("cameraVar.panelN", { n: selected.index + 1 })}
+                  </b>
+                </div>
+                <div style={FOOTER_DIVIDER_STYLE} />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleSaveNeighbor("before")}
+                  title={t("cameraVar.saveAsPrevCutTitle")}
+                >
+                  {t("cameraVar.saveAsPrevCut")}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleSaveNeighbor("after")}
+                  title={t("cameraVar.saveAsNextCutTitle")}
+                >
+                  {t("cameraVar.saveAsNextCut")}
+                </Button>
+              </>
+            )}
             <Button
               size="sm"
               onClick={handleApply}

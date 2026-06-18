@@ -229,9 +229,46 @@ function createStorageBucket(bucket: string) {
   };
 }
 
+// ── 이미지 생성 동시 실행 상한 (전역 세마포어) ──────────────────────
+// 렌더러 → 로컬서버는 단일 HTTP/1.1 origin (http://127.0.0.1:<port>) 이라
+// DB·이미지 생성·파일 서빙이 Chromium 의 "host 당 동시 연결 6개" 제한을 모두
+// 공유한다. 다중 이미지 생성이 그 6 슬롯을 전부 장시간(수십 초) 점유하면,
+// 기존 이미지의 <img> GET 이나 DB 요청이 슬롯이 빌 때까지 큐에서 굶어
+// (검은 화면 / 로딩 멈춤) 버린다.
+//
+// 그래서 *모든* 이미지 생성이 거쳐가는 단일 지점(openai-image invoke)에서
+// in-flight 를 4 로 묶는다. 이러면:
+//   · feature(mood/sketches/conti/reference) 와 무관하게 전역으로 적용되고,
+//   · 사용자가 생성을 여러 번 눌러 배치가 겹쳐도 합산 상한이 지켜지며,
+//   · 항상 2 슬롯 이상이 이미지/DB 트래픽용으로 남는다.
+// (Chromium 이 어차피 6 으로 throttle 하므로 9 장을 동시에 띄워도 실제 병렬은
+//  6 이었다 — 4 로 낮춰도 체감 속도 손해는 작고 UI 응답성 이득이 크다.)
+const MAX_CONCURRENT_IMAGE_GEN = 4;
+let _imageGenActive = 0;
+const _imageGenWaiters: Array<() => void> = [];
+
+function acquireImageGenSlot(): Promise<void> {
+  if (_imageGenActive < MAX_CONCURRENT_IMAGE_GEN) {
+    _imageGenActive += 1;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => _imageGenWaiters.push(resolve));
+}
+
+function releaseImageGenSlot(): void {
+  // 대기자가 있으면 슬롯을 그대로 넘긴다(active 카운트 유지). 없으면 반납.
+  const next = _imageGenWaiters.shift();
+  if (next) next();
+  else _imageGenActive -= 1;
+}
+
 // Functions adapter — AI APIs still use IPC handlers, proxied through local HTTP
 const functionsAdapter = {
   async invoke(functionName: string, options: { body: any }) {
+    // 이미지 생성만 전역 세마포어로 게이팅 — 위 주석 참조. 다른 함수
+    // (claude-proxy/openai-chat 등) 는 다량 병렬로 뜨지 않으므로 제외.
+    const gated = functionName === "openai-image";
+    if (gated) await acquireImageGenSlot();
     try {
       const res = await fetch(`${LOCAL_SERVER_BASE_URL}/api/${functionName}`, {
         method: "POST",
@@ -253,7 +290,26 @@ const functionsAdapter = {
     } catch (err: any) {
       console.error(`[functions] ${functionName} exception:`, err.message);
       return { data: null, error: { message: err.message ?? String(err) } };
+    } finally {
+      if (gated) releaseImageGenSlot();
     }
+  },
+  /**
+   * 스트리밍(SSE) 전용 호출. `invoke` 와 달리 응답을 버퍼링(res.json())하지
+   * 않고 fetch Response 를 그대로 돌려준다 — 호출부(src/lib/llm.ts)가
+   * `response.body` 리더로 SSE delta 를 점진 파싱한다.
+   */
+  async stream(functionName: string, options: { body: any }): Promise<Response> {
+    const res = await fetch(`${LOCAL_SERVER_BASE_URL}/api/${functionName}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...LOCAL_SERVER_AUTH_HEADERS },
+      body: JSON.stringify(options.body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    return res;
   },
 };
 

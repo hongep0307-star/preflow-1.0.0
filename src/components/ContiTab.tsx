@@ -185,6 +185,13 @@ const _versionsByProject = new Map<string, SceneVersion[]>();
 const CONTI_PENDING_GENERATE_KEY_PREFIX = "preflow_conti_pending_generate:";
 const CONTI_PENDING_SINGLE_KEY_PREFIX = "preflow_conti_pending_single:";
 
+// 버전 탭 전용 폰트 체인. tailwind 의 font-mono 와 동일한 mono 폴백을 유지하되
+// generic `monospace` 앞에 Pretendard 를 끼워, 라틴/숫자(ver. 1)는 그대로 mono 로
+// 두면서 한글 글리프(버전·새로 만들기)만 Pretendard 로 렌더되게 한다. (mono 체인엔
+// 한글이 없어 기존엔 Windows 시스템 고딕으로 폴백돼 어색했음.)
+const VERSION_TAB_FONT_FAMILY =
+  '"SF Mono", "Cascadia Mono", "Cascadia Code", "Consolas", "Liberation Mono", "Pretendard Variable", "Pretendard", monospace';
+
 // 전체 생성 / 스타일 변형의 동시 실행 상한. 예전에는 상한 없이 전 씬을 한꺼번에
 // 병렬로 띄워, 응답들이 비슷한 시점에 돌아오며 (이미지 디코드 + 캔버스 크롭 +
 // PNG 인코딩 + 스토어/DB write-back) 메인스레드를 포화시켜 탭/워크스페이스 이동이
@@ -3581,7 +3588,11 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
     await updateVersionScenes(renumbered);
   };
 
-  const handleInsertSceneAt = async (insertIdx: number, groupPref?: "before" | "after" | "new") => {
+  const handleInsertSceneAt = async (
+    insertIdx: number,
+    groupPref?: "before" | "after" | "new",
+    opts?: { contiImageUrl?: string; cameraAngle?: string; suppressToast?: boolean },
+  ): Promise<Scene | null> => {
     const snapshot = getSceneState(projectId)?.scenes ?? activeScenes;
     const nextSceneTitleNumber = snapshot.slice(0, insertIdx).filter((s) => !s.is_transition).length + 1;
     const tempNumber = 90000 + (Date.now() % 10000);
@@ -3625,19 +3636,19 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
         sequence: inheritedSequence,
         title: formatDefaultShotTitle(nextSceneTitleNumber),
         description: null,
-        camera_angle: null,
+        camera_angle: opts?.cameraAngle ?? null,
         location: inheritedLocation,
         mood: null,
         duration_sec: null,
         tagged_assets: inheritedBgTags,
-        conti_image_url: null,
+        conti_image_url: opts?.contiImageUrl ?? null,
         source: "conti",
       })
       .select()
       .single();
     if (error || !data) {
       toast({ title: t("conti.toast.addShotFailed"), description: error?.message, variant: "destructive" });
-      return;
+      return null;
     }
     // await 이후 모듈 store 재조회.
     const latest = getSceneState(projectId)?.scenes ?? activeScenes;
@@ -3661,7 +3672,12 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
       renumbered.map((s) => supabase.from("scenes").update({ scene_number: s.scene_number }).eq("id", s.id)),
     );
     await updateVersionScenes(renumbered);
-    toast({ title: t("conti.toast.shotInsertedPosition", { n: insertIdx + 1 }) });
+    // Callers that drive their own progress/result UI (e.g. Angle Preset →
+    // prev/next cut) pass suppressToast to avoid a duplicate position toast.
+    if (!opts?.suppressToast) {
+      toast({ title: t("conti.toast.shotInsertedPosition", { n: insertIdx + 1 }) });
+    }
+    return renumbered.find((s) => s.id === (data as Scene).id) ?? (data as Scene);
   };
 
   // ── Manual scene-boundary controls (card "씬" dropdown) ──
@@ -4721,6 +4737,12 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
               .sort((a, b) => a.scene_number - b.scene_number)
           : activeScenes;
 
+      // Version-scoped production spec (set/palette/cast/cinematography). When the
+      // active version predates the spec feature it is null and the sheet builder
+      // falls back to the deterministic shotPlan.globalSpec synthesis.
+      const activeVersionSpec =
+        versionsRef.current.find((v) => v.id === activeVersionIdRef.current)?.production_spec ?? null;
+
       const { generateStoryboardSheet } = await import("@/lib/storyboardSheet");
       const res = await generateStoryboardSheet({
         scenes: selected as unknown as import("@/lib/storyboardSheet").StoryboardSheetScene[],
@@ -4729,6 +4751,7 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
         videoFormat,
         styleAnchor: currentStyle?.style_prompt ?? null,
         briefAnalysis: briefAnalysisRef.current,
+        productionSpec: activeVersionSpec,
         quality: getGptQualityDefault("storyboardSheet"),
         onStage: (stage) => setStoryboardPlanning(stage === "planning"),
         // 사용자가 수동으로 묶었으면 시트 프롬프트의 씬 경계도 LLM 숏플랜이 아닌
@@ -4848,6 +4871,10 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
     // any leftovers defensively. Uses the same generatingSceneIds mechanism as
     // regenerate so the card overlay is identical and survives tab navigation.
     const refiningSceneIds: string[] = [];
+    // Collect NB2 refine errors so a silent center-crop fallback (which quietly
+    // collapses cut quality) surfaces its real cause to the user instead of
+    // only logging to the console.
+    const refineFailures: string[] = [];
     try {
       const { splitContactSheetDataUrl, trimWhiteBorderDataUrl, dataUrlToBase64 } = await import("@/lib/contactSheet");
       const { refineTileToFormat, centerCropToFormatDataUrl } = await import("@/lib/storyboardSheet");
@@ -4902,6 +4929,7 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
               });
             } catch (refineErr) {
               console.warn("[sheet] NB2 refine failed, falling back to center-crop:", refineErr);
+              refineFailures.push(refineErr instanceof Error ? refineErr.message : String(refineErr));
               const cropped = await centerCropToFormatDataUrl(trimmed, videoFormat);
               const { data } = await supabase.functions.invoke("openai-image", {
                 body: {
@@ -4960,6 +4988,17 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
       );
       if (applied > 0) setAppliedSheetId(row.id);
       toast({ title: t("conti.sheet.applyDone"), description: t("conti.sheet.applyDoneDesc", { n: applied }) });
+      // Surface NB2 refine failures: when the refine throws we silently
+      // center-crop (low-res, unrefined look). Show the real cause so the user
+      // doesn't have to dig through dev-server logs to learn why quality dropped.
+      if (refineFailures.length > 0) {
+        console.error("[sheet] refine fell back to center-crop for", refineFailures.length, "cut(s). First error:", refineFailures[0]);
+        toast({
+          variant: "destructive",
+          title: `리파인 실패 ${refineFailures.length}/${pairs.length} — center-crop 폴백(저화질)`,
+          description: refineFailures[0],
+        });
+      }
     } catch (e) {
       toast({ variant: "destructive", title: t("conti.sheet.applyFailed"), description: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -6103,11 +6142,17 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
                         >
                           <span
                             className="font-mono text-micro font-bold px-1.5 py-0.5 text-white shrink-0"
-                            style={{ background: isActive ? KR : "rgba(255,255,255,0.15)", borderRadius: 0 }}
+                            style={{
+                              background: isActive ? KR : "rgba(255,255,255,0.15)",
+                              borderRadius: 0,
+                              fontFamily: VERSION_TAB_FONT_FAMILY,
+                            }}
                           >
                             {t("conti.versionShort", { num: idx + 1 })}
                           </span>
-                          <span className="tracking-wide">{v.version_name || `v${v.version_number}`}</span>
+                          <span className="tracking-wide" style={{ fontFamily: VERSION_TAB_FONT_FAMILY }}>
+                            {v.version_name || `v${v.version_number}`}
+                          </span>
                         </button>
                         <button
                           onClick={(e) => {
@@ -6135,7 +6180,13 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
             <button
               onClick={() => setShowNewVersionModal(true)}
               className="flex items-center gap-1 px-2 py-1.5 text-2xs font-mono tracking-wide hover:text-foreground transition-colors shrink-0"
-              style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.25)" }}
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                color: "rgba(255,255,255,0.25)",
+                fontFamily: VERSION_TAB_FONT_FAMILY,
+              }}
             >
               <Plus className="w-2.5 h-2.5" />
               {t("conti.new")}
@@ -7134,6 +7185,102 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
                   if (!(target.id in prev)) return prev;
                   const n = { ...prev };
                   delete n[target.id];
+                  return n;
+                });
+              }
+            })();
+          }}
+          onSaveTileAsNeighbor={(tileDataUrl, position, cameraAngle) => {
+            // Save the chosen tile as a NEW neighbouring cut (prev/next) instead
+            // of replacing the current one. To give immediate feedback (the modal
+            // closes right away), we INSERT the new cut FIRST — empty, adjacent to
+            // the source, inheriting its scene group + location and the selected
+            // angle label — show the standard generating overlay on it, then fill
+            // the image in the background (same fast trim+crop path as Apply, no
+            // model refine). This mirrors how every other generation surfaces.
+            const target = cameraVariationsScene;
+            if (!target) return;
+            void (async () => {
+              const scenes = getSceneState(projectId)?.scenes ?? activeScenes;
+              const srcIdx = scenes.findIndex((s) => s.id === target.id);
+              if (srcIdx < 0) return;
+              // before → insert at the source's slot and join the cut AFTER it
+              //          (= the source). after → insert right after and join the
+              //          cut BEFORE it (= the source). Either way the new cut
+              //          lands in the source's scene group + location.
+              const insertIdx = position === "before" ? srcIdx : srcIdx + 1;
+              const groupPref: "before" | "after" = position === "before" ? "after" : "before";
+              const inserted = await handleInsertSceneAt(insertIdx, groupPref, {
+                cameraAngle,
+                suppressToast: true,
+              });
+              if (!inserted) {
+                toast({ title: t("conti.toast.addShotFailed"), variant: "destructive" });
+                return;
+              }
+              const newId = inserted.id;
+              setEditGeneratingIds((prev) => new Set(prev).add(newId));
+              setSceneStages((prev) => ({ ...prev, [newId]: "generating" }));
+              setGeneratingSceneVersionMap((prev) => ({ ...prev, [newId]: activeVersionIdRef.current }));
+              try {
+                const { centerCropToFormatDataUrl, HEADROOM_VERTICAL_ANCHOR } =
+                  await import("@/lib/storyboardSheet");
+                const { trimWhiteBorderDataUrl, dataUrlToBase64 } = await import("@/lib/contactSheet");
+                const trimmed = await trimWhiteBorderDataUrl(tileDataUrl);
+                const cropped = await centerCropToFormatDataUrl(
+                  trimmed,
+                  videoFormat,
+                  HEADROOM_VERTICAL_ANCHOR,
+                  1.02,
+                );
+                const { data } = await supabase.functions.invoke("openai-image", {
+                  body: {
+                    mode: "save_local",
+                    imageBase64: dataUrlToBase64(cropped),
+                    projectId,
+                    sceneNumber: inserted.scene_number,
+                    suffix: "camvar-neighbor",
+                    folder: "contis",
+                  },
+                });
+                const savedUrl = (data as { publicUrl?: string } | null)?.publicUrl;
+                if (!savedUrl) throw new Error("neighbor save returned no image URL");
+                await applyGeneratedSceneImage(newId, savedUrl, null);
+                toast({
+                  title: t(
+                    position === "before" ? "conti.toast.prevCutCreated" : "conti.toast.nextCutCreated",
+                  ),
+                  action: (
+                    <ToastAction
+                      altText={t("conti.toast.viewScene")}
+                      onClick={() => scrollToScene(newId, inserted.scene_number)}
+                    >
+                      {t("conti.toast.viewScene")}
+                    </ToastAction>
+                  ),
+                });
+              } catch (err: any) {
+                console.error("[cameraVar] save as neighbor failed:", err);
+                toast({
+                  title: t("conti.toast.addShotFailed"),
+                  description: err?.message ?? String(err),
+                  variant: "destructive",
+                });
+              } finally {
+                setEditGeneratingIds((prev) => {
+                  const n = new Set(prev);
+                  n.delete(newId);
+                  return n;
+                });
+                setSceneStages((prev) => {
+                  const n = { ...prev };
+                  delete n[newId];
+                  return n;
+                });
+                setGeneratingSceneVersionMap((prev) => {
+                  if (!(newId in prev)) return prev;
+                  const n = { ...prev };
+                  delete n[newId];
                   return n;
                 });
               }

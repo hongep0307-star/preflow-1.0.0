@@ -1,4 +1,5 @@
 import type { VideoFormat } from "@/lib/conti";
+import type { ProductionSpec } from "@/lib/productionSpec";
 import { KR, KR_BG } from "@/lib/brand";
 
 // ─── Color constants ───
@@ -76,6 +77,8 @@ export interface Scene {
   camera_angle: string | null;
   location: string | null;
   mood: string | null;
+  /** 컷의 감정 비트 / 드라마적 의도. 시트 패널 연출 지시로 쓰임. 레거시 행엔 없을 수 있어 옵셔널. */
+  emotional_beat?: string | null;
   duration_sec: number | null;
   tagged_assets: string[];
   conti_image_url: string | null;
@@ -227,6 +230,9 @@ export interface SceneVersion {
   version_number: number;
   version_name: string | null;
   scenes: any[];
+  /** Version-scoped global production spec (set/palette/cast/cinematography).
+   *  Null for legacy versions created before the spec feature. */
+  production_spec?: ProductionSpec | null;
   created_at: string;
   is_active: boolean;
   display_order: number;

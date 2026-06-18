@@ -7,6 +7,7 @@ import { VideoPlayer } from "./VideoPlayer";
 import { GifPlayer, GifFallback } from "./GifPlayer";
 import { NotesPanel } from "./NotesPanel";
 import { RegionView } from "./RegionView";
+import { PdfView } from "./PdfView";
 import { docViewMode } from "./linkPlatform";
 import { vt, type ViewerLang } from "./i18n";
 import type { ReferenceItem } from "./types";
@@ -43,17 +44,24 @@ export function PreviewModal({ item, language = "en" }: PreviewModalProps) {
    *  컴포넌트에 콜백을 등록하면 그 콜백을 ref 에 보관해 부모가 호출. */
   const seekSecRef = useRef<((sec: number) => void) | null>(null);
   const seekFrameRef = useRef<((idx: number) => void) | null>(null);
+  /* PDF(슬라이드 노트) 행 클릭 → 해당 페이지로 점프. video/gif 의 seek 와 동일
+   *  패턴 — PdfView 가 registerSeekPage 로 핸들러를 등록하면 ref 에 보관. */
+  const seekPageRef = useRef<((pageIndex: number) => void) | null>(null);
   const registerSeekSec = useCallback((fn: (sec: number) => void) => {
     seekSecRef.current = fn;
   }, []);
   const registerSeekFrame = useCallback((fn: (idx: number) => void) => {
     seekFrameRef.current = fn;
   }, []);
+  const registerSeekPage = useCallback((fn: (pageIndex: number) => void) => {
+    seekPageRef.current = fn;
+  }, []);
 
   /* active note highlight 상태 — 자식이 update 콜백으로 매 timeupdate /
-   *  매 프레임마다 알려준다. RAF 쓰로틀은 자식 쪽이 책임. */
+   *  매 프레임 / 페이지 전환마다 알려준다. RAF 쓰로틀은 자식 쪽이 책임. */
   const [activeAtSec, setActiveAtSec] = useState<number | undefined>(undefined);
   const [activeFrameIndex, setActiveFrameIndex] = useState<number | undefined>(undefined);
+  const [activePageIndex, setActivePageIndex] = useState<number | undefined>(undefined);
   /* item 변경 시 초기화 — 이전 자료의 active 가 새 자료 NotesPanel 에 잘못
    *  강조되는 것을 막는다. */
   /* seek 핸들러 ref 는 여기서 null 로 초기화하지 않는다 — 자식(VideoPlayer/
@@ -64,6 +72,7 @@ export function PreviewModal({ item, language = "en" }: PreviewModalProps) {
   useEffect(() => {
     setActiveAtSec(undefined);
     setActiveFrameIndex(undefined);
+    setActivePageIndex(undefined);
   }, [item.id]);
 
   return (
@@ -74,8 +83,10 @@ export function PreviewModal({ item, language = "en" }: PreviewModalProps) {
           language={language}
           registerSeekSec={registerSeekSec}
           registerSeekFrame={registerSeekFrame}
+          registerSeekPage={registerSeekPage}
           onTimeUpdate={setActiveAtSec}
           onFrameUpdate={setActiveFrameIndex}
+          onPageUpdate={setActivePageIndex}
         />
       </div>
       {showNotesPanel ? (
@@ -87,8 +98,10 @@ export function PreviewModal({ item, language = "en" }: PreviewModalProps) {
             item={item}
             onSeekSec={(sec) => seekSecRef.current?.(sec)}
             onSeekFrame={(idx) => seekFrameRef.current?.(idx)}
+            onSeekPage={(page) => seekPageRef.current?.(page)}
             activeAtSec={activeAtSec}
             activeFrameIndex={activeFrameIndex}
+            activePageIndex={activePageIndex}
             language={language}
           />
         </aside>
@@ -102,8 +115,10 @@ interface MediaBranchProps {
   language: ViewerLang;
   registerSeekSec: (fn: (sec: number) => void) => void;
   registerSeekFrame: (fn: (idx: number) => void) => void;
+  registerSeekPage: (fn: (pageIndex: number) => void) => void;
   onTimeUpdate: (sec: number) => void;
   onFrameUpdate: (idx: number) => void;
+  onPageUpdate: (pageIndex: number) => void;
 }
 
 function MediaBranch({
@@ -111,8 +126,10 @@ function MediaBranch({
   language,
   registerSeekSec,
   registerSeekFrame,
+  registerSeekPage,
   onTimeUpdate,
   onFrameUpdate,
+  onPageUpdate,
 }: MediaBranchProps) {
   /* GIF 의 unsupported 폴백 — ImageDecoder 가 없으면 GifPlayer 가 부모에게
    *  알리고, 같은 자리에서 GifFallback 으로 교체. */
@@ -149,26 +166,22 @@ function MediaBranch({
   }
   if (item.kind === "doc") {
     const mode = docViewMode(item);
-    if (mode === "pdf" && item.file_url) return <PdfView item={item} />;
+    if (mode === "pdf" && item.file_url) {
+      return (
+        <PdfView
+          item={item}
+          notes={item.timestamp_notes ?? []}
+          registerSeek={registerSeekPage}
+          onPageUpdate={onPageUpdate}
+          language={language}
+        />
+      );
+    }
     if (mode === "audio" && item.file_url) return <AudioView item={item} />;
     return <UnsupportedDocView item={item} language={language} />;
   }
   /* image / webp / file_url 없는 자료들 — 정지 이미지 + 줌. */
   return <ImageView item={item} />;
-}
-
-/* ────────────── PDF ────────────── */
-
-function PdfView({ item }: { item: ReferenceItem }) {
-  return (
-    <div className="flex h-full w-full items-center justify-center bg-black">
-      <iframe
-        src={item.file_url ?? undefined}
-        title={item.title}
-        className="h-full w-full border-0 bg-white"
-      />
-    </div>
-  );
 }
 
 /* ────────────── Audio ────────────── */

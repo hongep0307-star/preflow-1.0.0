@@ -1,4 +1,5 @@
 import { nativeImage } from "electron";
+import type { ServerResponse } from "node:http";
 import { getSettings } from "./settings";
 import { getStorageBasePath } from "./paths";
 import { getLocalServerBaseUrl } from "./constants";
@@ -84,6 +85,83 @@ export async function handleOpenAIResponses(body: any) {
     throw new Error(errMsg);
   }
   return await response.json();
+}
+
+/* ─────────────────────────────────────────────────────────────
+ *  Streaming proxies (SSE)
+ *
+ *  非스트리밍 핸들러(handleClaudeProxy / handleOpenAIResponses)는 응답을
+ *  통째로 버퍼링해 반환하므로, 긴 컷 기획 응답에서 첫 글자까지 수십 초가
+ *  걸린다. 아래 스트리밍 변형은 업스트림(Anthropic/OpenAI)의 SSE 바이트를
+ *  클라이언트(렌더러)로 그대로 파이프해서, 디스패처(src/lib/llm.ts)가
+ *  provider 별 delta 를 파싱하며 점진 렌더하도록 한다.
+ *
+ *  local-server 가 이 두 함수를 호출하기 전에 text/event-stream 헤더를 이미
+ *  내보낸 상태다. 여기서는 res.write(...) 로 chunk 만 흘리고, res.end() 는
+ *  호출자(local-server)가 finally 에서 처리한다.
+ * ───────────────────────────────────────────────────────────── */
+
+function writeSSEError(res: ServerResponse, message: string) {
+  try {
+    res.write(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`);
+  } catch {
+    /* socket already closed */
+  }
+}
+
+/** 업스트림 SSE Response 의 바이트를 그대로 클라이언트로 전달. */
+async function pipeUpstreamSSE(upstream: Response, res: ServerResponse) {
+  if (!upstream.ok || !upstream.body) {
+    const txt = await upstream.text().catch(() => "");
+    let msg = `HTTP ${upstream.status}`;
+    try {
+      msg = JSON.parse(txt)?.error?.message ?? msg;
+    } catch {
+      if (txt) msg = txt.slice(0, 300);
+    }
+    writeSSEError(res, msg);
+    return;
+  }
+  const reader = (upstream.body as ReadableStream<Uint8Array>).getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) res.write(Buffer.from(value));
+  }
+}
+
+export async function handleClaudeProxyStream(body: any, res: ServerResponse) {
+  const settings = getSettings();
+  const apiKey = settings.anthropic_api_key;
+  if (!apiKey) {
+    writeSSEError(res, "ANTHROPIC_API_KEY가 설정되지 않았습니다.");
+    return;
+  }
+  const upstream = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+    body: JSON.stringify({ ...body, stream: true }),
+  });
+  await pipeUpstreamSSE(upstream, res);
+}
+
+export async function handleOpenAIChatStream(body: any, res: ServerResponse) {
+  const settings = getSettings();
+  const apiKey = settings.openai_api_key;
+  if (!apiKey) {
+    writeSSEError(res, "OPENAI_API_KEY가 설정되지 않았습니다.");
+    return;
+  }
+  if (apiKey.startsWith("sk-ant-")) {
+    writeSSEError(res, "OpenAI 필드에 Anthropic 키가 입력되어 있습니다. Settings에서 올바른 OpenAI API Key를 입력하세요.");
+    return;
+  }
+  const upstream = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ ...body, stream: true }),
+  });
+  await pipeUpstreamSSE(upstream, res);
 }
 
 export async function handleEnhanceInpaintPrompt(body: any) {
@@ -402,6 +480,7 @@ async function handleOpenaiImageInner(body: any) {
       imageSize,
       model: vModel,
       quality: vQuality,
+      nb2ImageSize,
     } = body as {
       sourceImageUrl?: string;
       referenceImageUrls?: string[];
@@ -409,6 +488,7 @@ async function handleOpenaiImageInner(body: any) {
       imageSize?: string;
       model?: string;
       quality?: string;
+      nb2ImageSize?: "1K" | "2K";
     };
     if (!sourceImageUrl || !prompt) {
       return { error: "Missing required fields: sourceImageUrl, prompt" };
@@ -427,7 +507,7 @@ async function handleOpenaiImageInner(body: any) {
         buf = await callGptVisionGenerate(openaiKey, prompt, size, refUrls, gptM, vq);
         usedModel = gptM;
       } else {
-        buf = await callVertexNB2(settings, prompt, refUrls, sizeToNB2Aspect(size));
+        buf = await callVertexNB2(settings, prompt, refUrls, sizeToNB2Aspect(size), nb2ImageSize);
         usedModel = "nano-banana-2";
       }
       return { imageBase64: buf.toString("base64"), mime: "image/png", usedModel };

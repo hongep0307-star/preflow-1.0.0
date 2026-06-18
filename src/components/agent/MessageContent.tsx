@@ -182,6 +182,9 @@ export const MessageContent = ({
         if (seg.type === "storylines")
           return <StorylinesCard key={i} options={seg.options} onSelect={(t) => onSend?.(t)} renderText={renderWithTags} />;
         if (seg.type === "scene") return null;
+        // The production spec is consumed as draft state (and persisted on the
+        // version), not rendered inline in the chat bubble.
+        if (seg.type === "spec") return null;
         if (seg.type === "scene_alt") {
           const d = seg.data;
           if (!d) return null;

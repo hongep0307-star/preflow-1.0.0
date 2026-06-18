@@ -116,16 +116,17 @@ export const IMAGE_GEN_FEATURES: ImageGenFeatureSpec[] = [
     defaultQuality: "high",
   },
   {
-    // 컷 리파인 — 콘티 카드의 "리파인(고해상)" 액션. 기존 컷을 GPT-edits
-    // (input_fidelity) 경로로 업스케일/디테일 향상한다. ChangeAngle 과 동일하게
-    // GPT 계열만 의미가 있어(NB2 는 충실 업스케일 부적합) 두 GPT 모델만 노출하고,
-    // 둘 다 품질 파라미터가 적용된다. 디테일 직결이라 기본 high.
+    // 컷 리파인 — 콘티 카드의 "리파인(고해상)" 액션. 기존 컷을 edit 경로로
+    // 업스케일/디테일 향상한다. GPT 두 모델은 GPT-edits(input_fidelity) 로,
+    // NB2 는 Vertex edit(source=refs[0]) 로 라우팅된다. GPT 는 품질 파라미터가
+    // 적용되고 NB2 는 무시한다. 디테일 직결이라 기본 high.
     feature: "refine",
     labelKey: "settings.imgGen.refine",
     descKey: "settings.imgGen.refineDesc",
     models: [
       { id: "gpt-image-2", isGpt: true },
       { id: "gpt-image-1.5", isGpt: true },
+      { id: "nano-banana-2", isGpt: false },
     ],
     defaultModel: "gpt-image-2",
     defaultQuality: "high",

@@ -40,18 +40,42 @@ export interface ShotPlanGroup {
 export interface ShotPlanCut {
   /** 1-based panel index (position in the cut order). */
   panel: number;
-  /** Normalized English shot size + angle + movement. */
+  /** Normalized English shot size + angle + lens (no camera movement — the
+   *  sheet is a still frame, so dolly/push/pan adds nothing and reads as
+   *  repetitive noise). */
   camera?: string;
   /** What continues from the previous cut (character position, props, lighting state). */
   carryOver?: string;
   /** Terse top-down blocking: who is where + which side the camera sits on. */
   blocking?: string;
+  /** Emotional beat / dramatic intent for this panel (e.g. shock, dominance,
+   *  reconciliation). Drives dynamic, non-repetitive shot design. */
+  beat?: string;
+}
+
+/**
+ * Global production spec synthesized once per sheet from brief + cuts. Unlike the
+ * image-reference SPACE LOCK (which only fires when a background asset photo is
+ * attached), this is a TEXT-ONLY anchor so a single shared space, palette, and
+ * composition language can be enforced across every panel even with no reference
+ * image. Best-effort: any/all fields may be absent.
+ */
+export interface GlobalSpec {
+  /** One terse paragraph: the SINGLE shared space (architecture, materials,
+   *  lighting, atmosphere) every panel must take place in. */
+  setLock?: string;
+  /** Named colors applied identically to every panel. */
+  colorPalette?: string[];
+  /** Shared composition/shot language (negative space, contrast, framing). */
+  compositionNotes?: string;
 }
 
 export interface ShotPlan {
   throughLine: string;
   groups: ShotPlanGroup[];
   cuts: ShotPlanCut[];
+  /** Text-only global anchor (set lock + palette + composition). */
+  globalSpec?: GlobalSpec;
 }
 
 export interface GenerateShotPlanOptions {
@@ -82,12 +106,17 @@ You receive an ordered list of cuts (panels) for one short video. Treat them as 
 
 Output STRICT JSON ONLY (no markdown, no code fences, no commentary) with this exact shape:
 {
+  "global_spec": {
+    "set_lock": "one terse paragraph: the SINGLE shared space (architecture, materials, lighting, atmosphere) that EVERY panel takes place in",
+    "color_palette": ["named color", "named color"],
+    "composition_notes": "one short line of shared shot/composition language (negative space, contrast, framing)"
+  },
   "through_line": "one sentence describing the whole video's narrative arc",
   "groups": [
     { "sequence": 1, "panels": [1,2], "location": "short", "time_of_day": "short", "lighting": "short", "screen_direction": "left-to-right" }
   ],
   "cuts": [
-    { "panel": 1, "camera": "normalized english shot size + angle + movement", "carry_over": "what continues from the previous cut (empty for panel 1)", "blocking": "terse top-down: who is where, which side the camera is on" }
+    { "panel": 1, "camera": "normalized english shot size + angle + lens (NO camera movement — this is a still frame)", "carry_over": "what continues from the previous cut (empty for panel 1)", "blocking": "terse top-down: who is where, which side the camera is on", "beat": "the panel's emotional beat / dramatic intent (e.g. shock, dominance, reveal)" }
   ]
 }
 
@@ -95,7 +124,9 @@ Rules:
 - "panels" / "panel" use the 1-based panel numbers exactly as given in the input.
 - Every input panel must appear in exactly one group and have exactly one cut entry.
 - "screen_direction" is one of: "left-to-right", "right-to-left", "neutral".
-- "camera" must be ENGLISH cinematography terms even if the input camera note is in another language.
+- "camera" must be ENGLISH cinematography terms even if the input camera note is in another language. Include shot size + angle + a lens (e.g. 24mm, 85mm); do NOT include camera movement (dolly / push-in / pan / handheld) — the storyboard is a STILL frame, so movement reads as repetitive noise.
+- "global_spec": derive from the campaign context (tone, color grade) and the cuts' locations. "set_lock" must describe ONE coherent space consistent with the cuts' primary location, so every panel can share it even when no reference photo exists. Use named colors (e.g. "matte black", "burnished gold") for "color_palette".
+- "beat": each cut gets a DIFFERENT, concrete emotional beat where the story allows, so panels are not flat repeats of one another.
 - Keep every string terse (a short phrase). No prose, no extra keys.`;
 
 interface RawGroup {
@@ -111,15 +142,23 @@ interface RawCut {
   camera?: unknown;
   carry_over?: unknown;
   blocking?: unknown;
+  beat?: unknown;
 }
 interface RawPlan {
   through_line?: unknown;
   groups?: unknown;
   cuts?: unknown;
+  global_spec?: unknown;
 }
 
 const asString = (v: unknown): string | undefined =>
   typeof v === "string" && v.trim() ? v.trim() : undefined;
+
+const asStringArray = (v: unknown): string[] | undefined => {
+  if (!Array.isArray(v)) return undefined;
+  const arr = v.map((x) => (typeof x === "string" ? x.trim() : "")).filter(Boolean);
+  return arr.length ? arr : undefined;
+};
 
 const asScreenDirection = (v: unknown): ScreenDirection | undefined =>
   v === "left-to-right" || v === "right-to-left" || v === "neutral" ? v : undefined;
@@ -222,14 +261,27 @@ export async function generateShotPlan(
             camera: asString(c.camera),
             carryOver: asString(c.carry_over),
             blocking: asString(c.blocking),
+            beat: asString(c.beat),
           }))
           .filter((c) => Number.isInteger(c.panel) && validPanels.has(c.panel))
       : [];
 
-    // Need at least the through-line OR usable structure to be worth injecting.
-    if (!throughLine && groups.length === 0 && cuts.length === 0) return null;
+    let globalSpec: GlobalSpec | undefined;
+    const rawSpec = parsed.global_spec;
+    if (rawSpec && typeof rawSpec === "object") {
+      const gs = rawSpec as { set_lock?: unknown; color_palette?: unknown; composition_notes?: unknown };
+      const setLock = asString(gs.set_lock);
+      const colorPalette = asStringArray(gs.color_palette);
+      const compositionNotes = asString(gs.composition_notes);
+      if (setLock || colorPalette || compositionNotes) {
+        globalSpec = { setLock, colorPalette, compositionNotes };
+      }
+    }
 
-    return { throughLine, groups, cuts };
+    // Need at least the through-line OR usable structure to be worth injecting.
+    if (!throughLine && groups.length === 0 && cuts.length === 0 && !globalSpec) return null;
+
+    return { throughLine, groups, cuts, globalSpec };
   } catch (err) {
     console.warn("[shotPlan] generate failed", err);
     return null;

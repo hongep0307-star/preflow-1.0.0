@@ -285,6 +285,7 @@ function createTables(d: Database.Database) {
       motion_in TEXT,
       motion_out TEXT,
       transition_to_next TEXT,
+      emotional_beat TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     )
@@ -342,6 +343,14 @@ function createTables(d: Database.Database) {
   } catch (_) { /* column already exists */ }
   try {
     d.exec(`ALTER TABLE scenes ADD COLUMN transition_to_next TEXT`);
+  } catch (_) { /* column already exists */ }
+
+  // emotional_beat: 컷의 감정 비트 / 드라마적 의도(예: shock, dominance, reconciliation).
+  // 단조로운 정면·정적 반복을 막고 컷마다 다른 액션·연출을 유도하는 양성 신호로,
+  // 시트 프롬프트의 패널 라인에 주입된다. 단순 TEXT(자유 문구)라 JSON 직렬화 불필요.
+  // 레거시 로컬 DB 호환용 idempotent ALTER.
+  try {
+    d.exec(`ALTER TABLE scenes ADD COLUMN emotional_beat TEXT`);
   } catch (_) { /* column already exists */ }
 
   d.exec(`
@@ -461,12 +470,21 @@ function createTables(d: Database.Database) {
       version_number INTEGER NOT NULL,
       version_name TEXT,
       scenes TEXT DEFAULT '[]',
+      production_spec TEXT,
       display_order INTEGER,
       is_active INTEGER DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     )
   `);
+
+  // production_spec: 버전 단위 전역 프로덕션 스펙(JSON) — 단일 세트 디자인 + 명명
+  // 컬러 팔레트 + 캐릭터 구분 + 촬영 노트. 모든 패널에 동일 강제되어 배경 레퍼런스
+  // 이미지가 없어도 공간/룩/캐스트 일관성을 보장한다. 없으면(구버전) 시트 생성기가
+  // shotPlan.globalSpec 합성으로 graceful fallback. 레거시 DB 호환용 idempotent ALTER.
+  try {
+    d.exec(`ALTER TABLE scene_versions ADD COLUMN production_spec TEXT`);
+  } catch (_) { /* column already exists */ }
 
   d.exec(`
     CREATE TABLE IF NOT EXISTS style_presets (

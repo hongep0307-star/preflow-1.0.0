@@ -394,9 +394,10 @@ export async function generateTransitionSketches(
   onBatchDone?: (urls: string[]) => void,
 ): Promise<string[]> {
   const count = Math.max(1, opts.count);
-  // 동시 상한 없이 전체 후보를 병렬로 생성하되, 시작 시점만 i × STAGGER_MS 로 엇갈려
-  // launch burst 를 분산한다. (콘티 전체 생성 / 무드 생성과 동일한 패턴) 부분 실패는
-  // allSettled 로 견디고, 전부 실패할 때만 throw 한다.
+  // 전체 후보를 병렬로 생성하되, 시작 시점만 i × STAGGER_MS 로 엇갈려 launch
+  // burst 를 분산한다. (콘티 전체 생성 / 무드 생성과 동일한 패턴) 부분 실패는
+  // allSettled 로 견디고, 전부 실패할 때만 throw 한다. 실제 동시 in-flight 상한은
+  // supabase 어댑터의 전역 세마포어(MAX_CONCURRENT_IMAGE_GEN)가 책임진다.
   const STAGGER_MS = 600;
   const settled = await Promise.allSettled(
     Array.from({ length: count }, (_, i) =>

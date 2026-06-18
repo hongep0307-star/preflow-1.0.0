@@ -27,11 +27,13 @@ import type {
 } from "../shared/workspace";
 import {
   handleClaudeProxy,
+  handleClaudeProxyStream,
   handleEnhanceInpaintPrompt,
   handleTranslateAnalysis,
   handleAnalyzeReferenceImages,
   handleOpenaiImage,
   handleOpenAIResponses,
+  handleOpenAIChatStream,
 } from "./api-handlers";
 import { runImageSearch } from "./lensSearch";
 import { handleYoutubeIngest } from "./youtube-handler";
@@ -1086,6 +1088,34 @@ export function startLocalServer(): Promise<number> {
         // 좁혀 destructure 비용을 없앤다 — 안전성은 downstream validator 에
         // 위임하는 기존 설계(=routes 가 dumb proxy) 와 일관.
         const body = (await parseBody(req)) as Record<string, any>;
+
+        // ── 스트리밍(SSE) 라우트 ───────────────────────────────────────
+        // 제너릭 JSON 응답(아래 if/else → res.end(JSON.stringify))과 달리,
+        // 여기서는 text/event-stream 헤더를 먼저 내보내고 핸들러가 업스트림
+        // SSE 를 res 로 직접 파이프한다. 헤더를 이미 쓴 뒤이므로 바깥 catch 의
+        // res.writeHead 재호출을 피하려 자체 try/catch 후 즉시 return 한다.
+        if (url === "/api/claude-proxy-stream" || url === "/api/openai-chat-stream") {
+          res.writeHead(200, {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache, no-transform",
+            Connection: "keep-alive",
+            "X-Accel-Buffering": "no",
+          });
+          try {
+            if (url === "/api/claude-proxy-stream") await handleClaudeProxyStream(body, res);
+            else await handleOpenAIChatStream(body, res);
+          } catch (err) {
+            try {
+              res.write(`event: error\ndata: ${JSON.stringify({ error: errorMessage(err) })}\n\n`);
+            } catch {
+              /* socket already closed */
+            }
+          } finally {
+            res.end();
+          }
+          return;
+        }
+
         let result: unknown;
 
         if (url === "/db/select") {

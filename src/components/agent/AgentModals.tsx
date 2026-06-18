@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { type Scene } from "./agentTypes";
+import { type ProductionSpec } from "@/lib/productionSpec";
 import { ModalTitle } from "@/components/common/ui-primitives";
 import { useT } from "@/lib/uiLanguage";
 
@@ -43,8 +44,8 @@ export const ConfirmScenesModal = ({ pendingCount, existingCount, onClose, onCon
 };
 
 /* ━━━━━ SendToContiModal ━━━━━ */
-export const SendToContiModal = ({ scenes, projectId, onClose, onSent }: {
-  scenes: Scene[]; projectId: string; onClose: () => void; onSent: (id: string, name: string) => void | Promise<void>;
+export const SendToContiModal = ({ scenes, productionSpec, projectId, onClose, onSent }: {
+  scenes: Scene[]; productionSpec?: ProductionSpec | null; projectId: string; onClose: () => void; onSent: (id: string, name: string) => void | Promise<void>;
 }) => {
   const { toast } = useToast();
   const t = useT();
@@ -62,7 +63,7 @@ export const SendToContiModal = ({ scenes, projectId, onClose, onSent }: {
       const num = rows.reduce((max, row) => Math.max(max, row.version_number ?? 0), 0) + 1;
       const displayOrder = rows.reduce((max, row) => Math.max(max, row.display_order ?? 0), 0) + 1;
       const name = versionName.trim() || `ver.${num}`;
-      const { data: newVer, error } = await supabase.from("scene_versions").insert({ project_id: projectId, version_number: num, version_name: name, display_order: displayOrder, scenes: scenes as any, is_active: true }).select().single();
+      const { data: newVer, error } = await supabase.from("scene_versions").insert({ project_id: projectId, version_number: num, version_name: name, display_order: displayOrder, scenes: scenes as any, production_spec: (productionSpec ?? null) as any, is_active: true }).select().single();
       if (error || !newVer) throw new Error(error?.message ?? "Version creation failed");
       await supabase.from("projects").update({ active_version_id: newVer.id }).eq("id", projectId);
       toast({ title: t("agent.sentToConti", { name }) });

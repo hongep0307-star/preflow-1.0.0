@@ -150,9 +150,9 @@ export function RegionView({
           >
             {/* 라벨 — 메인 앱 RegionOverlay 와 동일하게 박스 좌상단에서 위로
              *  -translate-y-full 로 띄움. 박스가 컨테이너 상단에 너무 붙어
-             *  있어 라벨이 잘릴 위험이 있을 땐(boxTop < 22) 박스 안쪽 상단으로
+             *  있어 라벨이 잘릴 위험이 있을 땐(boxTop ≤ 44) 박스 안쪽 상단으로
              *  자동 폴백. */}
-            <RegionLabel text={note.text} aboveSafely={px.top >= 22} />
+            <RegionLabel text={note.text} aboveSafely={px.top > 44} boxWidth={px.width} />
           </div>
         );
       })}
@@ -160,14 +160,31 @@ export function RegionView({
   );
 }
 
-function RegionLabel({ text, aboveSafely }: { text: string; aboveSafely: boolean }) {
+function RegionLabel({ text, aboveSafely, boxWidth }: { text: string; aboveSafely: boolean; boxWidth: number }) {
   return (
     <div
       className={cn(
-        "pointer-events-none absolute left-0 max-w-[240px] truncate bg-primary px-1.5 py-0.5 text-2xs text-primary-foreground shadow-sm",
-        aboveSafely ? "top-0 -translate-y-full" : "top-0",
+        "pointer-events-none absolute top-0 leading-snug bg-primary px-1.5 py-0.5 text-2xs text-primary-foreground shadow-sm",
+        aboveSafely && "-translate-y-full",
       )}
-      style={{ borderRadius: 0 }}
+      /* 줄바꿈/정렬 정책은 메인 앱 RegionOverlay 라벨과 1:1 로 맞춘다.
+         - left: -2 → 박스 border-2(2px) 바깥 가장자리와 라벨 좌측을 정렬.
+           absolute 자식의 left:0 은 부모 *테두리 안쪽* 기준이라, 보정이
+           없으면 라벨이 박스 선보다 2px 안쪽으로 들어가 박스만 좌측으로
+           튀어나와(아웃라인 도드라짐) 보인다.
+         - truncate 대신 normal + overflowWrap:anywhere 로 긴 코멘트를 전체
+           표시. (Tailwind break-words 는 absolute 요소의 min-content 폭 계산에
+           영향을 주지 않아 공백 없는 긴 문자열이 잘리는 버그가 있어 인라인으로
+           강제.) */
+      style={{
+        borderRadius: 0,
+        left: -2,
+        maxWidth: Math.max(240, boxWidth),
+        whiteSpace: "normal",
+        overflowWrap: "anywhere",
+        wordBreak: "break-word",
+        lineHeight: 1.35,
+      }}
     >
       {text}
     </div>

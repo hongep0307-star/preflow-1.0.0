@@ -22,8 +22,8 @@
  *       content[i] = { type: "text", text } | { type: "image_url", image_url: { url: "data:<media>;base64,<data>" } }
  */
 import { getModelMeta, type ModelId } from "./modelCatalog";
-import { callClaude } from "./claude";
-import { callOpenAI } from "./openai";
+import { callClaude, callClaudeStream, toClaudeSystem } from "./claude";
+import { callOpenAI, callOpenAIStream } from "./openai";
 
 export type LLMRole = "user" | "assistant";
 
@@ -52,6 +52,12 @@ export interface CallLLMArgs {
   /** JSON 모드 — OpenAI 만 강제 가능. Claude 는 system prompt 로 유도. */
   response_format?: "json_object" | "text";
   temperature?: number;
+  /**
+   * GPT-5.x reasoning 강도. 가벼운 턴은 "low"/"minimal" 로 추론 시간을 줄이고,
+   * 컷 기획처럼 사고가 필요한 턴만 "medium" 으로. OpenAI provider 에만 적용되며,
+   * 미지정 시 주입하지 않아 기존 호출 동작을 바꾸지 않는다.
+   */
+  reasoningEffort?: "minimal" | "low" | "medium" | "high";
 }
 
 export interface CallLLMResult {
@@ -140,7 +146,7 @@ export async function callLLM(args: CallLLMArgs): Promise<CallLLMResult> {
     const raw = await callClaude({
       model: meta.id,
       max_tokens: maxTokens,
-      system: args.system,
+      system: toClaudeSystem(args.system),
       messages: toClaudeMessages(args.messages),
     });
     return {
@@ -152,17 +158,7 @@ export async function callLLM(args: CallLLMArgs): Promise<CallLLMResult> {
   }
 
   if (meta.provider === "openai") {
-    const body: any = {
-      model: meta.id,
-      messages: toOpenAIMessages(args.system, args.messages),
-      max_completion_tokens: maxTokens,
-    };
-    if (args.response_format === "json_object") {
-      body.response_format = { type: "json_object" };
-    }
-    if (typeof args.temperature === "number") {
-      body.temperature = args.temperature;
-    }
+    const body = buildOpenAIBody(meta.id, args, maxTokens);
     const raw = await callOpenAI(body);
     return {
       text: flattenOpenAIText(raw),
@@ -170,6 +166,151 @@ export async function callLLM(args: CallLLMArgs): Promise<CallLLMResult> {
       modelUsed: meta.id,
       provider: "openai",
     };
+  }
+
+  throw new Error(`Unsupported provider for model: ${args.model}`);
+}
+
+function buildOpenAIBody(modelId: string, args: CallLLMArgs, maxTokens: number): any {
+  const body: any = {
+    model: modelId,
+    messages: toOpenAIMessages(args.system, args.messages),
+    max_completion_tokens: maxTokens,
+  };
+  if (args.response_format === "json_object") {
+    body.response_format = { type: "json_object" };
+  }
+  if (typeof args.temperature === "number") {
+    body.temperature = args.temperature;
+  }
+  if (args.reasoningEffort) {
+    body.reasoning_effort = args.reasoningEffort;
+  }
+  return body;
+}
+
+// ── 스트리밍 ─────────────────────────────────────────────────────────────
+
+export interface CallLLMStreamCallbacks {
+  /** delta 도착마다 호출. fullText = 누적 텍스트, deltaText = 이번 조각. */
+  onDelta: (fullText: string, deltaText: string) => void;
+  /** 취소 신호 — abort 되면 스트림 소비를 멈춘다. */
+  signal?: AbortSignal;
+}
+
+/** SSE 라인 파서: data/event 라인을 이벤트 단위로 yield. */
+async function* sseEvents(res: Response, signal?: AbortSignal): AsyncGenerator<{ event?: string; data: string }> {
+  const body = res.body;
+  if (!body) return;
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let curEvent: string | undefined;
+  try {
+    for (;;) {
+      if (signal?.aborted) break;
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).replace(/\r$/, "");
+        buf = buf.slice(nl + 1);
+        if (line === "") {
+          curEvent = undefined;
+          continue;
+        }
+        if (line.startsWith("event:")) curEvent = line.slice(6).trim();
+        else if (line.startsWith("data:")) yield { event: curEvent, data: line.slice(5).trim() };
+      }
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+async function consumeAnthropicSSE(res: Response, cb: CallLLMStreamCallbacks): Promise<string> {
+  let full = "";
+  for await (const { event, data } of sseEvents(res, cb.signal)) {
+    if (data === "[DONE]") break;
+    let json: any;
+    try {
+      json = JSON.parse(data);
+    } catch {
+      continue;
+    }
+    if (event === "error" || json?.type === "error") {
+      const err = json?.error;
+      throw new Error((typeof err === "string" ? err : err?.message) ?? json?.error ?? "Claude stream error");
+    }
+    if (json?.type === "content_block_delta" && json?.delta?.type === "text_delta") {
+      const d: string = json.delta.text ?? "";
+      if (d) {
+        full += d;
+        cb.onDelta(full, d);
+      }
+    }
+  }
+  return full;
+}
+
+async function consumeOpenAISSE(res: Response, cb: CallLLMStreamCallbacks): Promise<string> {
+  let full = "";
+  for await (const { event, data } of sseEvents(res, cb.signal)) {
+    if (data === "[DONE]") break;
+    let json: any;
+    try {
+      json = JSON.parse(data);
+    } catch {
+      continue;
+    }
+    if (event === "error" || json?.error) {
+      const err = json?.error;
+      throw new Error((typeof err === "string" ? err : err?.message) ?? "OpenAI stream error");
+    }
+    const d = json?.choices?.[0]?.delta?.content;
+    if (typeof d === "string" && d) {
+      full += d;
+      cb.onDelta(full, d);
+    }
+  }
+  return full;
+}
+
+/**
+ * 스트리밍 LLM 호출. 토큰이 도착하는 대로 `onDelta` 로 흘리고, 종료 시
+ * 비스트리밍 callLLM 과 동일한 CallLLMResult 를 반환한다(raw 는 스트림이라 null).
+ */
+export async function callLLMStream(
+  args: CallLLMArgs,
+  cb: CallLLMStreamCallbacks,
+): Promise<CallLLMResult> {
+  const meta = getModelMeta(args.model);
+  if (!meta) {
+    throw new Error(`Unknown model id: ${args.model}`);
+  }
+  const maxTokens = args.max_tokens ?? meta.maxOutputTokens;
+
+  if (meta.provider === "anthropic") {
+    const res = await callClaudeStream({
+      model: meta.id,
+      max_tokens: maxTokens,
+      system: toClaudeSystem(args.system),
+      messages: toClaudeMessages(args.messages),
+    });
+    const text = await consumeAnthropicSSE(res, cb);
+    return { text, raw: null, modelUsed: meta.id, provider: "anthropic" };
+  }
+
+  if (meta.provider === "openai") {
+    const body = buildOpenAIBody(meta.id, args, maxTokens);
+    const res = await callOpenAIStream(body);
+    const text = await consumeOpenAISSE(res, cb);
+    return { text, raw: null, modelUsed: meta.id, provider: "openai" };
   }
 
   throw new Error(`Unsupported provider for model: ${args.model}`);

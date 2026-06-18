@@ -989,6 +989,12 @@ brand_film 인 경우에만 추가:
 - 반드시 네거티브 프롬프트 형태 (예: "logo-only first frame", "flat product shot without motion", "generic stock footage cliché")
 - 최소 2개 이상 제공
 
+[pacing.duration — HARD 제약 (최우선)]
+- pacing.duration 은 후속 에이전트가 컷을 설계할 때 따르는 영상 총 길이다. 브리프에 길이가 명시되어 있으면 반드시 그 값을 사용한다.
+- 브리프가 "15초", "15s", "15 sec" 등을 명시 → pacing.duration = "15s" 고정. 내용이 많아 보여도 임의로 "30s" 나 "60s" 로 바꾸지 않는다.
+- 브리프에 길이가 전혀 없을 때만 콘텐츠 규모를 보고 추론한다.
+- production_notes.format_recommendation 의 마스터 길이(예: "마스터: 15s / 9:16 / 1080×1920")는 반드시 pacing.duration 과 일치해야 한다. 두 필드가 다르면 분석 오류다.
+
 [pacing.sequence_count / pacing.shot_count 자동 결정]
 - sequence_count 는 큰 이야기 단락 수다. 예: Hook / 상품 발견 / 기능 비교 / CTA.
 - shot_count 는 후속 Agent/Conti 카드가 될 실제 Shot/컷 수다. 한 컷은 한 이미지 생성 단위다.
@@ -1103,10 +1109,12 @@ const countRangeForDuration = (
   duration?: string,
 ): { sequence_count: { min: number; max: number; recommended: number }; shot_count: { min: number; max: number; recommended: number } } => {
   const d = duration ?? "";
-  if (/6/.test(d)) return { sequence_count: { min: 1, max: 2, recommended: 1 }, shot_count: { min: 2, max: 4, recommended: 3 } };
-  if (/30/.test(d)) return { sequence_count: { min: 5, max: 7, recommended: 6 }, shot_count: { min: 10, max: 16, recommended: 12 } };
-  if (/45/.test(d)) return { sequence_count: { min: 7, max: 10, recommended: 8 }, shot_count: { min: 14, max: 22, recommended: 18 } };
+  // 순서 중요: 더 긴 값(60, 45, 30)을 먼저 검사해야 "60s"가 /6/ 에 먼저 걸리는 오매칭을 피한다.
   if (/60/.test(d)) return { sequence_count: { min: 8, max: 12, recommended: 10 }, shot_count: { min: 18, max: 30, recommended: 24 } };
+  if (/45/.test(d)) return { sequence_count: { min: 7, max: 10, recommended: 8 }, shot_count: { min: 14, max: 22, recommended: 18 } };
+  if (/30/.test(d)) return { sequence_count: { min: 5, max: 7, recommended: 6 }, shot_count: { min: 10, max: 16, recommended: 12 } };
+  if (/\b6s?\b/i.test(d)) return { sequence_count: { min: 1, max: 2, recommended: 1 }, shot_count: { min: 2, max: 4, recommended: 3 } };
+  // 15s 또는 길이 미명시 → 기본값
   return { sequence_count: { min: 3, max: 4, recommended: 3 }, shot_count: { min: 6, max: 10, recommended: 8 } };
 };
 

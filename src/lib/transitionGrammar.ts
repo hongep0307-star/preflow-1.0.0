@@ -438,6 +438,75 @@ const DELIVERABLE_BY_KEY: Partial<Record<TransitionKey, TransitionDeliverable>> 
   // everything else defaults to peak_still (AI-generated bridge frame).
 };
 
+/* ── 실행 레시피 (편집자/모션 디자이너 관점) ───────────────────────────
+ * `guide` 는 "브릿지 정지 프레임 1장" 을 생성하기 위한 영문 묘사다(이미지 모델
+ * 용). 그것만으로는 "사람이 편집기에서 실제로 어떻게 실행하는가" 가 빠져 있어
+ * 사용자에게 전환을 설명할 때 답이 추상적이 된다.
+ *
+ * EXECUTION_BY_KEY 는 각 기법을 "단박에 그려지는 실행 단위" 로 풀어 쓴 한국어
+ * 레시피다. 가능한 한 다음 축을 담는다(전부는 아님, 기법별로 관련된 것만):
+ *   · 길이(프레임/초) + 컷 타입(하드컷/모핑)
+ *   · 무엇이 움직이고 무엇이 고정인가 (카메라/요소/레이어)
+ *   · 경계 정렬 기준 또는 시선 유도(eye-trace) — A·B 의 무엇을 같은 화면
+ *     위치·스케일·각도로 맞춰야 하는가
+ *   · 사운드 싱크 큐
+ *   · 적합/부적합 톤 + 실패 시 대안 기법
+ *
+ * KNOWLEDGE_TRANSITION_GRAMMAR 가 이 값을 각 기법 라인의 "실행(편집 레시피)"
+ * 서브라인으로 함께 주입한다. 프레임 수치는 24–30fps 기준 권장값(절대치 아님). */
+const EXECUTION_BY_KEY: Record<TransitionKey, string> = {
+  WHIP_PAN:
+    "길이 4~8프레임. A 끝에서 카메라(또는 전체 레이어)를 한 방향으로 급가속해 모션블러 줄무늬를 만들고, 같은 방향·같은 속도로 B 첫 프레임이 감속하며 멈춘다. A·B 의 블러 방향축을 일치시켜야 '한 번의 휘두름' 으로 읽힌다. 팁: 패닝 축에 수직인 강한 수직선(기둥·문틀)에서 컷하면 가림이 자연스럽다. 컷에 '훅' 스와이프 사운드. 안 맞으면 그냥 하드컷.",
+  ZOOM_PUNCH:
+    "길이 3~6프레임. A 를 주 피사체 중심으로 급격히 인(또는 아웃)시켜 방사형 블러를 만들고, 그 소실점 화면위치에 B 의 주 피사체를 같은 좌표로 배치해 펀치아웃한다. 정렬 핵심: A 의 소실점 = B 주 피사체의 화면 위치. 빠른 편집 구간에서만, 남발 시 멀미. 컷에 저음 '둠'/임팩트.",
+  DOLLY_ZOOM:
+    "본래 한 컷 안에서 쓰는 심리효과라 전환용으론 드물다. 전환으로 쓸 땐 A 후반 0.5~1초간 피사체 스케일은 고정한 채 배경 원근만 수축/팽창시키고, 그 불안 정점에서 B 로 하드컷. 카메라 이동과 줌이 반대방향인 게 핵심. 광고 전환으론 과해서 권장 빈도 낮음.",
+  CAMERA_ROLL:
+    "길이 6~12프레임. A 프레임을 렌즈축으로 45~90° 회전시키며 회전 반대방향으로 모션블러를 깔고, 그 각운동량을 이어 B 가 같은 방향에서 수평으로 정착한다. A 끝 각도와 B 시작 각도가 연속되게. 화면 중앙 피사체를 두 컷이 공유하면 안정적. 사운드: 휙 도는 '우-웅'.",
+  ARC_SWEEP:
+    "길이 0.5~1초. A·B 가 공유하는 단일 피사체(인물/제품)를 화면 중앙에 고정한 채 배경만 A환경→B환경으로 호를 그리며 스윕한다. 중앙 피사체의 스케일·위치를 두 컷에서 동일하게. ⚠ 공유 피사체가 없으면 쓰지 말 것 — 크로스오버 포스터처럼 보인다.",
+  LIGHT_LEAK:
+    "길이 8~15프레임. A 끝에서 한쪽 모서리부터 따뜻한 빛이 번져 화면을 하얗게 덮고(피크), 그 하얀 정점에서 B 가 같은 밝기에서 빠져나오며 드러난다. A 빛 번짐 방향 = B 빛 빠짐 방향. 감성·시간경과 컷에 적합, 액션엔 부적합. 사운드는 없거나 부드러운 스월.",
+  LENS_FLARE:
+    "길이 6~12프레임. A 의 가장 강한 실광원에서 가로 플레어가 화면을 쓸고 지나가 가장 밝은 순간 B 로 교체한다. 플레어 스윕 방향과 광원의 화면위치를 A·B 가 맞춰야 자연스럽다. 따뜻·시네마틱 톤. 사운드: 부드러운 '휨'.",
+  DEFOCUS_PULL:
+    "길이 8~14프레임. A 를 완전히 아웃포커스(보케 덩어리)로 흐려 형태만 남기고, 같은 색·같은 보케 위치에서 B 가 초점으로 잡혀 들어온다. A 흐림 색감과 B 색감이 비슷할수록 매끄럽다. 감성 전환. 사운드 거의 없음.",
+  GLITCH:
+    "길이 3~8프레임을 2~4회 깜빡임으로. A 를 블록 깨짐·스캔라인 찢김으로 파괴하다 가장 깨진 프레임에서 B 로 점프한다. 효과가 주인공이라 정밀 정렬 불필요. 디지털/사이버 톤 전용. 사운드: 비트크러시·지직 노이즈 필수. 깜빡임 2~3회 넘기지 말 것.",
+  DATAMOSH:
+    "길이 6~12프레임. A 의 모션벡터가 유지된 채 B 의 픽셀색이 밀려들어와 번진다. A 에 큰 움직임(팬·제스처)이 있는 지점에서 컷해야 모션벡터가 살아 효과가 강하다 — 정적 컷에선 약하다. 사운드: 글리치 텍스처.",
+  CHROMATIC_SPLIT:
+    "길이 4~8프레임. 컷 경계 전후로 RGB 채널을 좌우로 벌렸다 모으며 B 로 전환한다. 가벼운 강조용이라 단독보다 GLITCH·ZOOM_PUNCH 와 결합. 빠른 비트 구간. 사운드: 짧은 전자음.",
+  VHS_WARP:
+    "길이 6~12프레임. A 에 트래킹 밴드·세로 롤 찢김을 넣어 신호 붕괴 정점에서 B 로 넘긴다. 레트로·노스탤지어 톤 전용(현대적·프리미엄 톤엔 부적합). 사운드: 테이프 워블·트래킹 노이즈.",
+  MORPH:
+    "길이 8~16프레임. A 실루엣이 B 실루엣으로 고무처럼 연속 변형한다. A·B 피사체의 포즈·형태·화면크기가 비슷해야 성립한다(둥근 것→둥근 것). 변형 중심점을 두 형태가 공유하게. ⚠ 안 닮은 형태끼리는 쓰지 말 것 — 흉하게 녹는다. 사운드: 부드러운 '위잉'.",
+  LIQUID_WARP:
+    "길이 8~14프레임. A 를 물/유리 너머처럼 출렁이게 왜곡하다 왜곡 정점에서 B 로 넘긴다. 카메라 고정, 왜곡 레이어만 작동. A→B 색감을 이어 흐르게 하면 매끄럽다. 사운드: 물·점성 텍스처.",
+  SHATTER:
+    "길이 6~12프레임. A 가 유리처럼 조각나 날아가고 조각 사이 틈으로 B 가 흐릿한 배경으로 드러나다 B 로 정착한다. 파편 비산 방향을 한쪽으로 통일해 시선을 정리한다. 충격·반전 비트에. 사운드: 유리 깨짐 임팩트 필수.",
+  PRISM:
+    "길이 4~10프레임. A 를 프리즘처럼 분광 복제(적/청 고스트)했다 한 점으로 수렴하며 B 로 넘긴다. 분광 수렴 중심점 = B 주 피사체 위치. 화려·몽환 톤. 사운드: 반짝이는 셔머.",
+  SMOKE_VEIL:
+    "길이 10~18프레임. A 를 연기/안개가 삼켜 형태가 사라지는 정점(가장 짙을 때)에서 B 가 같은 연무에서 빠져나온다. 연기 진입 방향 = B 노출 방향. ⚠ A·B 주인공을 연기 사이에 나란히 두지 말 것 — 크로스오버가 된다. 사운드: 휘파람 바람·'휘익'.",
+  WATER_RIPPLE:
+    "길이 8~14프레임. A 화면에 충격점에서 동심원 파문이 퍼져 굴절 왜곡 정점에서 B 로 넘긴다. 충격점(파문 중심) = B 주 피사체 위치면 동기가 분명하다. 회상·꿈·정화 비트. 사운드: 물방울·첨벙.",
+  TIME_FREEZE:
+    "정지 0.5~1.5초 후 컷. A 피사체 주변의 입자·물방울·천을 공중에 정지시키고(원하면 카메라만 회전) 그 정지 정점에서 B 로 넘긴다. A 안에서 끝나는 효과라 B 는 미리 보이지 않는다. 영웅·결정적 순간. 사운드: '슈웅' 후 정적, 컷에서 재시동.",
+  SHAPE_WIPE:
+    "길이 6~12프레임. 도형(원·바·대각선·브랜드마크)이 화면을 쓸며 그 마스크 안에서 B 가 드러나고 A 는 밀려난다. 도형이 A 의 어떤 요소(공·헤드라이트·로고)에서 자라나오게 하면 동기가 분명하다. 와이프 방향·도형 종류를 정할 것. 사운드: 스와이프.",
+  IRIS_WIPE:
+    "길이 8~14프레임. 원형 조리개가 A 의 한 초점에서 닫혔다 B 의 같은 화면위치에서 열린다. 정렬 핵심: A 닫힘 중심 = B 열림 중심을 같은 좌표로. 레트로·포커스 강조. 사운드: 휙 닫힘.",
+  LAYER_SLIDE:
+    "길이 8~14프레임, ease-out + 살짝 오버슈트. B 가 한 모서리에서 레이어로 밀려들어와 A 를 덮는다. 슬라이드 방향을 A 안의 움직임(이동하는 피사체·스와이프 제스처)과 일치시키면 동기가 생긴다. 하위요소 패럴랙스로 깊이. 사운드: 스와이프/'우-웅'.",
+  LAYER_PUSH:
+    "길이 6~12프레임, 등속 또는 ease-in-out. A 가 한쪽으로 밀려나며 반대쪽에서 B 가 같이 밀려들어온다(겹침 없이 판넬처럼). 리듬감 있는 컷이라 음악 비트에 맞춘다. 밀림 축(좌우/상하)을 정할 것. 사운드: 탁 붙는 푸시음.",
+  KINETIC_TYPO:
+    "길이 8~16프레임. 핵심 단어/숫자/CTA 가 화면을 가로지르며 스케일·슬라이드하다 그 글자가 마스크가 되어 B 를 드러내거나 와이프한다. 글자가 화면을 가장 덮는 순간이 컷 지점. 어떤 단어가·어디로 움직이며·B 를 마스크하는지 정할 것. 사운드: 타이포 임팩트·비트 동기.",
+  GRAPHIC_MATCH:
+    "길이 1프레임 하드컷(기본) 또는 6~8프레임 모핑. A 의 형태/선/색덩어리/구도를 B 의 대응 요소와 같은 화면좌표·스케일·각도로 겹치게 정렬한다(예: A 둥근 헤드라이트→B 둥근 로고). 정렬 기준점을 명시하고 시선을 그 요소에 고정. 카메라 고정, 요소만 연속. ⚠ 위치·크기가 안 맞으면 매치가 붕괴 → SHAPE_WIPE 로 대체. 사운드: 컷에 짧은 악센트.",
+};
+
 /** Effective production medium for a technique (default "both").
  *  Reads the BY_KEY maps (authoritative) so it has no init-order dependency
  *  on TRANSITION_MAP (declared later). */
@@ -448,6 +517,14 @@ export function transitionMedium(key: TransitionKey): TransitionMedium {
 /** Effective TR-card output type for a technique (default "peak_still"). */
 export function transitionDeliverable(key: TransitionKey): TransitionDeliverable {
   return DELIVERABLE_BY_KEY[key] ?? "peak_still";
+}
+
+/** Editor-facing execution recipe (Korean) for a technique. Empty string if
+ *  none registered. Surfaced to the model via KNOWLEDGE_TRANSITION_GRAMMAR so
+ *  transition explanations are concrete (frames, alignment, sound, fallback)
+ *  rather than a restatement of the concept. */
+export function transitionExecution(key: TransitionKey): string {
+  return EXECUTION_BY_KEY[key] ?? "";
 }
 
 /** Technique keys usable in MOTION direction mode (excludes `live`-only). */
@@ -572,14 +649,19 @@ export const KNOWLEDGE_TRANSITION_GRAMMAR: string = (() => {
     "    · Anchor=Technique — the effect itself owns the frame; subjects are degraded into texture / ghosts / fragments.",
     "  Honor the anchor as a hard constraint, not a suggestion.",
     "",
+    "각 기법에는 '실행(편집 레시피)' 서브라인이 붙어 있다(한국어). 이는 정지 프레임 생성용 guide 와 별개로, 편집자가 실제로 실행하는 방법(길이/프레임·무엇이 이동/고정·경계 정렬·시선·사운드·실패 대안)이다. 사용자가 두 컷의 전환을 '어떻게 하느냐'고 물으면 개념을 되풀이하지 말고 이 실행 레시피를 그 두 컷의 실제 내용에 대입해 구체 수치·화면 위치로 답한다.",
+    "",
   ];
   for (const group of TRANSITION_CATEGORIES) {
     lines.push(`## ${group.category}`);
     for (const t of group.items) {
       const med = transitionMedium(t.key);
       const del = transitionDeliverable(t.key);
+      const exec = transitionExecution(t.key);
       lines.push(
-        `- ${t.key} (${t.label}) [${anchorLabel(t.anchor)}] [medium=${med}] [deliverable=${del}]: ${t.guide}`,
+        `- ${t.key} (${t.label}) [${anchorLabel(t.anchor)}] [medium=${med}] [deliverable=${del}]: ${t.guide}${
+          exec ? `\n    실행(편집 레시피, 사용자 설명용): ${exec}` : ""
+        }`,
       );
     }
     lines.push("");

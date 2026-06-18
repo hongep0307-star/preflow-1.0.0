@@ -17,6 +17,8 @@ export interface OpenAIChatPayload {
   /** JSON 강제 출력 모드 — DeepAnalysis 같은 구조화 응답에서 사용 */
   response_format?: { type: "json_object" } | { type: "text" };
   temperature?: number;
+  /** GPT-5.x reasoning 모델의 추론 강도. 낮을수록 응답이 빠르다. */
+  reasoning_effort?: "minimal" | "low" | "medium" | "high";
 }
 
 export interface OpenAIChatResponse {
@@ -41,4 +43,9 @@ export const callOpenAI = async (payload: OpenAIChatPayload): Promise<OpenAIChat
     throw new Error(data.error.message ?? "OpenAI API error");
   }
   return data as OpenAIChatResponse;
+};
+
+/** 스트리밍 변형 — SSE Response 를 그대로 반환(디스패처가 파싱). */
+export const callOpenAIStream = async (payload: OpenAIChatPayload): Promise<Response> => {
+  return supabase.functions.stream("openai-chat-stream", { body: payload });
 };

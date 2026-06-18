@@ -38,10 +38,13 @@ export interface NotesPanelProps {
   onSeekSec?: (sec: number) => void;
   /** GIF 에서만 의미 있음. */
   onSeekFrame?: (frameIndex: number) => void;
-  /** 현재 active 행 — 영상의 currentTime / GIF 의 frameIndex 와 가장 가까운
-   *  노트를 시각적으로 강조. 미전달 시 강조 없음. */
+  /** PDF(슬라이드 노트)에서만 의미 있음. 행 클릭 시 그 페이지로 점프. */
+  onSeekPage?: (pageIndex: number) => void;
+  /** 현재 active 행 — 영상의 currentTime / GIF 의 frameIndex / PDF 의 페이지와
+   *  일치하는 노트를 시각적으로 강조. 미전달 시 강조 없음. */
   activeAtSec?: number;
   activeFrameIndex?: number;
+  activePageIndex?: number;
   language: ViewerLang;
 }
 
@@ -49,8 +52,10 @@ export function NotesPanel({
   item,
   onSeekSec,
   onSeekFrame,
+  onSeekPage,
   activeAtSec,
   activeFrameIndex,
+  activePageIndex,
   language,
 }: NotesPanelProps) {
   const sorted = useMemo(() => sortNotes(item.timestamp_notes ?? [], item.kind), [item.kind, item.timestamp_notes]);
@@ -120,7 +125,7 @@ export function NotesPanel({
             key={note.id}
             note={note}
             kind={item.kind}
-            isActive={isActiveNote(note, item.kind, activeAtSec, activeFrameIndex)}
+            isActive={isActiveNote(note, item.kind, activeAtSec, activeFrameIndex, activePageIndex)}
             onEnter={(event) => handleRowEnter(note.id, event)}
             onLeave={handleRowLeave}
             onClick={() => {
@@ -128,6 +133,8 @@ export function NotesPanel({
                 onSeekSec(note.atSec);
               } else if (item.kind === "gif" && note.frameIndex !== undefined && onSeekFrame) {
                 onSeekFrame(note.frameIndex);
+              } else if (item.kind === "doc" && note.pageIndex !== undefined && onSeekPage) {
+                onSeekPage(note.pageIndex);
               }
             }}
           />
@@ -178,7 +185,9 @@ function PanelHeader({ kind, count, language }: { kind: ReferenceKind; count: nu
       ? vt(language, "timestampNotesTitle")
       : kind === "gif"
         ? vt(language, "frameNotesTitle")
-        : vt(language, "regionNotes");
+        : kind === "doc"
+          ? vt(language, "slideNotesTitle")
+          : vt(language, "regionNotes");
   return (
     <div className="flex flex-shrink-0 items-center justify-between border-b border-border-subtle bg-surface-panel px-3 py-2">
       <span className="text-2xs font-semibold tracking-wide text-muted-foreground">
@@ -204,12 +213,17 @@ function NoteRow({
   onEnter: (event: React.MouseEvent<HTMLElement>) => void;
   onLeave: () => void;
 }) {
-  const clickable = (kind === "video" && note.atSec !== undefined) || (kind === "gif" && note.frameIndex !== undefined);
+  const clickable =
+    (kind === "video" && note.atSec !== undefined)
+    || (kind === "gif" && note.frameIndex !== undefined)
+    || (kind === "doc" && note.pageIndex !== undefined);
   const tag = kind === "gif" && note.frameIndex !== undefined
     ? `#${note.frameIndex + 1}`
-    : note.atSec !== undefined
-      ? formatDuration(note.atSec)
-      : null;
+    : kind === "doc" && note.pageIndex !== undefined
+      ? `P${note.pageIndex}`
+      : note.atSec !== undefined
+        ? formatDuration(note.atSec)
+        : null;
   return (
     <button
       type="button"
@@ -248,6 +262,10 @@ function sortNotes(notes: TimestampNote[], kind: ReferenceKind): TimestampNote[]
   if (kind === "gif") {
     return [...notes].sort((a, b) => (a.frameIndex ?? a.atSec ?? 0) - (b.frameIndex ?? b.atSec ?? 0));
   }
+  if (kind === "doc") {
+    /* PDF 슬라이드 노트 — 페이지 오름차순. */
+    return [...notes].sort((a, b) => (a.pageIndex ?? 0) - (b.pageIndex ?? 0));
+  }
   /* image/webp/link/youtube — 입력 순서 그대로. */
   return [...notes];
 }
@@ -257,12 +275,16 @@ function isActiveNote(
   kind: ReferenceKind,
   activeAtSec?: number,
   activeFrameIndex?: number,
+  activePageIndex?: number,
 ): boolean {
   if (kind === "video" && activeAtSec !== undefined && note.atSec !== undefined) {
     return Math.abs(activeAtSec - note.atSec) < 0.25;
   }
   if (kind === "gif" && activeFrameIndex !== undefined && note.frameIndex !== undefined) {
     return activeFrameIndex === note.frameIndex;
+  }
+  if (kind === "doc" && activePageIndex !== undefined && note.pageIndex !== undefined) {
+    return activePageIndex === note.pageIndex;
   }
   return false;
 }

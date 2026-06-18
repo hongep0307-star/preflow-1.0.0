@@ -86,11 +86,21 @@ type ViewerStringKey =
   | "propCreated"
   | "propModified"
   | "regionNotes"
+  | "slideNotesTitle"
   | "notesSection"
   | "frameNotesTitle"
   | "timestampNotesTitle"
   | "noNotes"
   | "docNotViewable"
+  /* PDF 뷰어 컨트롤 */
+  | "pdfPrev"
+  | "pdfNext"
+  | "pdfZoomIn"
+  | "pdfZoomOut"
+  | "pdfFit"
+  | "pdfLoading"
+  | "pdfLoadFailed"
+  | "pdfOpenNewTab"
   /* 모달 */
   | "modalPrev"
   | "modalNext"
@@ -180,6 +190,7 @@ const DICT: Record<ViewerStringKey, { en: string; ko: string }> = {
   propCreated: { en: "Created", ko: "생성일" },
   propModified: { en: "Modified", ko: "수정일" },
   regionNotes: { en: "Region Notes", ko: "영역 메모" },
+  slideNotesTitle: { en: "Slide Notes", ko: "슬라이드 노트" },
   notesSection: { en: "Notes", ko: "메모" },
   frameNotesTitle: { en: "Frame Notes", ko: "프레임 메모" },
   timestampNotesTitle: { en: "Timestamp Notes", ko: "타임스탬프 메모" },
@@ -188,6 +199,15 @@ const DICT: Record<ViewerStringKey, { en: string; ko: string }> = {
     en: "This file type can't be previewed. Use the open/download button in the inspector.",
     ko: "이 파일 형식은 미리보기를 지원하지 않습니다. 인스펙터의 열기/다운로드 버튼을 사용하세요.",
   },
+  /* PDF 뷰어 컨트롤 */
+  pdfPrev: { en: "Previous page", ko: "이전 페이지" },
+  pdfNext: { en: "Next page", ko: "다음 페이지" },
+  pdfZoomIn: { en: "Zoom in", ko: "확대" },
+  pdfZoomOut: { en: "Zoom out", ko: "축소" },
+  pdfFit: { en: "Fit to window", ko: "창에 맞춤" },
+  pdfLoading: { en: "Loading PDF…", ko: "PDF 불러오는 중…" },
+  pdfLoadFailed: { en: "Couldn't load this PDF.", ko: "PDF를 불러오지 못했습니다." },
+  pdfOpenNewTab: { en: "Open in new tab", ko: "새 탭에서 열기" },
   /* 모달 */
   modalPrev: { en: "Previous (←)", ko: "이전 (←)" },
   modalNext: { en: "Next (→)", ko: "다음 (→)" },

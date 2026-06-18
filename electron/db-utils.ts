@@ -37,7 +37,7 @@ const TABLE_COLUMNS: Record<string, ReadonlySet<string>> = {
     "conti_image_history", "source", "conti_image_crop", "is_transition",
     "is_final", "is_highlight", "highlight_kind", "highlight_reason",
     "transition_type", "sketches", "camera_variation_grid",
-    "motion_in", "motion_out", "transition_to_next", "created_at",
+    "motion_in", "motion_out", "transition_to_next", "emotional_beat", "created_at",
   ]),
   assets: new Set([
     "id", "project_id", "asset_type", "tag_name", "photo_url", "ai_description",
@@ -54,7 +54,7 @@ const TABLE_COLUMNS: Record<string, ReadonlySet<string>> = {
   ]),
   scene_versions: new Set([
     "id", "project_id", "version_number", "version_name", "scenes",
-    "display_order", "is_active", "created_at",
+    "production_spec", "display_order", "is_active", "created_at",
   ]),
   style_presets: new Set([
     "id", "user_id", "name", "description", "reference_image_urls",
@@ -108,6 +108,7 @@ export const JSON_COLUMNS = new Set<string>([
   "mood_bookmarks",
   "image_urls",
   "tagged_assets",
+  "production_spec",
   "conti_image_history",
   "conti_image_crop",
   "camera_variation_grid",

@@ -18,6 +18,7 @@ import { dataUrlToBase64 } from "./contactSheet";
 import { sanitizeImagePrompt, isGameWeaponContext } from "./conti";
 import type { BriefAnalysis } from "./conti";
 import { generateShotPlan, type ShotPlan } from "./shotPlan";
+import type { ProductionSpec } from "./productionSpec";
 import { getImageModelDefault, getGptQualityDefault } from "./imageGenPreference";
 
 export interface StoryboardSheetScene {
@@ -31,6 +32,10 @@ export interface StoryboardSheetScene {
   camera_angle?: string | null;
   mood?: string | null;
   location?: string | null;
+  /** Authored emotional beat / dramatic intent for this cut (e.g. "위압",
+   *  "충격"). Preferred over the shot plan's synthesized beat when present, so
+   *  the persisted, user-editable value wins. */
+  emotional_beat?: string | null;
   /** Scene-group number (1-based) shared by consecutive cuts in the same
    *  location/time/beat. Used to drive shot-to-shot continuity in the sheet
    *  prompt. May be absent (legacy / not yet persisted) — grouping then falls
@@ -81,6 +86,12 @@ export interface GenerateStoryboardSheetOptions {
    *  instead of the LLM shot plan's groups. The shot plan still runs and still
    *  provides per-cut camera/blocking notes + the through-line. */
   respectManualGrouping?: boolean;
+  /** Version-scoped global production spec (agent-authored, persisted on the
+   *  scene_version). When present it is the AUTHORITATIVE source for the GLOBAL
+   *  SPEC / CAST blocks (set lock, palette, character differentiation,
+   *  cinematography). When absent the builder falls back to the per-render
+   *  shotPlan.globalSpec synthesis. */
+  productionSpec?: ProductionSpec | null;
   /** Progress callback so the UI can surface "planning" vs "generating". */
   onStage?: (stage: "planning" | "generating") => void;
   /** GPT generation quality for the sheet render. Defaults to "high".
@@ -418,13 +429,13 @@ const REFINE_ASPECT_LABEL: Record<string, string> = {
 };
 
 const sheetRefinePrompt = (aspect: string) =>
-  `Upscale this storyboard panel into a single full-bleed cinematic film still at ${aspect} aspect ratio. ` +
-  `The input already contains the FULL panel centered, surrounded by uniform stretched/placeholder border bands (along the top/bottom OR the left/right) that were added only to reach the target aspect. ` +
-  `KEEP the central original content 100% unchanged: do NOT crop, zoom, reframe, relocate, or rescale any existing subject, prop, or background element — every subject that is fully visible in the center must stay fully visible. ` +
-  `ONLY synthesize a seamless, photorealistic continuation of the EXISTING scene INSIDE those border bands so the frame fills edge-to-edge with no bars and no margins — extend the existing environment naturally, do not add new objects. ` +
-  `Reproduce the central region FAITHFULLY: keep the exact same subjects, background, layout, props, signage, screens, composition, pose, lighting, and color grade. ` +
+  `Re-render this storyboard panel as ONE cohesive, razor-sharp, photorealistic cinematic film still at ${aspect} aspect ratio, full-bleed edge-to-edge. ` +
+  `The input is a LOW-RESOLUTION panel: its CENTER holds the real subject and composition; any uniform stretched/placeholder bands around it are only padding added to reach the target aspect. ` +
+  `Rebuild the WHOLE frame as a single continuous photograph, composed around the SAME main subject and composition as the center. There must be NO visible seam, band, step, layer, or brightness/sharpness boundary between the original center and the rest — the entire image reads as one photo, never a centered crop with filled margins. ` +
+  `Keep the subject's identity FAITHFUL — same subject(s), design, materials, parts, silhouette, layout, framing, pose, and color grade as the center — but RECONSTRUCT fine detail at high fidelity: sharpen edges, recover texture and micro-detail, and remove the source's softness, blur, and compression artifacts. Do NOT add new objects or change the composition. ` +
+  `Extend ONLY the surrounding environment naturally to fill the aspect, with lighting and materials continuous with the center. ` +
   `Preserve ALL on-screen text, UI, logos, and typography EXACTLY as they appear — never alter, translate, paraphrase, blur, or remove any text. ` +
-  `Render at crisp high resolution with photorealistic detail. No added watermark, no caption bars, no panel border.`;
+  `Output crisp, high-resolution, photorealistic detail across the WHOLE frame. No added watermark, no caption bars, no panel border.`;
 
 /** Persist a base64 image via the local-server save path and return its URL. */
 async function saveLocalImageBase64(args: {
@@ -616,19 +627,28 @@ export async function refineExistingCut(opts: {
     w > 0 && h > 0
       ? gptSizeForRatio(w / h)
       : (REFINE_SIZE_BY_FORMAT[opts.videoFormat] ?? REFINE_SIZE_BY_FORMAT.horizontal);
-  // Model + quality come from Settings → "Refine" (both options are GPT-edits
-  // models, so quality always applies). Falls back to the spec defaults
-  // (gpt-image-2 / high) when nothing is stored.
-  const model = getImageModelDefault("refine") as "gpt-image-2" | "gpt-image-1.5";
+  // Model + quality come from Settings → "Refine". GPT options route through
+  // GPT-edits (input_fidelity, quality applies); "nano-banana-2" routes through
+  // the Vertex edit path (useNanoBanana, source=refs[0]; quality ignored).
+  // Falls back to the spec defaults (gpt-image-2 / high) when nothing is stored.
+  const model = getImageModelDefault("refine") as
+    | "gpt-image-2"
+    | "gpt-image-1.5"
+    | "nano-banana-2";
+  const isNb2 = model === "nano-banana-2";
   const quality = getGptQualityDefault("refine");
+  const prompt = cameraTileUpscalePrompt;
   const { data, error } = await supabase.functions.invoke("openai-image", {
     body: {
       mode: "inpaint",
-      preferredAngleModel: model,
+      // NB2 → useNanoBanana branch (Vertex edit). GPT → preferredAngleModel
+      // routes to the GPT vision-edits path. Only one is set so routing is
+      // unambiguous in the edge function.
+      ...(isNb2 ? { useNanoBanana: true } : { preferredAngleModel: model }),
       quality,
       sourceImageUrl: opts.srcUrl,
       referenceImageUrls: [],
-      prompt: cameraTileUpscalePrompt,
+      prompt,
       projectId: opts.projectId,
       sceneNumber: opts.sceneNumber,
       imageSize: size,
@@ -808,7 +828,7 @@ function buildAssetRoster(
     } else if (type === "item") {
       desc = a.ai_description ?? "";
       tail =
-        "HERO PRODUCT — reproduce its EXACT design, materials, parts, and silhouette; never substitute a generic or stylized version.";
+        "HERO PRODUCT — keep its design, materials, parts, and silhouette EXACT (never a generic or stylized version), but RESTAGE it for THIS panel's action: pick the camera angle, distance, framing, and lighting that serve the scene. Do NOT copy the reference photo's pose, framing, background, or lighting.";
     } else {
       desc = [a.ai_description, a.outfit_description, a.signature_items].filter(Boolean).join("; ");
       tail = "match this character's face, hairstyle, outfit, and signature items EXACTLY.";
@@ -917,6 +937,106 @@ function bgRefForPanels(
   return bgRefByTag.get(bestTag) ?? null;
 }
 
+/** GLOBAL SPEC lines from the shot plan's per-render synthesis (legacy / no
+ *  ProductionSpec). Set lock + palette + composition only — no cast. */
+function buildShotPlanSpecBlock(
+  gs: ShotPlan["globalSpec"] | undefined,
+  sani: (t: string) => string,
+): string[] {
+  const out: string[] = [];
+  if (!gs) return out;
+  const hasAny = gs.setLock || (gs.colorPalette && gs.colorPalette.length > 0) || gs.compositionNotes;
+  if (!hasAny) return out;
+  out.push(``);
+  if (gs.setLock) {
+    out.push(
+      `GLOBAL SET (critical — EVERY panel takes place in this ONE shared space, even when no reference photo is attached): ${sani(gs.setLock.trim())}. Do NOT invent a different room, background, or environment per panel; keep its architecture, materials, fixtures, and palette identical across ALL panels.`,
+    );
+  }
+  if (gs.colorPalette && gs.colorPalette.length > 0) {
+    out.push(`GLOBAL PALETTE (apply identically to EVERY panel): ${gs.colorPalette.map((c) => sani(c)).join(", ")}.`);
+  }
+  if (gs.compositionNotes) {
+    out.push(`GLOBAL COMPOSITION (shared shot language): ${sani(gs.compositionNotes.trim())}.`);
+  }
+  return out;
+}
+
+/** GLOBAL SPEC lines from the authoritative, version-scoped ProductionSpec:
+ *  set lock (from setDesign), palette, CAST differentiation (from characters),
+ *  cinematography, and the final style direction anchor. */
+function buildProductionSpecBlock(
+  spec: ProductionSpec,
+  sani: (t: string) => string,
+): string[] {
+  const out: string[] = [];
+
+  // Compose a single SET LOCK sentence from the structured set design.
+  const sd = spec.setDesign;
+  const setParts = sd
+    ? [sd.location, sd.architecture, sd.materials, sd.lighting, sd.atmosphere]
+        .map((p) => (p ? p.trim() : ""))
+        .filter(Boolean)
+    : [];
+  const setLock = setParts.length ? sani(setParts.join("; ")) : "";
+
+  const palette = (spec.colorPalette ?? [])
+    .map((c) => sani([c.name, c.hint].filter(Boolean).join(" — ")))
+    .filter(Boolean);
+
+  const castLines = (spec.characters ?? [])
+    .map((c) => {
+      const traits = [
+        c.silhouette ? `silhouette ${c.silhouette}` : "",
+        c.wardrobe ? `wardrobe ${c.wardrobe}` : "",
+        c.accentColor ? `accent ${c.accentColor}` : "",
+        c.props && c.props.length ? `props ${c.props.join(", ")}` : "",
+      ]
+        .filter(Boolean)
+        .join(", ");
+      const label = [c.name, c.tag ? `(${c.tag})` : ""].filter(Boolean).join(" ");
+      return traits ? `${sani(label)}: ${sani(traits)}` : "";
+    })
+    .filter(Boolean);
+
+  const cine = spec.cinematography;
+  const cineParts = cine
+    ? [
+        cine.lensLanguage ? `lens — ${cine.lensLanguage}` : "",
+        cine.movementStyle ? `framing energy — ${cine.movementStyle}` : "",
+        cine.compositionNotes ? cine.compositionNotes : "",
+      ]
+        .map((p) => (p ? p.trim() : ""))
+        .filter(Boolean)
+    : [];
+
+  const hasAny =
+    setLock || palette.length || castLines.length || cineParts.length || spec.finalStyleDirection;
+  if (!hasAny) return out;
+
+  out.push(``);
+  if (setLock) {
+    out.push(
+      `GLOBAL SET (critical — EVERY panel takes place in this ONE shared space, even when no reference photo is attached): ${setLock}. Do NOT invent a different room, background, or environment per panel; keep its architecture, materials, fixtures, and palette identical across ALL panels.`,
+    );
+  }
+  if (palette.length) {
+    out.push(`GLOBAL PALETTE (apply identically to EVERY panel): ${palette.join(", ")}.`);
+  }
+  if (castLines.length) {
+    out.push(
+      `GLOBAL CAST (keep each character visually distinct and identical across panels): ${castLines.join(" | ")}. Do NOT swap, merge, or restyle these traits between panels.`,
+    );
+  }
+  if (cineParts.length) {
+    out.push(`GLOBAL COMPOSITION (shared shot language): ${sani(cineParts.join("; "))}.`);
+  }
+  if (spec.finalStyleDirection) {
+    out.push(`FINAL STYLE DIRECTION (look anchor for EVERY panel): ${sani(spec.finalStyleDirection.trim())}.`);
+  }
+  return out;
+}
+
 function buildStoryboardPrompt(
   scenes: StoryboardSheetScene[],
   cols: number,
@@ -930,6 +1050,7 @@ function buildStoryboardPrompt(
   shotPlan: ShotPlan | null,
   refs: { url: string; asset: StoryboardSheetAsset }[],
   forceSequenceGroups: boolean = false,
+  productionSpec: ProductionSpec | null = null,
 ): string {
   const n = scenes.length;
   const cells = cols * rows;
@@ -961,9 +1082,13 @@ function buildStoryboardPrompt(
           ? ` | location: reference image ${spaceRef.refNumber} ("${spaceRef.name}")`
           : "";
       const mood = s.mood ? ` | mood: ${sani(s.mood.trim())}` : "";
+      // Prefer the authored (persisted) emotional_beat; fall back to the shot
+      // plan's synthesized beat so legacy versions still get a beat hint.
+      const beatText = s.emotional_beat?.trim() || cut?.beat?.trim() || "";
+      const beat = beatText ? ` | beat: ${sani(beatText)}` : "";
       const carry = cut?.carryOver ? ` | continuity: ${sani(cut.carryOver.trim())}` : "";
       const block = cut?.blocking ? ` | blocking: ${sani(cut.blocking.trim())}` : "";
-      return `Panel ${i + 1}: ${desc}${cam}${loc}${mood}${carry}${block}`;
+      return `Panel ${i + 1}: ${desc}${cam}${loc}${mood}${beat}${carry}${block}`;
     })
     .join("\n");
 
@@ -982,7 +1107,7 @@ function buildStoryboardPrompt(
       shotPlan.throughLine
         ? `- Story through-line (the whole sheet tells this in order): ${sani(shotPlan.throughLine.trim())}`
         : `- Panels progress as a single narrative; only change wardrobe/props/location at scene boundaries.`,
-      `- Honour each panel's "camera" note for shot size/angle/movement, and its "continuity"/"blocking" notes for what carries over and where subjects sit.`,
+      `- Honour each panel's "camera" note for shot size/angle/lens, and its "continuity"/"blocking" notes for what carries over and where subjects sit.`,
     ];
     groupLines = shotPlan.groups
       .filter((g) => g.panels.length > 1)
@@ -1007,7 +1132,7 @@ function buildStoryboardPrompt(
         ? [`- Story through-line (the whole sheet tells this in order): ${sani(shotPlan.throughLine.trim())}`]
         : []),
       `- Panels progress as a single narrative. Keep character identity, wardrobe, and prop state consistent from one panel to the next; let them change only when the scene/location changes.`,
-      `- Honour each panel's "camera" note for its shot size, angle, and movement so the framing reads as intentional shot design, not random angles.`,
+      `- Honour each panel's "camera" note for its shot size, angle, and lens so the framing reads as intentional shot design, not random angles.`,
     ];
     groupLines = ranges
       .filter((r) => r.end > r.start)
@@ -1040,26 +1165,42 @@ function buildStoryboardPrompt(
   const styleLine = `VISUAL STYLE (apply identically to EVERY panel): ${styleAnchor}`;
   const vdLine = visualDirection ? `VISUAL DIRECTION: ${visualDirection}` : "";
 
+  // Text-only global anchor. Unlike the image-reference SPACE LOCK, this enforces
+  // a single shared space, palette, cast, and composition language across panels
+  // even when NO background reference photo is attached. The version-scoped,
+  // agent-authored ProductionSpec is AUTHORITATIVE when present; otherwise we fall
+  // back to the shot plan's per-render globalSpec synthesis.
+  const globalSpecBlock = productionSpec
+    ? buildProductionSpecBlock(productionSpec, sani)
+    : buildShotPlanSpecBlock(shotPlan?.globalSpec, sani);
+
   const gridIntro = hasTemplate
     ? `The FIRST reference image is an INVISIBLE LAYOUT GRID: a strict ${cols}x${rows} matrix of ${cells} identical equal cells. Place exactly ONE panel inside each cell, in reading order (left-to-right, top-to-bottom). Do NOT render the grid's lines, borders, gutters, or fill color into the artwork — it is only a placement guide.`
     : `Produce ONE clean storyboard sheet: a strict ${cols}x${rows} grid (${cells} cells), arranged left-to-right then top-to-bottom, separated by thin clean white gutters.`;
 
   const refUsage = hasTemplate
-    ? `REFERENCE USAGE (strict): aside from the layout grid, reference images are for IDENTITY ONLY — character faces, prop/vehicle design, and the location's materials and palette. Do NOT copy any reference's pose, camera angle, or composition. If a reference is a multi-panel board or turnaround, do NOT reproduce its panel layout, neutral/white background, or its standing/T-pose stance; restage each character into the panel's action.`
-    : `REFERENCE USAGE (strict): reference images are for IDENTITY ONLY — character faces, prop/vehicle design, and the location's materials and palette. Do NOT copy any reference's pose, camera angle, or composition. If a reference is a multi-panel board or turnaround, do NOT reproduce its panel layout, neutral/white background, or its standing/T-pose stance; restage each character into the panel's action.`;
+    ? `REFERENCE USAGE (strict): aside from the layout grid, reference images are for IDENTITY ONLY — character faces, prop/vehicle design, and the location's materials and palette. Do NOT copy any reference's pose, camera angle, or composition. If a reference is a multi-panel board or turnaround, do NOT reproduce its panel layout, neutral/white background, or its standing/T-pose stance; restage each character, product, and prop into the panel's action — a fresh camera angle, distance, framing, and lighting per panel, never the reference's.`
+    : `REFERENCE USAGE (strict): reference images are for IDENTITY ONLY — character faces, prop/vehicle design, and the location's materials and palette. Do NOT copy any reference's pose, camera angle, or composition. If a reference is a multi-panel board or turnaround, do NOT reproduce its panel layout, neutral/white background, or its standing/T-pose stance; restage each character, product, and prop into the panel's action — a fresh camera angle, distance, framing, and lighting per panel, never the reference's.`;
+
+  const emptyCellsLine =
+    cells > n
+      ? `EMPTY CELLS (critical): ONLY the first ${n} cells (in reading order) contain panels; the LAST ${cells - n} cell(s) MUST stay empty — render them as plain neutral background. Do NOT stretch, widen, recenter, or redistribute the ${n} panels to fill the empty cell(s). Keep every panel in its OWN equal cell so the final row is left-aligned with the trailing cell(s) blank.`
+      : "";
 
   return [
     gridIntro,
     `UNIFORM GRID (critical): EVERY cell is an identical-size rectangle with equal thin white gutters. No cell may be larger, wider, or taller than another. NO merged, spanning, or hero/feature panels. Fill ${n} cells in order; leave any remaining cells empty.`,
+    emptyCellsLine,
     `Even if a panel's content is a sequence, progress bar, step comparison, or banner, it MUST fit ENTIRELY inside its single equal cell — never widen or merge cells for it. Render each panel as ONE single framed shot.`,
     ``,
     `Render every panel as a PHOTOREALISTIC CINEMATIC FILM STILL — premium commercial-advertising grade, shallow depth of field, dramatic directional lighting, lens bokeh, subtle film grain. Do NOT produce flat product-catalog shots, UI/screen mockups, diagrams, or icon layouts. Do NOT render any captions, labels, numbers, watermarks, or text inside the image.`,
     ``,
     styleLine,
     vdLine,
+    ...globalSpecBlock,
     ``,
     `CONSISTENCY (critical): ALL panels MUST share an identical art style, color grade, lighting logic, and character identity. If a recurring motif or symbol appears, keep its visual treatment IDENTICAL across panels — only its placement may vary. Only the scene content and composition change from panel to panel.`,
-    `Each panel is composed FRESHLY per its own description below, fully depicting that panel's action/situation — avoid a flat repeat of the same framing or a default standing pose.`,
+    `SHOT DESIGN (critical): each panel depicts a DIFFERENT concrete action and emotional beat (see each panel's "beat" note where given), composed freshly per its own description below. Design each panel's shot size, angle, and framing to serve its specific action — do NOT repeat the same frontal, centered, product-display framing or a default standing pose across panels.`,
     ...storyBlock,
     ``,
     `CAST LOCK (strict): each panel may show ONLY the people explicitly described in that panel's line below. Do NOT add bystanders, extras, crowds, staff, or any additional person that the panel does not name. If a panel implies someone off-frame, keep them off-frame.`,
@@ -1161,13 +1302,34 @@ export async function generateStoryboardSheet(
     shotPlan,
     usedRefs,
     opts.respectManualGrouping === true,
+    opts.productionSpec ?? null,
   );
 
   console.info("[storyboardSheet] start", {
     cutCount: scenes.length,
     refCount: assetImageUrls.length,
     hasTemplate: !!templateUrl,
-    shotPlan: shotPlan ? { groups: shotPlan.groups.length, cuts: shotPlan.cuts.length } : null,
+    productionSpec: opts.productionSpec
+      ? {
+          setDesign: !!opts.productionSpec.setDesign,
+          palette: opts.productionSpec.colorPalette?.length ?? 0,
+          characters: opts.productionSpec.characters?.length ?? 0,
+          cinematography: !!opts.productionSpec.cinematography,
+        }
+      : null,
+    shotPlan: shotPlan
+      ? {
+          groups: shotPlan.groups.length,
+          cuts: shotPlan.cuts.length,
+          globalSpec: shotPlan.globalSpec
+            ? {
+                setLock: !!shotPlan.globalSpec.setLock,
+                palette: shotPlan.globalSpec.colorPalette?.length ?? 0,
+                composition: !!shotPlan.globalSpec.compositionNotes,
+              }
+            : null,
+        }
+      : null,
     cols,
     rows,
     promptLen: prompt.length,

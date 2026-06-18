@@ -20,6 +20,9 @@ export interface TimestampNote {
   atSec?: number;
   /** GIF 프레임 인덱스. */
   frameIndex?: number;
+  /** PDF(슬라이드 노트)가 가리키는 페이지(1-based, PdfView 의 pageIndex 와
+   *  동일 기준). region 과 함께 쓰여 "N페이지의 특정 영역" 을 가리킨다. */
+  pageIndex?: number;
   rangeText?: string;
   text: string;
   /** 자료 위에 그려진 정규화 영역 박스. */

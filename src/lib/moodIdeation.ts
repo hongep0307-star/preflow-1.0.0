@@ -1134,10 +1134,14 @@ export const generateMoodImages = async (
   const urls: string[] = [];
   const failures: unknown[] = [];
 
-  // 동시 상한 없이 전체 이미지를 병렬로 띄운다. 시작 시점만 idx × STAGGER_MS 만큼
-  // 엇갈려 launch burst (canvas/업로드/서버 호출) 를 분산하되, 결국 전부 동시
-  // in-flight 가 되어 다량 생성을 최대한 병렬화한다. NB2 는 호출이 더 무거워
+  // 전체 이미지를 병렬로 띄운다. 시작 시점만 idx × STAGGER_MS 만큼 엇갈려
+  // launch burst (canvas/업로드/서버 호출) 를 분산한다. NB2 는 호출이 더 무거워
   // 살짝 더 넓은 간격을 둔다. (콘티 전체 생성 / 스타일 변형과 동일한 패턴)
+  //
+  // NB: 실제 동시 in-flight 상한은 여기가 아니라 supabase 어댑터의 전역
+  // 세마포어(`MAX_CONCURRENT_IMAGE_GEN`)가 책임진다. 모든 openai-image 호출이
+  // 그곳을 거치며 4 로 묶이므로, 다중 생성이 로컬서버 연결 풀(6)을 전부
+  // 점유해 기존 이미지/DB 요청을 굶기는 일이 없다.
   const STAGGER_MS = model === "nano-banana-2" ? 600 : 300;
   const settled = await Promise.allSettled(
     Array.from({ length: count }, (_, idx) =>

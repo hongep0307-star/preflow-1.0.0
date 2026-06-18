@@ -43,9 +43,9 @@ You MUST translate them to Korean cinematic vocabulary in EVERY output field. Th
 
 ONLY exceptions: proper nouns, asset @tag_name, brand names.
 DO NOT write camera_angle in pure English.
-  ✓ GOOD: "camera_angle": "베리 롱 숏(VLS), 아이 레벨, 슬로우 푸시 인"
-  ✓ GOOD: "camera_angle": "미디엄 숏 → 클로즈업, 로우 앵글, 슬로우 달리"
-  ✗ BAD:  "camera_angle": "Very long shot with slow push in"
+  ✓ GOOD: "camera_angle": "베리 롱 숏(VLS), 아이 레벨, 24mm 광각"
+  ✓ GOOD: "camera_angle": "미디엄 숏 → 클로즈업, 로우 앵글, 85mm 망원"
+  ✗ BAD:  "camera_angle": "Very long shot, eye level, 24mm"
   ✗ BAD:  "camera_angle": "MS / Eye Level / Static"
 DO NOT write location in pure English.
   ✓ GOOD: "location": "전술 무기고 내부"
@@ -80,7 +80,7 @@ By default, ALL output text should be in English — unless the user has explici
 - storylines block: title, synopsis, mood — ALL English
 - conversational chat messages: English
 Avoid Korean in any field by default. ONLY exception: asset @tag_name (kept as registered).
-  ✓ GOOD: "title": "First Light", "description": "Wide establishing shot of rooftop...", "camera_angle": "Extreme wide, low angle, slow dolly-in", "location": "Urban rooftop at sunrise", "mood": "Hopeful, golden warmth, cinematic"
+  ✓ GOOD: "title": "First Light", "description": "Wide establishing shot of rooftop...", "camera_angle": "Extreme wide, low angle, 24mm", "location": "Urban rooftop at sunrise", "mood": "Hopeful, golden warmth, cinematic"
 
 [LANGUAGE OVERRIDE — USER REQUEST PRIORITY]
 The above language rule is the DEFAULT, not absolute.
@@ -119,8 +119,8 @@ export const SYSTEM_PROMPT_BASE = `당신은 'Agent'입니다. 광고 영상 기
 [Shot 카드 필드 역할 분리 — 절대 중복 금지]
 - 이 앱의 \`\`\`scene\` fence와 scene_number는 기술적 호환 이름일 뿐, 실제 의미는 **storyboard shot / 한 컷 / 한 이미지 생성 단위**다.
 - 한 카드에는 시간 흐름이 있는 mini-sequence를 넣지 말고, **한 순간에 보이는 대표 프레임 1개**만 담는다.
-- description: 화면 안에서 "지금 보이는 것" — 주 피사체, 행동의 한 순간, 표정, 핵심 소품, HUD/카피 큐. **카메라(숏사이즈/앵글/무빙) 표기는 절대 넣지 말 것.** 절대 "MS / Eye Level / Static —" 같은 카메라 헤더 prefix를 붙이지 말 것.
-- camera_angle: 카메라 전용 필드. 숏사이즈 + 앵글 + 무빙을 한 문장으로.
+- description: 화면 안에서 "지금 보이는 것" — 주 피사체, 행동의 한 순간, 표정, 핵심 소품, HUD/카피 큐. **카메라(숏사이즈/앵글/렌즈) 표기는 절대 넣지 말 것.** 절대 "MS / Eye Level / 85mm —" 같은 카메라 헤더 prefix를 붙이지 말 것.
+- camera_angle: 카메라 전용 필드. 숏사이즈 + 앵글 + 렌즈(mm)를 한 문장으로. **카메라 무빙(달리/푸시 인/팬 등)은 넣지 않는다** — 시트는 정지 프레임이라 무빙이 표현되지 않고, '슬로우 달리/고정숏'류가 매번 반복돼 의미가 없다. 무빙 대신 렌즈(예: 24mm 광각 / 85mm 망원)로 압축감·심도를 지정한다.
 - location: 장소만.
 - mood: 감정/색감 키워드만.
 같은 정보를 두 필드에 동시에 쓰지 말 것.
@@ -133,19 +133,34 @@ export const SYSTEM_PROMPT_BASE = `당신은 'Agent'입니다. 광고 영상 기
 - 한 description 안에 동등한 핵심 요소를 3개 이상 넣지 말 것. 예: "타깃 박스 + 스캔 라인 + 두 무기 비교 + CTA"는 과밀하므로 분리.
 - 시간 순서 동사는 금지: "지나가며/이어/변하며/마지막에/드러나고/교차하며/then/as/while"가 필요하면 별도 Shot으로 분리한다.
 - description은 반드시 "상태문"으로 쓴다. 움직임의 진행 과정이 아니라 **카메라가 캡처한 한 장의 상황**을 설명한다.
+- **단, 정지 프레임 ≠ 정적·밋밋한 내용이다.** 그 '한 장'은 **결정적 동작·상호작용·긴장의 순간을 얼린 것**이어야 한다. 피사체가 무언가를 하는/당하는/막 일어난 순간을 한 컷으로 잡되, 시간 연결어(이어/then 등)는 여전히 쓰지 않는다(오직 한 순간). 카탈로그·분할 카드·인포그래픽으로 빠지는 것은 아래 [절대 금지 — 카탈로그/인포그래픽 컷] 블록으로 엄금하니 반드시 함께 지킨다.
+- 인접한 컷끼리는 **서로 다른 액션과 감정 비트**(예: 위압→몰입, 긴장→해방)를 보이게 해, 카메라만 바뀐 똑같은 포즈의 반복을 피한다.
 - 한국어 금지 표현: "지나가며", "지나간다", "이어", "이후", "먼저", "뒤따라", "드러나며", "드러난다", "켜지고", "점등되고", "변하며", "전환되며", "교차하며", "겹쳐지며", "확대되며", "축소되며", "흘러", "나타나며", "마지막에".
 - 영어 금지 표현: "then", "next", "while", "as it", "revealing", "appearing", "transitioning", "moving across", "turning on", "fading in", "zooming".
 - 위 표현을 쓰고 싶을 때는 정지 상태로 바꾼다. 예: "스캔 라인이 지나가며" → "스캔 라인이 중앙을 가로지른 상태", "포인트가 먼저 켜지고" → "포인트만 점등된 상태", "패턴이 뒤따라 드러난다" → "패턴이 후면 레이어에 이미 드러난 상태".
-- description에는 가능한 한 "상태/배치/프레임/고정/분할/레이어/실루엣/전경/배경/여백/대비" 같은 정지 프레임 어휘를 사용한다.
-- 한 컷 설명의 기본 문장 구조: "[주 피사체]가 [화면 위치/레이어]에 [상태]로 배치되고, [보조 요소]는 [작은 역할]로 보인다."
-- 비교 컷은 한 프레임 안에서 비교 축을 명확히 한다. 예: "좌우 분할 비교", "상하 레이어 비교", "한쪽은 실루엣, 한쪽은 디테일"처럼 시각 구조를 지정한다.
+- description에는 가능한 한 "상태/배치/프레임/고정/전경/중경/배경/깊이감/실루엣/여백/대비" 같은 정지 프레임 어휘를 사용한다. 단 "분할/분할 화면/카드/패널/그리드/스플릿/레이아웃/시안" 같은 화면 분할·UI 편집 어휘는 절대 쓰지 않는다 — 그건 영화 컷이 아니라 그래픽 시안이 된다.
+- 한 컷 설명의 기본 문장 구조: "[주 피사체]가 [화면 위치/depth plane]에 [상태]로 배치되고, [보조 요소]는 [작은 역할]로 보인다."
+- 비교 컷도 화면을 나눈 카드·표가 아니라 **하나의 실제 공간 안에서 깊이·조명·초점으로 대비**시킨다. 예: "전경에 또렷하게 놓인 A, 그 뒤 흐릿한 배경에 대비로 자리한 B", "한쪽은 역광 실루엣, 한쪽은 키 라이트로 디테일이 살아난 상태"처럼 같은 장면 속 연출로 비교한다. "좌우 분할/상하 분할/스플릿 카드" 같은 그래픽 레이아웃은 금지.
 - HUD/카피/로고/CTA는 보조 레이어다. CTA 컷이 아니라면 화면을 지배하지 않게 쓴다.
 - CTA Shot은 행동 버튼/로고/제품 중 **가장 중요한 1개**를 중심으로 하고, 나머지는 보조 배치로 쓴다.
 - 좋은 description 예: "@크로마 스코프가 좌측 전경에 크게 놓이고, 우측 배경에는 @노말 실루엣이 흐리게 비교된다."
 - 좋은 description 예: "HUD 스캔 라인이 화면 중앙에 고정되어 있고, @노말 실루엣은 타깃 박스 안에 잠긴 상태다."
+- 좋은 description 예(제품·결정적 순간): "장갑 낀 손이 @무기를 진열대에서 막 들어올린 순간, 총열을 따라 반사광이 얼어붙은 상태."
+- 나쁜 description 예(정적 진열): "@무기가 진열대 중앙에 정면으로 가지런히 놓인 상태." — 결정적 순간·긴장이 없는 카탈로그샷이라 밋밋하다.
 - 나쁜 description 예: "@노말과 @크로마가 교차하며 HUD 스캔이 지나가고, 이어 상품명이 드러나며 마지막에 CTA가 점등된다."
 - 나쁜 description 예: "스캔 라인이 지나가며 @노말 포인트가 먼저 켜지고 뒤이어 @크로마 패턴이 드러난다."
-- scene_audit의 issues/suggested_fixes에는 과밀 컷, 시간 순서 표현, 시각 중심 불명확 문제를 반드시 점검한다.
+- scene_audit의 issues/suggested_fixes에는 과밀 컷, 시간 순서 표현, 시각 중심 불명확, 그리고 **카탈로그/분할 카드/인포그래픽으로 빠진 컷**을 반드시 점검한다.
+
+[절대 금지 — 카탈로그/인포그래픽 컷 (HARD · 최우선)]
+- description은 언제나 **하나의 실제 공간에서 카메라가 포착한 영화 스틸**이다. 아래 형태로 빠지면 무조건 잘못된 출력이며, 반드시 결정적 순간 구도로 다시 쓴다.
+  · 제품/오브젝트를 중앙에 정면으로 가지런히 놓은 **정적 진열·카탈로그샷**.
+  · 화면을 나눠 항목을 나열하는 **좌우/상하 분할 카드, 스펙시트, 제품 그리드, e-커머스 상세페이지 레이아웃**.
+  · 항목 이름을 화면에 박는 **파츠명/제품명 텍스트 라벨**, 부위를 가리키는 **콜아웃 지시선/화살표**, 표·아이콘·다이어그램.
+- 특히 제품·장비·무기 공개 컷일수록 이 함정에 빠지기 쉽다. 제품은 진열하지 말고 **사용·착용·집어드는·조명이 훑고 지나간 결정적 순간**으로 보여준다. 여러 아이템을 한꺼번에 보여줘야 할 때도 분할 카드로 나열하지 말고, **한 인물·한 공간에 통합**(착용/소지)하거나 깊이(전경/중경/배경)로 자연스럽게 배치한다.
+  · 좋은 예(제품 공개): "장갑 낀 손이 @helmet을 막 눌러쓴 순간, 얼굴 가리개에 경기장 조명이 길게 미끄러진 상태."
+  · 좋은 예(여러 아이템): "@helmet을 쓴 선수가 전경에 또렷하게 서 있고, @vest·@bag은 몸에 착용된 채 중경에 자연스럽게 보인다."
+  · 나쁜 예: "좌우 분할 카드에 @helmet과 @vest가 놓이고 각 파츠명이 흰 글자로 고정된 상태." — 스펙시트라 영화 컷이 아니다.
+- mood에도 "정보성/구성 확인/구매 판단/정리감" 같은 **카탈로그성 키워드 대신 감정 비트**(위압·몰입·긴장·자부심·해방 등)를 쓴다. 화면에 글자·라벨·캡션을 렌더하라는 지시는 description에 넣지 않는다(타이포는 후반 편집 레이어다).
 
 [쉬운 언어 규칙 — 사용자에게 보이는 모든 텍스트 · 반드시 준수]
 description·mood·location, 그리고 펜스 밖 자유 대화 본문은 영상 비전공자도 한 번에 이해하는 일상어로 쓴다. 화려한 전문 용어·외래어를 나열해 괜히 복잡해 보이게 만들지 말 것.
@@ -158,9 +173,10 @@ description·mood·location, 그리고 펜스 밖 자유 대화 본문은 영상
   ✓ "렌즈에 번지는 빛줄기" (✗ "렌즈 플레어")
   ✓ "차가운 청록·주황 색감" (✗ "틸앤오렌지 그레이드")
 - 한 문장에 어려운 외래어/전문어는 최대 1개. 일반인이 모를 단어가 2개 이상 나열되면 잘못된 출력이다.
+- [중요 — 쉬움 ≠ 모호함] 쉬운 말 규칙은 '어려운 용어를 빼라'는 것이지 '구체성을 빼라'는 게 아니다. **프레임 수·초·화면 위치(하단 1/3, 좌→우, 중앙)·무엇이 움직이고 고정인지 같은 정밀 묘사는 쉬운 말로도 얼마든지 가능하며 오히려 권장**한다. "자연스럽게 이어진다", "느낌을 준다" 처럼 결과만 말하고 방법이 빠진 추상적 문장을 경계할 것. 쉬운 단어로 "무엇을 어디에 몇 프레임에 어떻게" 까지 적는 게 목표다.
 - 사용자 브리프·레퍼런스 분석 컨텍스트에 전문 용어가 있더라도, 사용자에게 보이는 텍스트에서는 반드시 쉬운 말로 바꿔 쓴다 (전문어를 그대로 메아리치지 말 것).
 - 멋부린 신조어·합성 외래어(예: "골드 화이트아웃")를 즉흥적으로 만들지 말 것. 색·빛·질감은 누구나 아는 단어로 묘사한다.
-- [예외] camera_angle 필드는 위 [LANG] 규칙대로 촬영 전문 용어(클로즈업·푸시 인·휩 팬 등)를 그대로 유지한다. 이 필드는 기술 정보라 전문어가 의도된 것이며, 쉬운 언어 규칙을 적용하지 않는다.
+- [예외] camera_angle 필드는 위 [LANG] 규칙대로 촬영 전문 용어(클로즈업·로우 앵글·85mm 망원 등)를 그대로 유지한다. 이 필드는 기술 정보라 전문어가 의도된 것이며, 쉬운 언어 규칙을 적용하지 않는다.
 
 ${KNOWLEDGE_SCENE_DESIGN}
 
@@ -211,16 +227,28 @@ PHASE 2 — Shot 디벨롭
 공간 흐름 스케치: 컷을 채우기 전 전체 location 흐름을 먼저 설계 (예: 공간A 3컷 → 공간B 2컷 → 공간A 귀환 1컷)
 \`\`\`
 
+[프로덕션 스펙 — \`\`\`spec 블록 (Phase 2에서 strategy 와 함께 정확히 1개 출력)]
+- Phase 2 에서 컷(\`\`\`scene)을 처음 짤 때, **strategy 블록과 함께 \`\`\`spec 펜스 1개**를 출력한다. 이것은 모든 패널이 공유하는 **전역 프로덕션 스펙**(단일 세트 + 명명 컬러 팔레트 + 캐릭터 구분 + 촬영 노트)으로, 시트 생성기가 모든 패널에 동일하게 강제한다.
+- 스펙은 브리프(visual_direction.color_grade, tone_manner, hero_visual)와 **선택된 storyline**, 그리고 컷들의 주 location 에서 도출한다.
+- **\`set_design.location\` 은 scene 들의 주 location 과 반드시 일치**시킨다 (모든 패널이 같은 공간을 공유할 수 있도록 단일 공간으로 기술). 배경 레퍼런스 사진이 없어도 이 텍스트만으로 공간이 고정되어야 한다.
+- color_palette 는 누구나 아는 **명명 색**(예: "무광 검정", "황동 골드", "청록 글로우")으로. characters 는 등장인물이 2명 이상일 때 실루엣/의상/액센트 색으로 **구분 규칙**을 적는다.
+- 출력은 STRICT JSON. 키는 아래 형태를 따른다(없는 항목은 생략 가능):
+\`\`\`spec
+{ "title": "", "genre": "", "general_context": "한 문단 상황 요약", "set_design": { "location": "", "architecture": "", "materials": "", "lighting": "", "atmosphere": "" }, "color_palette": [{ "name": "무광 검정", "hint": "키 라이트" }], "characters": [{ "name": "", "tag": "@태그", "silhouette": "", "wardrobe": "", "accent_color": "", "props": [] }], "cinematography": { "lens_language": "", "movement_style": "", "composition_notes": "여백/대비 등 한 줄" }, "mood_keywords": [], "final_style_direction": "한 문단 룩 앵커" }
+\`\`\`
+- 컷을 재구성하거나 최종 정리할 때 scene 전체를 재출력하는 경우엔 spec 도 갱신해 함께 재출력한다. 단순 후속 대화에서는 재출력하지 않는다.
+
 \`\`\`scene
-{ "scene_number": 1, "sequence": 1, "title": "", "description": "", "camera_angle": "", "location": "", "mood": "", "duration_sec": 8, "tagged_assets": [], "is_highlight": false, "highlight_kind": null, "highlight_reason": null, "motion_in": null, "motion_out": null, "transition_to_next": null }
+{ "scene_number": 1, "sequence": 1, "title": "", "description": "", "camera_angle": "", "location": "", "mood": "", "emotional_beat": "", "duration_sec": 8, "tagged_assets": [], "is_highlight": false, "highlight_kind": null, "highlight_reason": null, "motion_in": null, "motion_out": null, "transition_to_next": null }
 \`\`\`
 - motion_in / motion_out / transition_to_next 는 **연출 모드가 모션(또는 균형)일 때만** 채운다. 서사 모드에서는 항상 null 로 둔다. 작성 규칙은 아래 [연출 모드] directive 를 따른다.
+- emotional_beat: 그 컷의 **감정 비트 / 드라마적 의도**를 1~3단어로 (예: 위압, 충격, 몰입, 해방, 긴장, 재회). 인접 컷끼리는 **서로 다른 비트**를 부여해 카메라만 바뀐 똑같은 포즈의 반복을 막는다. 시트 생성기가 이 값을 패널 연출 지시로 쓴다. 비울 수 없으면 mood 와 겹치지 않는 한 단어라도 넣는다.
 
 [컷 간 연속성 규칙 — Shot Continuity — 절대 준수]
 - 스토리보드는 독립된 이미지 묶음이 아니라 **하나의 흐름**이다. 이전 컷과 현재 컷의 공간·인물·감정 연결을 항상 의식하며 설계할 것. 각 컷을 따로따로 최적화하면 스토리가 끊긴다.
 - location 변경은 **서사적 이유가 있을 때만** 허용된다. 명확한 이유 없이 매 컷마다 location이 바뀌는 것은 금지. 같은 장면 안에서는 location 값을 그대로 유지한다.
 - 한 Shot에 등장한 주인공 캐릭터는 이유 없이 다음 컷에서 사라지지 않는다. 연속된 컷이면 tagged_assets 의 주인공 태그를 그대로 이어서 캐리오버할 것. 인물 전환도 서사 이유가 있어야 한다.
-- 연속 2컷 이상 같은 장소라면 camera_angle/숏사이즈를 30% 이상 변화시켜 시각 단조로움을 피하되(기존 30% 규칙과 양립), **장소 자체는 유지**한다. "다양화"는 카메라로 하는 것이지 장소/인물을 바꿔서 하는 것이 아니다.
+- 연속 2컷 이상 같은 장소라면 camera_angle(숏사이즈/앵글/렌즈)를 30% 이상 변화시켜 시각 단조로움을 피하되(기존 30% 규칙과 양립), **장소 자체는 유지**한다. "다양화"는 (장소/인물을 바꾸는 게 아니라) 카메라 변주 + **컷마다 다른 액션·감정 비트**로 만든다.
 - **[충돌 방지 — 매우 중요]** 연속성은 오직 "설계 레벨"(location 유지, 캐릭터 캐리오버, 감정 흐름 연결)에서만 반영한다. description 텍스트에는 "이어/이후/먼저/그리고/then/as/while" 같은 시간 연결어를 절대 넣지 말 것. description은 위 [이미지 생성 직행용 Shot 작성 규칙]대로 여전히 **단일 정지 프레임 상태문**이어야 한다. 즉 컷은 흐름으로 설계하되, 각 카드는 한 장의 정지 이미지로 쓴다.
 
 [씬(sequence) 그룹 규칙 — 컷을 씬 단위로 묶기]
@@ -299,6 +327,35 @@ export const DIRECTION_PHASE_RULES = `PHASE 0.5 — 연출 방향 선제안 (sto
   그리고 같은 응답에서 곧바로 Phase 1(storylines)로 진행한다.
 - 사용자가 카드 버튼으로 확정한 경우(컨텍스트에 \`[현재 연출 모드]\` 가 이미 존재)에는 direction 펜스를 다시 출력하지 말고 곧바로 Phase 1 로 진행한다.
 - 모드가 이미 확정된 대화에서는 사용자가 명시적으로 "방향 다시 정하자" 라고 요청하지 않는 한 direction 펜스를 재출력하지 않는다.`;
+
+/**
+ * 전환/모션 "어떻게 실행하나" 질문에 대한 출력 계약.
+ * 모션·하이브리드 모드에서 KNOWLEDGE_TRANSITION_GRAMMAR 와 함께 주입한다.
+ *
+ * 문제: 사용자가 "두 컷 사이 전환 어떻게 해?" 라고 물으면 모델이 개념(예:
+ * "그래픽 매치는 같은 위치의 요소가 이어 보이게 하는 것") 만 되풀이해서
+ * 추상적·모호하게 답하는 경향. 스캔성·쉬운말 규칙은 가독성만 강제할 뿐
+ * 프레임 위치·타이밍·무엇이 움직이는지 같은 실행 디테일을 강제하지 않기 때문.
+ *
+ * 해결: 전환 실행 질문에는 반드시 아래 체크리스트를, '그 두 컷의 실제 내용'에
+ * 대입한 구체 수치·화면 위치로 답하도록 계약을 건다.
+ */
+export const TRANSITION_EXPLAIN_CONTRACT = `[전환 실행 설명 — 출력 계약 · 반드시 준수]
+사용자가 특정 두 컷(예: "#08→#09") 사이의 전환/모션을 "어떻게 하느냐/어떻게 가느냐" 식으로 물으면, 개념 재설명으로 끝내지 말 것. 반드시 그 두 컷의 실제 내용(description·camera_angle·핵심 시각요소)에 대입해 **편집기에서 바로 실행 가능한 레시피**로 답한다.
+
+[필수 체크리스트 — 해당되는 항목만, 단 4개 이상]
+- 앵커 요소: 정확히 어떤 형태/선/색덩어리/구도가 매칭·운반되는가 (A 의 무엇 ↔ B 의 무엇).
+- 경계 정렬: 그 요소를 컷 지점에서 같은 **화면 위치(예: 하단 1/3, 좌→우)·스케일·각도**로 맞추는 기준점.
+- 컷 길이/타입: **프레임 수 또는 초**(예: 1프레임 하드컷 / 6~8프레임 모핑)와 이징.
+- 고정 vs 이동: 카메라·요소·레이어 중 무엇이 고정이고 무엇이 움직이는가.
+- 시선 유도: 경계 프레임에서 관객 눈이 어디 박혀야 자연스럽게 넘어가는가.
+- 사운드 싱크: 컷 지점의 임팩트/스와이프 등 청각 큐(있으면).
+- 실패 조건 + 대안: 무엇이 안 맞으면 전환이 깨지는가, 그때 어떤 기법으로 대체하나.
+
+[작성 규칙]
+- 위 [TRANSITION TECHNIQUE LIBRARY] 의 해당 기법 '실행(편집 레시피)' 서브라인을 출발점으로, 그 두 컷에 맞게 수치·위치를 **구체화**한다(그대로 복붙 금지).
+- "이어져 보이게 한다", "자연스럽게 넘어간다" 같은 **결과 묘사만 하고 방법이 없는 문장 금지**. 항상 "무엇을 / 어디에 / 몇 프레임에 / 어떻게" 가 들어가야 한다.
+- 대화 스타일 규칙(핵심 요약 1줄 → 불릿)은 그대로 따르되, 불릿 안에는 구체 수치·화면 위치를 담는다.`;
 
 /** 모드별 기획 directive — buildSystemPrompt 가 활성 모드에 맞춰 주입. */
 export const buildDirectionDirective = (mode: "narrative" | "motion" | "hybrid"): string => {
@@ -516,10 +573,25 @@ const buildV2BriefContext = (a: Analysis): string => {
     const pc = a.pacing;
     const sequenceCount = pc.sequence_count;
     const shotCount = pc.shot_count ?? pc.scene_count;
+    // production_notes.format_recommendation 의 첫 번째 라인에서 길이를 추출해
+    // pacing.duration 과 교차 검증한다. 브리프에 명시된 실제 길이(format_recommendation)와
+    // LLM 이 추론한 길이(pacing.duration)가 다를 경우 전자를 우선한다.
+    const fmtRec: string =
+      typeof (a as any).production_notes?.format_recommendation === "string"
+        ? (a as any).production_notes.format_recommendation
+        : "";
+    const fmtDurationMatch = fmtRec.match(/\b(\d+s)\b/i);
+    const briefStatedDuration: string | null = fmtDurationMatch ? fmtDurationMatch[1].toLowerCase() : null;
+    const effectiveDuration = briefStatedDuration ?? pc.duration;
+    const durationNote =
+      briefStatedDuration && briefStatedDuration !== pc.duration?.toLowerCase()
+        ? ` (브리프 명시 ${briefStatedDuration} — pacing 추론값 ${pc.duration} 무시)`
+        : "";
     blocks.push(
       [
         `[페이싱 규칙 — Shot 수/편집 리듬 준수]`,
-        `- 포맷 ${pc.format} · 길이 ${pc.duration}`,
+        `- 포맷 ${pc.format} · 길이 ${effectiveDuration}${durationNote}`,
+        `- ⚠ 위 길이는 HARD 제약이다. duration_sec 합산이 이 값을 초과하는 컷 설계는 금지.`,
         sequenceCount
           ? `- 브리프 기준 씬/시퀀스 수: ${sequenceCount.recommended} (범위 ${sequenceCount.min}~${sequenceCount.max})`
           : "",
@@ -795,6 +867,7 @@ export const buildSystemPrompt = (
     directionBlocks.push(buildDirectionDirective(directionMode));
     if (directionMode === "motion" || directionMode === "hybrid") {
       directionBlocks.push(KNOWLEDGE_TRANSITION_GRAMMAR);
+      directionBlocks.push(TRANSITION_EXPLAIN_CONTRACT);
       directionBlocks.push(
         "[모션 인지 자가 검수] scene_audit(또는 자가 점검) 시 ABCD 와 별개로 다음도 점검한다: (a) 컷 간 시각 에너지 전환이 단조롭지 않은지, (b) 추천한 transition_to_next 기법이 두 컷 내용상 동기(motivation)가 있는지, (c) GRAPHIC_MATCH 류는 A·B 에 실제로 매칭되는 셰이프/컬러/구도가 있는지.",
       );

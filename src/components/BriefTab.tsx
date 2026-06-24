@@ -4088,7 +4088,7 @@ const ProductionGuideUI = ({
                   <button
                     onClick={() => removeToneTag(i)}
                     className="absolute top-0 right-0 w-3.5 h-3.5 bg-primary text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                    style={{ borderRadius: "50%", fontSize: 8, lineHeight: 1 }}
+                    style={{ borderRadius: 0, fontSize: 8, lineHeight: 1 }}
                   >
                     ×
                   </button>

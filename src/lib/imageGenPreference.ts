@@ -52,7 +52,7 @@ export const IMAGE_GEN_FEATURES: ImageGenFeatureSpec[] = [
       { id: "nano-banana-2", isGpt: false },
     ],
     defaultModel: "gpt",
-    defaultQuality: "high",
+    defaultQuality: "medium",
   },
   {
     feature: "style",
@@ -63,18 +63,19 @@ export const IMAGE_GEN_FEATURES: ImageGenFeatureSpec[] = [
       { id: "nano-banana-2", isGpt: false },
     ],
     defaultModel: "gpt",
-    defaultQuality: "high",
+    defaultQuality: "medium",
   },
   {
     // 콘티 "시트 모드" 의 멀티패널 시트 생성. 파이프라인이 모델 고정
     // (GPT Image 2 → NB2 리파인)이라 모델은 단일 옵션으로 노출하고, 조절 가능한
-    // 것은 GPT 생성 품질뿐이다. 셀 디테일/컷 일관성에 직결되므로 기본 high.
+    // 것은 GPT 생성 품질뿐이다. 셀 디테일/컷 일관성에 직결되지만, 기본은
+    // medium(비용/속도 균형) — 필요 시 사용자가 high 로 올린다.
     feature: "storyboardSheet",
     labelKey: "settings.imgGen.storyboardSheet",
     descKey: "settings.imgGen.storyboardSheetDesc",
     models: [{ id: "gpt-image-2", isGpt: true }],
     defaultModel: "gpt-image-2",
-    defaultQuality: "high",
+    defaultQuality: "medium",
   },
   {
     feature: "angle",
@@ -85,7 +86,7 @@ export const IMAGE_GEN_FEATURES: ImageGenFeatureSpec[] = [
       { id: "gpt-image-2", isGpt: true },
     ],
     defaultModel: "gpt-image-1.5",
-    defaultQuality: "high",
+    defaultQuality: "medium",
   },
   {
     // 인페인트 — "auto" 는 ContiStudio 에서 마스크 유무로 분기한다(마스크 있으면
@@ -102,7 +103,7 @@ export const IMAGE_GEN_FEATURES: ImageGenFeatureSpec[] = [
       { id: "nano-banana-2", isGpt: false },
     ],
     defaultModel: "auto",
-    defaultQuality: "high",
+    defaultQuality: "medium",
   },
   {
     // 카메라 베리에이션 — 스토리보드 시트와 동일하게 파이프라인이 모델 고정이다
@@ -113,13 +114,13 @@ export const IMAGE_GEN_FEATURES: ImageGenFeatureSpec[] = [
     descKey: "settings.imgGen.cameraVariationDesc",
     models: [{ id: "gpt-image-2", isGpt: true }],
     defaultModel: "gpt-image-2",
-    defaultQuality: "high",
+    defaultQuality: "medium",
   },
   {
     // 컷 리파인 — 콘티 카드의 "리파인(고해상)" 액션. 기존 컷을 edit 경로로
     // 업스케일/디테일 향상한다. GPT 두 모델은 GPT-edits(input_fidelity) 로,
     // NB2 는 Vertex edit(source=refs[0]) 로 라우팅된다. GPT 는 품질 파라미터가
-    // 적용되고 NB2 는 무시한다. 디테일 직결이라 기본 high.
+    // 적용되고 NB2 는 무시한다. 기본은 medium(비용/속도 균형).
     feature: "refine",
     labelKey: "settings.imgGen.refine",
     descKey: "settings.imgGen.refineDesc",
@@ -129,7 +130,7 @@ export const IMAGE_GEN_FEATURES: ImageGenFeatureSpec[] = [
       { id: "nano-banana-2", isGpt: false },
     ],
     defaultModel: "gpt-image-2",
-    defaultQuality: "high",
+    defaultQuality: "medium",
   },
   {
     feature: "sketch",
@@ -141,7 +142,7 @@ export const IMAGE_GEN_FEATURES: ImageGenFeatureSpec[] = [
       { id: "nano-banana-2", isGpt: false },
     ],
     defaultModel: "gpt-image-2",
-    defaultQuality: "high",
+    defaultQuality: "medium",
   },
   {
     // 무드 패널은 현재 gpt-image-1.5 계열만 활성(gpt-image-2 / NB2 는 비활성).
@@ -154,7 +155,7 @@ export const IMAGE_GEN_FEATURES: ImageGenFeatureSpec[] = [
       { id: "gpt-image-1.5-text", isGpt: true },
     ],
     defaultModel: "gpt-image-1.5-ref",
-    defaultQuality: "high",
+    defaultQuality: "medium",
   },
   {
     // 캐릭터 시트/보드 — 둘 다 같은 inpaint 파이프라인(원본 사진 → 16:9 레퍼런스)
@@ -170,7 +171,7 @@ export const IMAGE_GEN_FEATURES: ImageGenFeatureSpec[] = [
       { id: "gpt-image-2", isGpt: true },
     ],
     defaultModel: "nano-banana-2",
-    defaultQuality: "high",
+    defaultQuality: "medium",
   },
   {
     // Reference Library AI 베리에이션 — 원본 레퍼런스에서 구도/스타일 변형을
@@ -184,7 +185,7 @@ export const IMAGE_GEN_FEATURES: ImageGenFeatureSpec[] = [
       { id: "gpt-image-2", isGpt: true },
     ],
     defaultModel: "nano-banana-2",
-    defaultQuality: "high",
+    defaultQuality: "medium",
   },
   {
     // 캔버스 AI 생성 노드 — 연결된 이미지(레퍼런스) + 프롬프트 카드를 입력으로
@@ -199,7 +200,7 @@ export const IMAGE_GEN_FEATURES: ImageGenFeatureSpec[] = [
       { id: "gpt-image-2", isGpt: true },
     ],
     defaultModel: "nano-banana-2",
-    defaultQuality: "high",
+    defaultQuality: "medium",
   },
 ];
 

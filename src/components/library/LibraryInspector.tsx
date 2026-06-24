@@ -61,6 +61,7 @@ import {
 } from "@/lib/aiOutputLanguage";
 import type { LibraryFolderRow } from "@/components/library/LibrarySidebar";
 import { withReferenceVersion, type ReferenceItem } from "@/lib/referenceLibrary";
+import { decodeAnimatedAllFrames } from "@/lib/gifFrames";
 import { docExtensionTag, docHueClasses, docPresentationOf, docSubtypeOf } from "@/lib/docPresentation";
 import { resolveFormatLabel, resolveTypeLabel } from "@/lib/linkPlatform";
 import { friendlyClassifyError, type ClassifyProgress, type ClassifyStage, type ReferenceAiSuggestions } from "@/lib/referenceAi";
@@ -2243,6 +2244,10 @@ function TimestampNotesSection({
      시점의 프레임을 추출해 좌측 썸네일 크롭 소스로 쓴다. 추출 전/실패 시엔
      포스터로 자연 폴백. */
   const [videoNoteFrames, setVideoNoteFrames] = useState<Map<string, string>>(() => new Map());
+  /* GIF/animated-WebP region 노트별 *해당 frameIndex 프레임* dataURL. 영상과
+     동일한 버그(모든 노트가 포스터=첫 프레임으로 보임) 수정. ImageDecoder 로
+     전체 프레임을 한 번 디코드한 뒤 각 노트의 frameIndex 프레임을 캡처한다. */
+  const [gifNoteFrames, setGifNoteFrames] = useState<Map<string, string>>(() => new Map());
 
   const isGif = selected.kind === "gif";
   const isVideo = selected.kind === "video";
@@ -2375,6 +2380,82 @@ function TimestampNotesSection({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isVideo, selected.file_url, videoRegionNoteKey]);
+
+  /* GIF region 노트들의 (id@frameIndex) 시그니처 — 노트/프레임이 바뀔 때만 재추출. */
+  const gifRegionNoteKey = useMemo(() => {
+    if (!isGif || !selected.file_url) return "";
+    return selected.timestamp_notes
+      .filter((n) => n.region && n.frameIndex !== undefined)
+      .map((n) => `${n.id}@${n.frameIndex}`)
+      .join("|");
+  }, [isGif, selected.file_url, selected.timestamp_notes]);
+
+  /* ImageDecoder 로 전체 프레임을 한 번 디코드한 뒤, 각 region 노트의 frameIndex
+     프레임을 canvas 로 캡처해 dataURL 로 보관. 디코드된 VideoFrame 은 반드시
+     close() — GPU 메모리 누수 방지. 자료/노트 전환 시 in-flight abort. */
+  useEffect(() => {
+    if (!isGif || !selected.file_url) {
+      setGifNoteFrames(new Map());
+      return;
+    }
+    const targets = selected.timestamp_notes.filter(
+      (n) => n.region && n.frameIndex !== undefined,
+    );
+    if (targets.length === 0) {
+      setGifNoteFrames(new Map());
+      return;
+    }
+    let cancelled = false;
+    const abort = new AbortController();
+    (async () => {
+      let decoded: Awaited<ReturnType<typeof decodeAnimatedAllFrames>>;
+      try {
+        decoded = await decodeAnimatedAllFrames(selected.file_url!, selected.mime_type, {
+          signal: abort.signal,
+        });
+      } catch {
+        return; // 디코드 실패/abort → 포스터 폴백 유지
+      }
+      const frames = decoded.frames;
+      const result = new Map<string, string>();
+      try {
+        if (cancelled || frames.length === 0) return;
+        const w = decoded.widthPx || frames[0].displayWidth || 0;
+        const h = decoded.heightPx || frames[0].displayHeight || 0;
+        if (w <= 0 || h <= 0) return;
+        const scale = Math.min(1, 320 / Math.max(w, 1));
+        const cw = Math.max(1, Math.round(w * scale));
+        const ch = Math.max(1, Math.round(h * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = cw;
+        canvas.height = ch;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        for (const note of targets) {
+          /* decodeAnimatedAllFrames 는 250프레임 캡이 있어 frames.length 가
+             원본보다 작을 수 있다. frameIndex 를 안전 범위로 clamp. */
+          const idx = Math.max(0, Math.min(frames.length - 1, note.frameIndex as number));
+          const vf = frames[idx];
+          if (!vf) continue;
+          ctx.clearRect(0, 0, cw, ch);
+          ctx.drawImage(vf as unknown as CanvasImageSource, 0, 0, cw, ch);
+          result.set(note.id, canvas.toDataURL("image/webp", 0.8));
+        }
+      } catch {
+        /* draw/encode 실패 — 포스터 폴백 유지. */
+      } finally {
+        for (const f of frames) {
+          try { f.close(); } catch { /* noop */ }
+        }
+      }
+      if (!cancelled) setGifNoteFrames(result);
+    })();
+    return () => {
+      cancelled = true;
+      abort.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isGif, selected.file_url, selected.mime_type, gifRegionNoteKey]);
 
   /* 노트 목록 정렬 키 — 자료 종류에 따라 다름:
        video: atSec 오름차순(시간 순서)
@@ -2557,7 +2638,12 @@ function TimestampNotesSection({
               className="w-full bg-muted"
               style={{
                 height: Math.round(HOVER_PREVIEW_WIDTH / regionAspect(hoveredNote.region, selected.width, selected.height)),
-                ...regionFillStyle(regionThumbSrc, hoveredNote.region),
+                /* GIF 는 노트 frameIndex 프레임으로 확대(추출 전 포스터 폴백),
+                   정지 이미지는 썸네일 그대로. 영상은 별도 <video> 호버라 여기 안 옴. */
+                ...regionFillStyle(
+                  (isGif ? (gifNoteFrames.get(hoveredNote.id) ?? regionThumbSrc) : regionThumbSrc) as string,
+                  hoveredNote.region,
+                ),
               }}
             />
           </div>,
@@ -2625,9 +2711,14 @@ function TimestampNotesSection({
                   aria-label={labelTitle}
                   className="ml-1 mr-0.5 h-9 w-9 shrink-0 self-center border border-border-subtle bg-muted transition-[border-color] hover:border-primary"
                   style={regionCoverStyle(
-                    /* 영상은 그 노트 시점의 프레임을 우선 사용(추출 전이면
-                       포스터로 폴백). 이미지/GIF 는 기존 정적 썸네일. */
-                    (isVideo ? (videoNoteFrames.get(note.id) ?? regionThumbSrc) : regionThumbSrc) as string,
+                    /* 영상은 노트 시점(atSec) 프레임, GIF/animated-WebP 는 노트
+                       frameIndex 프레임을 우선 사용(추출 전이면 포스터로 폴백).
+                       정지 이미지는 그대로 썸네일. */
+                    (isVideo
+                      ? (videoNoteFrames.get(note.id) ?? regionThumbSrc)
+                      : isGif
+                        ? (gifNoteFrames.get(note.id) ?? regionThumbSrc)
+                        : regionThumbSrc) as string,
                     note.region,
                     selected.width,
                     selected.height,

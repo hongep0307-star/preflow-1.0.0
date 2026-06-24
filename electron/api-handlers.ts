@@ -312,12 +312,22 @@ ${TRANSLATE_KEEP_AS_IS_KEYS.map((k) => `  - ${k}`).join("\n")}
     const data = await callVertexGemini(settings, "gemini-2.5-flash", {
       system_instruction: { parts: [{ text: systemPrompt }] },
       contents: [{ parts: [{ text: `Translate this analysis JSON from ${directionText}. Return ONLY valid JSON:\n\n${JSON.stringify(analysis)}` }] }],
-      generationConfig: { maxOutputTokens: 6000, temperature: 0.1 },
+      generationConfig: { maxOutputTokens: 32000, temperature: 0.1 },
     });
-    const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    const candidate = data.candidates?.[0];
+    const content = candidate?.content?.parts?.[0]?.text;
     if (!content) throw new Error("Empty AI response");
+    const finishReason = candidate?.finishReason;
+    if (finishReason && finishReason !== "STOP") {
+      throw new Error(`Translation was cut off (finishReason: ${finishReason}). Analysis JSON may be too large.`);
+    }
     const jsonStr = content.trim().replace(/```json\s?|```/g, "").trim();
-    return { translated: JSON.parse(jsonStr) };
+    try {
+      return { translated: JSON.parse(jsonStr) };
+    } catch (e) {
+      console.error("[translate-analysis] JSON.parse failed, first 200 chars:", jsonStr.slice(0, 200));
+      throw new Error(`Translation response was not valid JSON: ${(e as Error).message}`);
+    }
   }
   if (mode === "field") {
     // field-level translation: skip if fieldPath is in the enum keep-as-is list
@@ -802,12 +812,25 @@ async function callVertexGemini(settings: any, model: string, requestBody: any):
   const gcpProjectId = settings.google_cloud_project_id;
   const accessToken = await getVertexAccessToken(saKeyJson);
   const endpoint = `https://aiplatform.googleapis.com/v1/projects/${gcpProjectId}/locations/global/publishers/google/models/${model}:generateContent`;
+  // Vertex `generateContent` (global endpoint) rejects content entries without
+  // a role ("Please use a valid role: user, model."). Callers build single-turn
+  // payloads without a role, so default each entry to "user" here — one place,
+  // covers every caller (mirrors callVertexNB2 which already sets role: "user").
+  const normalizedBody =
+    requestBody && Array.isArray(requestBody.contents)
+      ? {
+          ...requestBody,
+          contents: requestBody.contents.map((c: any) =>
+            c && typeof c === "object" && !c.role ? { ...c, role: "user" } : c,
+          ),
+        }
+      : requestBody;
   const res = await fetchWithRetry(
     endpoint,
     {
       method: "POST",
       headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify(normalizedBody),
     },
     { label: `vertex-gemini:${model}`, timeoutMs: 90_000, retries: 2 },
   );

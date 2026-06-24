@@ -203,6 +203,9 @@ function createTables(d: Database.Database) {
   try {
     d.exec(`ALTER TABLE briefs ADD COLUMN raw_text TEXT`);
   } catch (_) { /* column already exists */ }
+  try {
+    d.exec(`ALTER TABLE briefs ADD COLUMN analysis_en TEXT`);
+  } catch (_) { /* column already exists */ }
 
   // ── brief_attachments ────────────────────────────────────────────
   // 브리프 composer / 레퍼런스 패널에 사용자가 직접 올린 자료(이미지·PDF·

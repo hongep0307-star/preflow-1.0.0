@@ -1,4 +1,4 @@
-import { startTransition, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent, type MouseEvent } from "react";
+import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent, type MouseEvent } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useSettingsModal } from "@/lib/settingsModal";
 import { Star, Plus, X, HardDrive, FolderInput, Settings as SettingsIcon } from "lucide-react";
@@ -1160,6 +1160,11 @@ const LibraryPage = () => {
   const [loading, setLoading] = useState(!initialCache);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  /* 검색 입력은 즉시 반영(setQuery)해 타이핑 응답성을 유지하되, 1만 항목
+   * 9-단계 필터 cascade(filteredItems)의 *입력*은 디퍼한다. useDeferredValue
+   * 는 타이핑이 몰릴 때 무거운 재계산을 낮은 우선순위로 미뤄, 글자마다 전체
+   * cascade 가 동기로 도는 jank 를 제거한다(데이터가 쌓일수록 효과 큼). */
+  const deferredQuery = useDeferredValue(query);
   const [urlInput, setUrlInput] = useState("");
   const [pasteUrlOpen, setPasteUrlOpen] = useState(false);
   const [eagleImportOpen, setEagleImportOpen] = useState(false);
@@ -2759,8 +2764,25 @@ const LibraryPage = () => {
     return new Set(items.map((it) => it.id));
   }, [items, activeTag]);
 
+  /* content_hash → 활성(미삭제) 항목 수. "duplicates" quickFilter 와
+   * 인스펙터의 "중복 후보" 뱃지가 공유하는 단일 출처.
+   *
+   * 과거에는 filteredItems 안에서 `items.filter(...).length` 를 매 항목마다
+   * 돌려 O(n²) 였다(1만 항목이면 ~1억 비교 × 매 키 입력/리렌더). 이 맵을
+   * 한 번 O(n) 으로 만들어 두고 `get(hash)` O(1) 조회로 대체한다. */
+  const duplicateCounts = useMemo(() => {
+    // 휴지통 항목은 카운트에서 제외 — merge/trash 직후에도 살아남은 카드가
+    // 여전히 "Duplicate candidate" 로 잡히는 것을 방지.
+    const counts = new Map<string, number>();
+    for (const item of items) {
+      if (!item.content_hash || item.deleted_at) continue;
+      counts.set(item.content_hash, (counts.get(item.content_hash) ?? 0) + 1);
+    }
+    return counts;
+  }, [items]);
+
   const filteredItems = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = deferredQuery.trim().toLowerCase();
     const noteKeyword = noteFilterState.keyword.trim().toLowerCase();
     /* color 필터가 활성일 때 각 통과 항목의 *정렬 점수* (rankScore) 를 모아
        둔다. 정렬 단계에서 sortKey 와 무관하게 이 점수 오름차순으로 자동
@@ -2795,7 +2817,7 @@ const LibraryPage = () => {
       }
       if (quickFilter === "unclassified" && item.classification_status !== "unclassified") return false;
       if (quickFilter === "variations" && !item.variation_of) return false;
-      if (quickFilter === "duplicates" && (!item.content_hash || items.filter((row) => row.content_hash === item.content_hash && !row.deleted_at).length < 2)) return false;
+      if (quickFilter === "duplicates" && (!item.content_hash || (duplicateCounts.get(item.content_hash) ?? 0) < 2)) return false;
 
       // 사이드바 폴더 선택(단일/다중) — 다중이면 선택 폴더들의 합집합.
       // 툴바의 tagsFilter / foldersFilter 와 AND 결합으로 적용된다.
@@ -3143,6 +3165,7 @@ const LibraryPage = () => {
     activeTag,
     selectedFolderTags,
     colorFilter,
+    duplicateCounts,
     foldersFilter,
     freshlyUploadedAt,
     gridHiddenIds,
@@ -3153,7 +3176,7 @@ const LibraryPage = () => {
     effectiveMoodMap,
     moodsFilter,
     noteFilterState,
-    query,
+    deferredQuery,
     quickFilter,
     ratingsFilter,
     recursiveActiveFolder,
@@ -3218,16 +3241,6 @@ const LibraryPage = () => {
     () => filteredItems.reduce((sum, item) => sum + (item.file_size ?? 0), 0),
     [filteredItems],
   );
-  const duplicateCounts = useMemo(() => {
-    // 휴지통 항목은 카운트에서 제외 — merge/trash 직후에도 살아남은 카드가
-    // 여전히 "Duplicate candidate" 로 잡히는 것을 방지.
-    const counts = new Map<string, number>();
-    for (const item of items) {
-      if (!item.content_hash || item.deleted_at) continue;
-      counts.set(item.content_hash, (counts.get(item.content_hash) ?? 0) + 1);
-    }
-    return counts;
-  }, [items]);
   const selectedDuplicateCount = selected?.content_hash ? duplicateCounts.get(selected.content_hash) ?? 0 : 0;
   /** 선택된 자료의 사용 위치 (Brief + Conti) — `usageLocations` (LS
    *  스캔 결과) 의 raw 행을 사용자에게 보여줄 *프로젝트 제목*과 함께

@@ -13,6 +13,7 @@
 import {
   WEBP_QUALITY_LEVELS,
   type GifExportOptions,
+  type GifMaxDim,
 } from "./gifExportPreferences";
 import {
   GifConversionCancelledError,
@@ -25,15 +26,38 @@ function throwIfAborted(signal?: AbortSignal) {
   if (signal?.aborted) throw new GifConversionCancelledError();
 }
 
+/* wasm-webp 의 encodeAnimation 은 모든 프레임 RGBA 데이터를 WASM 힙에 한꺼번에
+   올린다. WASM 힙 한계(보통 256MB) 초과 시 native abort() 가 발생하므로,
+   총 RGBA 바이트 = width × height × 4 × 프레임 수 를 이 값 이하로 유지한다. */
+const WASM_SAFE_RGBA_BYTES = 192 * 1024 * 1024; // 192 MB
+
+/** 프레임 수 기반으로 WASM OOM 없이 처리 가능한 최대 픽셀(가장 긴 변) 를 반환.
+ *  최악의 경우(정사각형 영상)를 가정해 보수적으로 계산한다. */
+function webpSafeMaxDim(totalFrames: number): number {
+  return Math.floor(Math.sqrt(WASM_SAFE_RGBA_BYTES / (totalFrames * 4)));
+}
+
 export async function convertVideoLoopToWebp(
   input: ConvertLoopInput,
 ): Promise<Blob> {
   const { options, onProgress, signal } = input;
   const quality = WEBP_QUALITY_LEVELS[options.quality];
 
+  /* WASM 메모리 안전 상한 — 프레임 수에 따라 maxDim 을 자동으로 제한.
+     maxDim=0("Original") 이거나 요청 값이 안전 한계를 넘으면 자동 하향. */
+  const duration = Math.max(0, input.endSec - input.startSec);
+  const totalFrames = Math.max(1, Math.ceil(duration * options.fps));
+  const safeDim = webpSafeMaxDim(totalFrames);
+  const effectiveMaxDim: GifMaxDim =
+    options.maxDim === 0 || options.maxDim > safeDim
+      ? (safeDim as GifMaxDim)
+      : options.maxDim;
+  const safeOptions: GifExportOptions = { ...options, maxDim: effectiveMaxDim };
+
   /* 1) 프레임 추출 — 진행률 0~50%. */
   const { frames, width, height, fps } = await extractLoopFramesFromVideo({
     ...input,
+    options: safeOptions,
     onProgress: (ratio) => onProgress?.(ratio * 0.5, "extract"),
   });
 
@@ -85,6 +109,14 @@ export async function convertVideoLoopToWebp(
        무시할 수 있다. */
     const result = await encodeAnimation(width, height, true, animFrames);
     bytes = result ?? null;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/abort/i.test(msg)) {
+      throw new Error(
+        `WebP 인코딩 실패: WASM 메모리 부족 (${width}×${height} × ${animFrames.length}프레임). 해상도 또는 FPS를 낮춰 다시 시도해 주세요.`,
+      );
+    }
+    throw err;
   } finally {
     clearInterval(encodeTimer);
   }

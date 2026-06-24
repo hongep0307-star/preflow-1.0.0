@@ -34,6 +34,7 @@ interface PackReferenceRow {
   title: string;
   file_relpath?: string | null;
   thumbnail_relpath?: string | null;
+  preview_relpath?: string | null;
   tags?: string[] | string | null;
   notes?: string | null;
   color_palette?: unknown;
@@ -69,7 +70,7 @@ type ExistingReference = Record<string, unknown> & {
 };
 
 const REFERENCE_COLUMNS = new Set([
-  "kind", "title", "file_url", "thumbnail_url", "mime_type", "file_size",
+  "kind", "title", "file_url", "thumbnail_url", "preview_url", "mime_type", "file_size",
   "content_hash", "duration_sec", "width", "height", "tags", "notes", "rating",
   "is_favorite", "source_url", "cover_at_sec", "timestamp_notes", "color_palette",
   "ai_suggestions", "classification_status", "classified_at", "origin_project_id",
@@ -329,7 +330,7 @@ export async function previewPackFromPath(srcPath: string) {
   const missingFiles: string[] = [];
   for (const ref of references) {
     kindDistribution[ref.kind] = (kindDistribution[ref.kind] ?? 0) + 1;
-    for (const rel of [ref.file_relpath, ref.thumbnail_relpath]) {
+    for (const rel of [ref.file_relpath, ref.thumbnail_relpath, ref.preview_relpath]) {
       if (rel && !zip.file(rel)) missingFiles.push(rel);
     }
   }
@@ -394,7 +395,7 @@ function importRow(
   ref: PackReferenceRow,
   sourceLibrary: string,
   id: string,
-  urls: { fileUrl: string | null; thumbnailUrl: string | null },
+  urls: { fileUrl: string | null; thumbnailUrl: string | null; previewUrl: string | null },
   context: ImportContext,
 ) {
   const row: Record<string, unknown> = {};
@@ -418,6 +419,13 @@ function importRow(
     row.thumbnail_url = urls.thumbnailUrl;
   } else if (urls.fileUrl && !row.thumbnail_url) {
     row.thumbnail_url = urls.fileUrl;
+  }
+  // 경량 animated 프리뷰 — zip 에 사본이 있으면 그 로컬 경로로. 없으면
+  // preview_url 을 비워 둔다(그리드가 원본으로 폴백 + 이후 idle 백필이 보강).
+  if (urls.previewUrl) {
+    row.preview_url = urls.previewUrl;
+  } else {
+    row.preview_url = null;
   }
   row.source_app = "preflow-pack";
   row.source_library = sourceLibrary;
@@ -588,11 +596,14 @@ export async function applyPack(input: {
     const nextId = generateId();
     const fileUrl = await copyZipEntry(zip, ref.file_relpath, nextId);
     const thumbnailUrl = await copyZipEntry(zip, ref.thumbnail_relpath, nextId);
+    const previewUrl = await copyZipEntry(zip, ref.preview_relpath, nextId);
     if (ref.file_relpath && !fileUrl) missingFiles.push(ref.file_relpath);
     if (ref.thumbnail_relpath && !thumbnailUrl) missingFiles.push(ref.thumbnail_relpath);
+    if (ref.preview_relpath && !previewUrl) missingFiles.push(ref.preview_relpath);
     if (fileUrl) copiedFiles += 1;
     if (thumbnailUrl && thumbnailUrl !== fileUrl) copiedFiles += 1;
-    dbInsert("reference_items", importRow(ref, sourceLibrary, nextId, { fileUrl, thumbnailUrl }, context));
+    if (previewUrl && previewUrl !== fileUrl) copiedFiles += 1;
+    dbInsert("reference_items", importRow(ref, sourceLibrary, nextId, { fileUrl, thumbnailUrl, previewUrl }, context));
     sourceToNewId.set(ref.id, nextId);
     inserted += 1;
   }

@@ -32,8 +32,11 @@ function throwIfAborted(signal?: AbortSignal) {
 const WASM_SAFE_RGBA_BYTES = 192 * 1024 * 1024; // 192 MB
 
 /** 프레임 수 기반으로 WASM OOM 없이 처리 가능한 최대 픽셀(가장 긴 변) 를 반환.
- *  최악의 경우(정사각형 영상)를 가정해 보수적으로 계산한다. */
-function webpSafeMaxDim(totalFrames: number): number {
+ *  최악의 경우(정사각형 영상)를 가정해 보수적으로 계산한다.
+ *
+ *  export 이유: animatedPreview.ts 가 GIF/animated-WebP 프리뷰를 구울 때 같은
+ *  encodeAnimation WASM 경로를 쓰므로 동일한 안전 상한을 재사용한다. */
+export function webpSafeMaxDim(totalFrames: number): number {
   return Math.floor(Math.sqrt(WASM_SAFE_RGBA_BYTES / (totalFrames * 4)));
 }
 

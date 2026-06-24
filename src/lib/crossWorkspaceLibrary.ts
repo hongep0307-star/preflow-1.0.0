@@ -20,6 +20,7 @@ export interface CrossWorkspaceReference {
   title: string;
   file_url: string | null;
   thumbnail_url: string | null;
+  preview_url: string | null;
   mime_type: string | null;
   tags: string[];
   is_favorite: boolean;
@@ -118,6 +119,7 @@ export function crossRefToReferenceItem(r: CrossWorkspaceReference): ReferenceIt
     title: r.title,
     file_url: r.file_url,
     thumbnail_url: r.thumbnail_url,
+    preview_url: r.preview_url,
     mime_type: r.mime_type,
     duration_sec: r.duration_sec,
     width: r.width,

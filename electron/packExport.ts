@@ -29,6 +29,7 @@ interface ReferenceRow {
   title: string;
   file_url?: string | null;
   thumbnail_url?: string | null;
+  preview_url?: string | null;
   file_size?: number | null;
   tags?: string[] | string | null;
   deleted_at?: string | null;
@@ -166,6 +167,7 @@ export async function exportLibraryPack(req: ExportPackRequest) {
       for (const [urlKey, relKey, dir] of [
         ["file_url", "file_relpath", "files"],
         ["thumbnail_url", "thumbnail_relpath", "thumbnails"],
+        ["preview_url", "preview_relpath", "previews"],
       ] as const) {
         const sourcePath = resolveStorageUrlToPath(row[urlKey] as string | null | undefined);
         if (await fileExists(sourcePath)) {

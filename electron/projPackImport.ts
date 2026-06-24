@@ -297,7 +297,7 @@ const PROJECT_REF_LINK_COLUMNS = new Set([
   "created_at", "updated_at",
 ]);
 const REFERENCE_COLUMNS = new Set([
-  "id", "kind", "title", "file_url", "thumbnail_url", "mime_type", "file_size",
+  "id", "kind", "title", "file_url", "thumbnail_url", "preview_url", "mime_type", "file_size",
   "content_hash", "duration_sec", "width", "height", "tags", "notes", "rating",
   "is_favorite", "source_url", "cover_at_sec", "timestamp_notes", "color_palette",
   "ai_suggestions", "classification_status", "classified_at", "origin_project_id",

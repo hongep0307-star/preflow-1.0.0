@@ -202,7 +202,8 @@ import {
 } from "@/lib/colorPalette";
 import { COLOR_FILTER_THRESHOLD, scoreItemByColor } from "@/lib/colorMatch";
 import { scheduleThumbnailAutoBackfill } from "@/lib/thumbnailAutoBackfill";
-import type { ThumbnailBackfillItemEvent } from "@/lib/referenceLibrary";
+import { scheduleAnimatedPreviewAutoBackfill } from "@/lib/animatedPreviewAutoBackfill";
+import type { ThumbnailBackfillItemEvent, AnimatedPreviewBackfillItemEvent } from "@/lib/referenceLibrary";
 import {
   addReferencesToFolder,
   backfillReferencePalettes,
@@ -1115,6 +1116,7 @@ const LibraryPage = () => {
      새 rows 로 다시 스케줄. unmount cleanup 에서도 호출되어 페이지 이탈 즉시
      백그라운드 fetch/decode 가 멈춘다. */
   const thumbAutoBackfillCancelRef = useRef<(() => void) | null>(null);
+  const animatedPreviewAutoBackfillCancelRef = useRef<(() => void) | null>(null);
   /* 가장 최근 `showUndoBar` 가 띄운 *되돌리기 가능 액션* 의 단일 슬롯.
      - `run()`: toast 의 "되돌리기" 버튼 onClick 과 *완전히 같은* 흐름을 한
        함수에 묶어둔 wrapper. 성공/실패 분기, toast in-place update, 실패 시
@@ -1608,6 +1610,26 @@ const LibraryPage = () => {
     });
   }, []);
 
+  /* Animated-preview 백필 성공 시 카드 preview_url 을 in-place 교체 — 그리드가
+     무거운 원본 대신 경량 프리뷰로 재생을 전환한다. thumbnail 백필과 동일한
+     startTransition + 동일 값이면 skip 패턴. */
+  const handleAnimatedPreviewBackfillItem = useCallback((event: AnimatedPreviewBackfillItemEvent) => {
+    if (event.result !== "success" || !event.previewUrl) return;
+    const id = event.item.id;
+    const newUrl = event.previewUrl;
+    startTransition(() => {
+      setItems((prev) => {
+        const idx = prev.findIndex((row) => row.id === id);
+        if (idx < 0) return prev;
+        const cur = prev[idx];
+        if (cur.preview_url === newUrl) return prev;
+        const next = prev.slice();
+        next[idx] = { ...cur, preview_url: newUrl };
+        return next;
+      });
+    });
+  }, []);
+
   const loadReferences = useCallback(async () => {
     const seq = ++loadSeqRef.current;
     /* 캐시 fresh-skip — 같은 세션 안에서 Dashboard ↔ Library 를 자주
@@ -1653,6 +1675,12 @@ const LibraryPage = () => {
       thumbAutoBackfillCancelRef.current?.();
       thumbAutoBackfillCancelRef.current = scheduleThumbnailAutoBackfill(cachedRows, {
         onItem: handleThumbnailBackfillItem,
+      });
+      /* GIF animated 프리뷰 백필 — 레거시/Eagle GIF 의 preview.webp 를 채운다.
+         thumbnail 백필과 별도 processed set + 동시성 1 idle 스케줄. */
+      animatedPreviewAutoBackfillCancelRef.current?.();
+      animatedPreviewAutoBackfillCancelRef.current = scheduleAnimatedPreviewAutoBackfill(cachedRows, {
+        onItem: handleAnimatedPreviewBackfillItem,
       });
       return;
     }
@@ -1725,13 +1753,17 @@ const LibraryPage = () => {
       thumbAutoBackfillCancelRef.current = scheduleThumbnailAutoBackfill(rows, {
         onItem: handleThumbnailBackfillItem,
       });
+      animatedPreviewAutoBackfillCancelRef.current?.();
+      animatedPreviewAutoBackfillCancelRef.current = scheduleAnimatedPreviewAutoBackfill(rows, {
+        onItem: handleAnimatedPreviewBackfillItem,
+      });
     } catch (err) {
       if (seq !== loadSeqRef.current) return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       if (seq === loadSeqRef.current) setLoading(false);
     }
-  }, [handleThumbnailBackfillItem]);
+  }, [handleThumbnailBackfillItem, handleAnimatedPreviewBackfillItem]);
 
   useEffect(() => {
     void loadReferences();
@@ -1743,6 +1775,8 @@ const LibraryPage = () => {
          되므로 다음 진입에서 자연 재개. */
       thumbAutoBackfillCancelRef.current?.();
       thumbAutoBackfillCancelRef.current = null;
+      animatedPreviewAutoBackfillCancelRef.current?.();
+      animatedPreviewAutoBackfillCancelRef.current = null;
     };
   }, [loadReferences]);
 

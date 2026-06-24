@@ -382,6 +382,7 @@ function handleCrossWorkspaceReferences(body: any): { references: any[]; folders
         title: r.title ?? "",
         file_url: rewriteCrossWorkspaceUrl(r.file_url, ws, baseUrl),
         thumbnail_url: rewriteCrossWorkspaceUrl(r.thumbnail_url, ws, baseUrl),
+        preview_url: rewriteCrossWorkspaceUrl(r.preview_url, ws, baseUrl),
         mime_type: r.mime_type ?? null,
         tags,
         is_favorite: !!r.is_favorite,

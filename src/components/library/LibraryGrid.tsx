@@ -745,7 +745,15 @@ function LibraryMediaThumbnail({
      실시간 새 프레임을 반영한다. animatedSrc(=원본 file_url) 은 업로드시
      고유 경로라 덮어쓰지 않으므로 bust 불필요. */
   const stillSrc = withReferenceVersion(item.thumbnail_url || item.file_url || "", item);
-  const animatedSrc = item.file_url || (item.thumbnail_url || "");
+  /* animatedSrc — 경량 animated 프리뷰(preview.webp, ≤360px·~12fps)가 있으면
+     그것을 재생하고, 없으면 원본(file_url)으로 폴백한다. preview.webp 는
+     고정 파일명 upsert 라 재생성 시 URL 이 안 바뀌므로 withReferenceVersion
+     (?v=updated_at)으로 캐시를 버스트한다(updateReference 가 updated_at 갱신).
+     이 폴백-우선 구조 덕에 백필이 진행되기 전에는 기존과 동일하게 원본이
+     재생되어 무중단으로 점진 전환된다. */
+  const animatedSrc = item.preview_url
+    ? withReferenceVersion(item.preview_url, item)
+    : (item.file_url || item.thumbnail_url || "");
   const canPreviewVideo = item.kind === "video" && Boolean(item.file_url);
   const videoProgress = videoDuration > 0 ? Math.max(0, Math.min(1, videoTime / videoDuration)) : 0;
   // 호버/스크럽 중에만 비디오 프레임을 보여주고, 그 외엔 원래 썸네일(stillSrc)로

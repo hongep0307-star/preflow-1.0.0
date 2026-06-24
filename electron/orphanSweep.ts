@@ -223,10 +223,13 @@ function collectReferencedKeys(): Set<string> {
   // "delete every library file" failure mode.
   try {
     for (const row of db
-      .prepare(`SELECT file_url, thumbnail_url, timestamp_notes, ai_suggestions FROM reference_items`)
-      .all() as { file_url: string | null; thumbnail_url: string | null; timestamp_notes: string | null; ai_suggestions: string | null }[]) {
+      .prepare(`SELECT file_url, thumbnail_url, preview_url, timestamp_notes, ai_suggestions FROM reference_items`)
+      .all() as { file_url: string | null; thumbnail_url: string | null; preview_url: string | null; timestamp_notes: string | null; ai_suggestions: string | null }[]) {
       addUrl(row.file_url);
       addUrl(row.thumbnail_url);
+      // CRITICAL: 그리드 자동재생 프리뷰(preview.webp) 도 참조 집합에 포함해야
+      // sweep 이 살아있는 프리뷰 파일을 지우지 않는다.
+      addUrl(row.preview_url);
       collectUrlsFromJson(safeJsonParse(row.timestamp_notes), urls);
       collectUrlsFromJson(safeJsonParse(row.ai_suggestions), urls);
     }

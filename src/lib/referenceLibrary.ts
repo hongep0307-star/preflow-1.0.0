@@ -11,6 +11,7 @@ import { extractFirstFrame, validateVideoFile, validateVideoMeta, type VideoMeta
 import { extractVideoPosterFile } from "./videoTranscode";
 import { ingestYoutube, isYoutubeUrl, YOUTUBE_URL_REGEX } from "./youtube";
 import { fetchLinkPreview, type LinkPreviewResult } from "./linkPreview";
+import { generateAnimatedPreviewBlob } from "./animatedPreview";
 import type { RefAnnotation, RefImageItem, RefItem, RefVideoItem, RefYoutubeItem } from "./refItems";
 import type { GptQuality } from "./imageGenPreference";
 import { DEFAULT_IMAGE_SEARCH_ENGINE, type ImageSearchEngineId } from "./imageSearchEngines";
@@ -120,6 +121,9 @@ export interface ReferenceItem {
   title: string;
   file_url?: string | null;
   thumbnail_url?: string | null;
+  /** 그리드 자동재생용 경량 animated WebP 프리뷰 URL. GIF/animated-WebP 만
+   *  채워지며, 없으면 그리드는 원본(file_url)으로 폴백한다. */
+  preview_url?: string | null;
   mime_type?: string | null;
   file_size?: number | null;
   content_hash?: string | null;
@@ -243,6 +247,7 @@ export interface CreateReferenceInput {
   title: string;
   file_url?: string | null;
   thumbnail_url?: string | null;
+  preview_url?: string | null;
   mime_type?: string | null;
   file_size?: number | null;
   content_hash?: string | null;
@@ -370,6 +375,7 @@ function normalizeReference(row: ReferenceRow): ReferenceItem {
     kind: normalizeReferenceKind(row, fileUrl),
     file_url: fileUrl,
     thumbnail_url: thumbnailUrl,
+    preview_url: rewriteStorageUrl(row.preview_url),
     tags: parseArray<string>(row.tags),
     timestamp_notes: normalizeTimestampNoteIds(parseArray<TimestampNote>(row.timestamp_notes)),
     color_palette: parseArray<ColorSwatch>(row.color_palette),
@@ -982,6 +988,7 @@ export async function createReference(input: CreateReferenceInput): Promise<Refe
     kind: input.kind,
     file_url: input.file_url ?? null,
     thumbnail_url: input.thumbnail_url ?? null,
+    preview_url: input.preview_url ?? null,
     mime_type: input.mime_type ?? null,
     file_size: input.file_size ?? null,
     content_hash: input.content_hash ?? null,
@@ -1310,6 +1317,84 @@ export async function backfillImageThumbnails(opts: {
   return progress;
 }
 
+/* ── Animated preview 백필 (GIF / animated-WebP) ──────────────────────
+   정적 thumbnail 백필(위)이 image/webp 만 다루는 것과 짝을 이루는, GIF 전용
+   경량 animated 프리뷰 백필. 신규 업로드는 uploadReferenceFile 에서 즉시
+   생성하지만, (a) 기능 도입 이전에 등록된 레거시 GIF (b) main 프로세스가
+   프리뷰를 굽지 않는 Eagle import GIF 는 여기서 idle 백필로 채운다. */
+
+/** 백필 대상 = `gif` kind && `file_url` 보유 && `preview_url` 아직 없음. */
+export function selectAnimatedPreviewBackfillCandidates(items: ReferenceItem[]): ReferenceItem[] {
+  return items.filter((item) => {
+    if (item.kind !== "gif") return false;
+    if (!item.file_url) return false;
+    return !item.preview_url;
+  });
+}
+
+export type AnimatedPreviewBackfillItemResult = "success" | "skipped" | "failed";
+export interface AnimatedPreviewBackfillItemEvent {
+  item: ReferenceItem;
+  result: AnimatedPreviewBackfillItemResult;
+  previewUrl: string | null;
+}
+
+async function backfillOneAnimatedPreview(
+  item: ReferenceItem,
+): Promise<{ result: AnimatedPreviewBackfillItemResult; previewUrl: string | null }> {
+  if (!item.file_url) return { result: "failed", previewUrl: null };
+  try {
+    // generateAnimatedPreviewBlob 가 내부적으로 file_url 을 fetch + 디코드.
+    // 정적 단일 프레임 등 부적합 케이스는 null → skipped 로 표시(재시도 무의미).
+    const previewBlob = await generateAnimatedPreviewBlob(item.file_url, item.mime_type);
+    if (!previewBlob) return { result: "skipped", previewUrl: null };
+    const previewUrl = await uploadToReferences(storagePath(item.id, "preview.webp"), previewBlob);
+    await updateReference(item.id, { preview_url: previewUrl });
+    return { result: "success", previewUrl };
+  } catch (err) {
+    console.warn("[library] animated preview backfill failed for", item.id, err);
+    return { result: "failed", previewUrl: null };
+  }
+}
+
+/** GIF animated 프리뷰를 라이브러리 전체에 백필한다.
+ *
+ *  - 동시성 기본 1 — 디코드+인코드가 무거워(프레임당 수십 ms × 수백) 카드
+ *    스크롤/디코드와 메인스레드를 다투지 않게 한 항목씩 처리.
+ *  - onItem 으로 LibraryPage 가 카드 preview_url 을 in-place 갱신 + processed
+ *    set 기록(자동 백필 경로). */
+export async function backfillAnimatedPreviews(opts: {
+  items?: ReferenceItem[];
+  onProgress?: (p: ThumbnailBackfillProgress) => void;
+  onItem?: (event: AnimatedPreviewBackfillItemEvent) => void;
+  signal?: AbortSignal;
+  concurrency?: number;
+} = {}): Promise<ThumbnailBackfillProgress> {
+  const source = opts.items ?? await listReferences({ limit: 10_000 });
+  const candidates = selectAnimatedPreviewBackfillCandidates(source);
+  const total = candidates.length;
+  const progress: ThumbnailBackfillProgress = { done: 0, total, success: 0, failed: 0, skipped: 0 };
+  opts.onProgress?.({ ...progress });
+  if (total === 0) return progress;
+
+  await runWithConcurrency(
+    candidates,
+    opts.concurrency ?? 1,
+    async (item) => {
+      const { result, previewUrl } = await backfillOneAnimatedPreview(item);
+      if (result === "success") progress.success += 1;
+      else if (result === "skipped") progress.skipped += 1;
+      else progress.failed += 1;
+      progress.done += 1;
+      opts.onProgress?.({ ...progress });
+      opts.onItem?.({ item, result, previewUrl });
+    },
+    opts.signal,
+  );
+
+  return progress;
+}
+
 export async function renameFolder(oldPath: string, newPath: string): Promise<{ updated: number; items: ReferenceItem[] }> {
   const oldTag = folderTag(oldPath);
   const newTag = folderTag(newPath);
@@ -1490,6 +1575,7 @@ export async function duplicateReference(item: ReferenceItem): Promise<Reference
   const id = makeId();
   let fileUrl: string | null = null;
   let thumbnailUrl: string | null = null;
+  let previewUrl: string | null = null;
   if (item.file_url) {
     fileUrl = await copyReferenceFileUrl(item.file_url, id, "original");
   }
@@ -1498,12 +1584,18 @@ export async function duplicateReference(item: ReferenceItem): Promise<Reference
       ? fileUrl
       : await copyReferenceFileUrl(item.thumbnail_url, id, "thumbnail");
   }
+  if (item.preview_url) {
+    previewUrl = item.preview_url === item.file_url
+      ? fileUrl
+      : await copyReferenceFileUrl(item.preview_url, id, "preview");
+  }
   return createReference({
     id,
     kind: item.kind,
     title: `${item.title} copy`,
     file_url: fileUrl,
     thumbnail_url: thumbnailUrl,
+    preview_url: previewUrl,
     mime_type: item.mime_type,
     file_size: item.file_size,
     content_hash: item.content_hash,
@@ -2094,8 +2186,8 @@ export async function deleteReference(id: string): Promise<void> {
   if (!item) return;
   const { error } = await supabase.from("reference_items").delete().eq("id", id);
   if (error) throw new Error(error.message);
-  // 1) DB 가 아는 두 URL 은 명시 삭제 — 가장 일반적인 경로.
-  await deleteStoredFiles([item.file_url, item.thumbnail_url]);
+  // 1) DB 가 아는 URL 들은 명시 삭제 — 가장 일반적인 경로.
+  await deleteStoredFiles([item.file_url, item.thumbnail_url, item.preview_url]);
   // 2) 같은 reference 가 차지하는 폴더(`<yyyy-mm>/<refId>/`) 안에는 DB 컬럼이
   //    추적하지 않는 잔재가 남을 수 있다 — 과거 cover_<ms>.png / poster_regen_<ts>.png,
   //    중간 실패한 임시 파일 등. file_url / thumbnail_url 의 부모 폴더를
@@ -2109,7 +2201,7 @@ export async function deleteReference(id: string): Promise<void> {
  *  중복 폴더는 dedup. 실패는 warn 으로 삼키고 orphan sweep 이 후속 회수. */
 async function sweepReferenceFolders(item: ReferenceItem): Promise<void> {
   const parents = new Set<string>();
-  for (const url of [item.file_url, item.thumbnail_url]) {
+  for (const url of [item.file_url, item.thumbnail_url, item.preview_url]) {
     const parsed = parseStorageUrl(url);
     if (!parsed || parsed.bucket !== REFERENCES_BUCKET) continue;
     const slash = parsed.filePath.lastIndexOf("/");
@@ -2333,10 +2425,28 @@ export async function uploadReferenceFile(file: File, options: UploadReferenceOp
   // fails (some browsers refuse to decode the first frame), we transparently
   // fall back to using the original file as its own thumbnail.
   let thumbnailUrl = fileUrl;
+  let previewUrl: string | null = null;
   if (kind === "gif") {
     const posterBlob = await extractStaticPosterFromImageFile(file);
     if (posterBlob) {
       thumbnailUrl = await uploadToReferences(storagePath(id, "poster.png"), posterBlob);
+    }
+    // 그리드 자동재생용 경량 animated WebP 프리뷰를 함께 구워 둔다. 원본
+    // (수 MB, 풀해상도)을 그리드가 직접 재생하면 메인스레드가 길게 멈추므로,
+    // ≤360px·~12fps 프리뷰로 대체한다. 실패해도 업로드/poster 는 그대로 —
+    // 그리드는 원본으로 자연 폴백한다(non-blocking).
+    try {
+      const objectUrl = URL.createObjectURL(file);
+      try {
+        const previewBlob = await generateAnimatedPreviewBlob(objectUrl, file.type || "image/gif");
+        if (previewBlob) {
+          previewUrl = await uploadToReferences(storagePath(id, "preview.webp"), previewBlob);
+        }
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+    } catch (err) {
+      console.warn("[library] animated preview generation failed (using original):", err);
     }
   } else if (kind === "image" || kind === "webp") {
     // 일반 이미지(jpg/png/heic/avif…) / 정적 webp 도 카드용 다운스케일 thumbnail
@@ -2367,6 +2477,7 @@ export async function uploadReferenceFile(file: File, options: UploadReferenceOp
     title: baseTitle,
     file_url: fileUrl,
     thumbnail_url: thumbnailUrl,
+    preview_url: previewUrl,
     mime_type: file.type || (kind === "gif" ? "image/gif" : kind === "webp" ? "image/webp" : "image/*"),
     file_size: file.size,
     content_hash: hash,

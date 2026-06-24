@@ -562,6 +562,7 @@ function createTables(d: Database.Database) {
       title TEXT NOT NULL DEFAULT '',
       file_url TEXT,
       thumbnail_url TEXT,
+      preview_url TEXT,
       mime_type TEXT,
       file_size INTEGER,
       content_hash TEXT,
@@ -612,6 +613,11 @@ function createTables(d: Database.Database) {
   // 뱃지/"원본 보기" 의 단일 근거. 옛 DB 호환을 위해 ALTER 로 추가.
   try {
     d.exec(`ALTER TABLE reference_items ADD COLUMN variation_of TEXT`);
+  } catch (_) { /* column already exists */ }
+  // 그리드 자동재생용 경량 animated WebP 프리뷰 URL. 없으면 원본으로 폴백
+  // 하므로 옛 DB 도 무중단. 옛 DB 호환을 위해 ALTER 로 추가.
+  try {
+    d.exec(`ALTER TABLE reference_items ADD COLUMN preview_url TEXT`);
   } catch (_) { /* column already exists */ }
 
   d.exec(`

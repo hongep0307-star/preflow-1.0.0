@@ -1101,6 +1101,7 @@ export function LibraryPreviewPanel({
               onDrawStart={handleRegionDrawStart}
               onDeleteRegion={onDeleteTimestampNote}
               onEditRegion={onEditTimestampNote}
+              highlightNoteId={highlightRegionNoteId}
             />
             {videoUnplayable ? (
               /* 인앱 디코드 실패 — 포스터 위에 안내 + 기본 플레이어 열기 버튼.
@@ -1171,6 +1172,7 @@ export function LibraryPreviewPanel({
                     onDeleteRegion={onDeleteTimestampNote}
                     initialPageIndex={initialPageIndex}
                     onInitialPageConsumed={onInitialPageConsumed}
+                    highlightNoteId={highlightRegionNoteId}
                   />
                 );
               }
@@ -1235,6 +1237,7 @@ export function LibraryPreviewPanel({
                 notes={item.timestamp_notes}
                 onEditTimestampNote={onEditTimestampNote}
                 onDeleteTimestampNote={onDeleteTimestampNote}
+                highlightNoteId={highlightRegionNoteId}
               />
             </div>
           ) : imagePreviewUrl ? (

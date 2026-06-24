@@ -110,10 +110,11 @@ import {
 } from "@/lib/koreanTagAliasOverrides";
 import {
   buildReferenceTokenInventory,
+  buildReferenceTokenIdf,
   scoreReferences,
   type BriefSignals,
 } from "@/lib/referenceRecommender";
-import type { MoodFilterSpec } from "@/lib/moodSearch";
+import { pickMinCoverage, type MoodFilterSpec } from "@/lib/moodSearch";
 import { rerankReferencesForBrief } from "@/lib/briefReferenceRerank";
 import { LibraryCanvas } from "@/components/library/LibraryCanvas";
 import { OrphanCleanupDialog } from "@/components/library/OrphanCleanupDialog";
@@ -2534,6 +2535,14 @@ const LibraryPage = () => {
     [activeSavedFilterId, savedFilters],
   );
 
+  /* AI 검색 토큰 IDF(down-weight) map — 라이브러리에서 흔한 토큰("night"/
+     "city" 등)의 변별력을 자동으로 낮춘다. items 변동 시에만 재계산. 작은
+     라이브러리(<30)는 buildReferenceTokenIdf 가 빈 map 을 돌려 사실상 비활성. */
+  const referenceTokenIdf = useMemo(
+    () => buildReferenceTokenIdf(items),
+    [items],
+  );
+
   /* Mood 필터 활성 시 한 번만 점수 계산. scoreReferences 는 items 전체에
      대해 doable — minScore 미만은 자동 탈락된다(빈 신호도 자동 0점).
      반환은 RecommendedReference[] 라 lookup 편의를 위해 id→score Map 으로
@@ -2558,10 +2567,19 @@ const LibraryPage = () => {
        strict 는 MoodFilterSpec 의 사용자 토글값을 그대로 전달 — 게이트
        (intent anchor + high-weight ref) 적용 여부를 결정한다. legacy spec
        에서 strict 가 undefined 면 `?? true` 로 안전 기본값(엄격) 적용. */
+    const useStrict = moodFilter.strict ?? true;
     const scored = scoreReferences(moodFilter.signals, items, {
       minScore: moodFilter.minScore,
       limit: items.length || 1,
-      strict: moodFilter.strict ?? true,
+      strict: useStrict,
+      /* IDF 는 strict 여부와 무관하게 항상 적용 — 흔한 토큰 감점은 정렬/
+         minScore 효과를 모든 모드에서 개선한다. */
+      idf: referenceTokenIdf,
+      /* strict 일 때만 커버리지 + 핵심토큰(primary) 게이트를 켠다. 신호
+         풍부도 기반 동적 커버리지로 "여러 의도 축을 동시에 충족한 자료" 만
+         통과. strict OFF 면 게이트 없이 점수 기반(완화). */
+      minCoverage: useStrict ? pickMinCoverage(moodFilter.signals) : 0,
+      requirePrimary: useStrict,
     });
     for (const r of scored) map.set(r.item.id, r.score);
     /* Brief Match 앵커는 사용자가 명시적으로 고른 자료라 점수와 무관하게
@@ -2573,7 +2591,7 @@ const LibraryPage = () => {
       }
     }
     return map;
-  }, [items, moodFilter, briefMatchOpen, briefAnchorIds]);
+  }, [items, moodFilter, briefMatchOpen, briefAnchorIds, referenceTokenIdf]);
 
   /* 브리프 매치 "분석 & 매칭" 시 플라이아웃이 호출 — 토큰 기반 1차 정렬
      (onApplyMoodFilter) 직후, LLM 으로 의미 기반 재정렬을 백그라운드 실행한다.
@@ -6269,12 +6287,13 @@ const LibraryPage = () => {
      프리뷰가 이미 열려 있어도 GifFramePlayer 의 initialFrameIndex 갱신을
      통해 같은 경로로 점프(별도의 imperative ref 가 없어 큐잉 방식이 더 단순). */
   const handleJumpToTimestamp = useCallback((atSec?: number, frameIndex?: number, pageIndex?: number, regionNoteId?: string) => {
-    // 정지 이미지/PSD 영역 노트 — 시점/프레임/페이지 anchor 가 없다. 큰 프리뷰를
-    // 켜고(이미 region 박스는 항상 표시) 해당 노트를 잠깐 하이라이트한다.
+    // 영역 노트 하이라이트 — image/gif/video 공통. 큰 프리뷰를 켜고 해당 노트를
+    // 잠깐 하이라이트한다. image/PSD 는 시점/프레임 anchor 가 없어 여기서 끝나고
+    // (아래 블록들이 모두 no-op), gif/video 는 아래의 frame/time 점프까지 이어져
+    // "해당 프레임/시점으로 이동 + 영역 강조" 가 함께 일어난다.
     if (regionNoteId) {
       setPendingRegionNoteId(regionNoteId);
       if (!previewMode) setPreviewMode(true);
-      return;
     }
     // PDF 슬라이드 노트 — pageIndex 우선. 큰 프리뷰가 닫혀 있으면 켜고,
     // pendingPageIndex 를 세팅해 PdfViewer 의 initialPageIndex 가 갱신되어
@@ -6296,6 +6315,10 @@ const LibraryPage = () => {
     if (!Number.isFinite(atSec)) return;
     if (previewMode && videoRef.current) {
       videoRef.current.currentTime = atSec as number;
+      /* region 노트 하이라이트 진입이면 일시정지 — 재생 중에는 region 박스가
+         숨겨지므로(LibraryPreviewPanel.visibleRegionNotes) 정지해야 박스+강조가
+         보인다. 시점-only 노트(regionNoteId 없음)는 재생 상태를 건드리지 않음. */
+      if (regionNoteId) videoRef.current.pause();
       return;
     }
     setPendingSeekSec(atSec as number);

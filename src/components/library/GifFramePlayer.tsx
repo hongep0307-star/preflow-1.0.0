@@ -83,6 +83,10 @@ interface GifFramePlayerProps {
    *  Inspector 의 onEdit/onDelete 와 동일 시그니처를 그대로 forward 받는다. */
   onEditTimestampNote?: (noteId: string, text: string) => void;
   onDeleteTimestampNote?: (noteId: string) => void;
+  /** 인스펙터 영역 노트 클릭으로 진입 시 잠깐 강조할 노트 id. initialFrameIndex
+   *  로 그 노트의 프레임으로 점프된 직후 RegionOverlay 가 해당 박스를
+   *  하이라이트한다(image/video 와 동일 UX). */
+  highlightNoteId?: string | null;
 }
 
 export function GifFramePlayer({
@@ -101,6 +105,7 @@ export function GifFramePlayer({
   notes,
   onEditTimestampNote,
   onDeleteTimestampNote,
+  highlightNoteId,
 }: GifFramePlayerProps) {
   const t = useT();
   const { status, frames, durationsMs, naturalSize, error } = useGifFrames(src, mimeType);
@@ -577,6 +582,7 @@ export function GifFramePlayer({
                 onDrawStart={handleRegionDrawStart}
                 onDeleteRegion={onDeleteTimestampNote}
                 onEditRegion={onEditTimestampNote}
+                highlightNoteId={highlightNoteId}
               />
             ) : null}
           </div>

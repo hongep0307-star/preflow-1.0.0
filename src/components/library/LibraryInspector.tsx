@@ -2238,6 +2238,11 @@ function TimestampNotesSection({
   const [hoverPos, setHoverPos] = useState<HoverPreviewPos | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
+  /* 영상 region 노트별 *해당 시점(atSec) 프레임* dataURL. 포스터(메인 썸네일)
+     를 크롭하던 버그(모든 노트가 같은 프레임으로 보임) 수정 — 노트마다 그
+     시점의 프레임을 추출해 좌측 썸네일 크롭 소스로 쓴다. 추출 전/실패 시엔
+     포스터로 자연 폴백. */
+  const [videoNoteFrames, setVideoNoteFrames] = useState<Map<string, string>>(() => new Map());
 
   const isGif = selected.kind === "gif";
   const isVideo = selected.kind === "video";
@@ -2250,18 +2255,126 @@ function TimestampNotesSection({
      만 의미가 있고 시점/프레임 개념이 없다. label 은 BoxSelect 아이콘. */
   const isStillImage = selected.kind === "image" || selected.kind === "webp" || isPsdDoc;
 
-  /* 영역 노트 썸네일 — 박스친 영역만 잘라 보여줄 이미지 소스. 영상은 호버
-     비디오 프리뷰가 이미 그 역할을 하므로 제외하고, 정지 이미지/GIF 만 대상.
+  /* 영역 노트 썸네일 — 박스친 영역만 잘라 행 좌측에 보여줄 이미지 소스.
        - PSD: 풀해상도 프리뷰 WebP
        - image/webp: 썸네일(다운스케일) → 원본 폴백
-       - gif: 포스터 썸네일(정지) → 원본 폴백(원본은 잘린 영역이 애니메이션됨) */
+       - gif: 포스터 썸네일(정지) → 원본 폴백(원본은 잘린 영역이 애니메이션됨)
+       - video: 포스터(poster.png)만 사용 — file_url 은 영상이라 <img> 배경으로
+         못 쓴다. 좌측 썸네일 + 사각형 제거를 gif 와 동일하게 적용하되, 호버
+         확대는 영상 전용 <video> 프리뷰(해당 시점 프레임으로 seek)가 계속
+         담당한다(정지 크롭보다 정확). 포스터가 없으면 썸네일 미표시 →
+         BoxSelect 인디케이터로 자연 폴백. */
   const regionThumbBase = isPsdDoc
     ? ((selected.ai_suggestions?.psdPreview as string | undefined) ?? null)
     : (selected.kind === "image" || selected.kind === "webp" || selected.kind === "gif")
       ? (selected.thumbnail_url || selected.file_url || null)
-      : null;
+      : selected.kind === "video"
+        ? (selected.thumbnail_url || null)
+        : null;
   const regionThumbSrc = regionThumbBase ? withReferenceVersion(regionThumbBase, selected) : null;
-  const showsRegionThumb = Boolean(regionThumbSrc) && (isStillImage || isGif);
+  const showsRegionThumb = Boolean(regionThumbSrc) && (isStillImage || isGif || isVideo);
+
+  /* 영상 region 노트들의 (id@atSec) 시그니처 — 노트/시점이 바뀔 때만 재추출. */
+  const videoRegionNoteKey = useMemo(() => {
+    if (!isVideo || !selected.file_url) return "";
+    return selected.timestamp_notes
+      .filter((n) => n.region)
+      .map((n) => `${n.id}@${n.atSec ?? 0}`)
+      .join("|");
+  }, [isVideo, selected.file_url, selected.timestamp_notes]);
+
+  /* off-DOM <video> 로 각 region 노트의 atSec 프레임을 순차 seek + 캡처해
+     dataURL 로 보관. 로컬 서버가 ACAO * 를 주므로 crossOrigin 캡처가 taint
+     되지 않는다. 자료/노트 전환 시 in-flight 를 끊는다(cancelled). */
+  useEffect(() => {
+    if (!isVideo || !selected.file_url) {
+      setVideoNoteFrames(new Map());
+      return;
+    }
+    const targets = selected.timestamp_notes.filter((n) => n.region);
+    if (targets.length === 0) {
+      setVideoNoteFrames(new Map());
+      return;
+    }
+    let cancelled = false;
+    const video = document.createElement("video");
+    video.preload = "auto";
+    video.muted = true;
+    video.playsInline = true;
+    video.crossOrigin = "anonymous";
+
+    const result = new Map<string, string>();
+    let idx = 0;
+
+    const finish = () => {
+      if (!cancelled) setVideoNoteFrames(new Map(result));
+      video.removeAttribute("src");
+      try { video.load(); } catch { /* noop */ }
+    };
+
+    const capture = () => {
+      if (cancelled) return;
+      const note = targets[idx];
+      try {
+        const w = video.videoWidth;
+        const h = video.videoHeight;
+        if (note && w > 0 && h > 0) {
+          /* 좌측 썸네일은 36px 박스라 320px 캡으로 충분(메모리 절약). */
+          const scale = Math.min(1, 320 / Math.max(w, 1));
+          const cw = Math.max(1, Math.round(w * scale));
+          const ch = Math.max(1, Math.round(h * scale));
+          const canvas = document.createElement("canvas");
+          canvas.width = cw;
+          canvas.height = ch;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(video, 0, 0, cw, ch);
+            result.set(note.id, canvas.toDataURL("image/webp", 0.8));
+          }
+        }
+      } catch {
+        /* taint/decode 실패 — 이 노트는 포스터 폴백 유지. */
+      }
+      idx += 1;
+      seekNext();
+    };
+
+    const seekNext = () => {
+      if (cancelled) return;
+      if (idx >= targets.length) { finish(); return; }
+      const note = targets[idx];
+      const dur = Number.isFinite(video.duration) ? video.duration : 0;
+      const t = Math.min(Math.max(0, note.atSec ?? 0), Math.max(0, dur - 0.05));
+      /* 이미 그 시점(특히 0초) 이면 seeked 가 안 뜰 수 있어 직접 캡처. */
+      if (Math.abs(video.currentTime - t) < 0.04 && video.readyState >= 2) {
+        capture();
+        return;
+      }
+      try {
+        video.currentTime = t;
+      } catch {
+        idx += 1;
+        seekNext();
+      }
+    };
+
+    const onReady = () => { if (!cancelled) seekNext(); };
+    const onError = () => finish();
+    video.addEventListener("loadeddata", onReady, { once: true });
+    video.addEventListener("seeked", capture);
+    video.addEventListener("error", onError, { once: true });
+    video.src = selected.file_url;
+
+    return () => {
+      cancelled = true;
+      video.removeEventListener("loadeddata", onReady);
+      video.removeEventListener("seeked", capture);
+      video.removeEventListener("error", onError);
+      video.removeAttribute("src");
+      try { video.load(); } catch { /* noop */ }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isVideo, selected.file_url, videoRegionNoteKey]);
 
   /* 노트 목록 정렬 키 — 자료 종류에 따라 다름:
        video: atSec 오름차순(시간 순서)
@@ -2477,9 +2590,12 @@ function TimestampNotesSection({
               onJumpToTimestamp?.(undefined, undefined, undefined, note.id);
               return;
             }
-            if (isPdf) onJumpToTimestamp?.(undefined, undefined, note.pageIndex);
-            else if (isGif) onJumpToTimestamp?.(undefined, note.frameIndex);
-            else onJumpToTimestamp?.(note.atSec);
+            if (isPdf) onJumpToTimestamp?.(undefined, undefined, note.pageIndex, hasRegion ? note.id : undefined);
+            /* gif/video 도 region 노트면 note.id 를 함께 넘겨 큰 프리뷰가
+               해당 프레임/시점으로 점프한 뒤 영역을 잠깐 하이라이트하게 한다
+               (image 와 동일 UX). region 이 없는 시점-only 노트는 미전달. */
+            else if (isGif) onJumpToTimestamp?.(undefined, note.frameIndex, undefined, hasRegion ? note.id : undefined);
+            else onJumpToTimestamp?.(note.atSec, undefined, undefined, hasRegion ? note.id : undefined);
           };
           const labelTitle = isStillImage
             ? t("library.inspector.regionNoteOpen")
@@ -2497,9 +2613,10 @@ function TimestampNotesSection({
               onMouseLeave={() => setHoveredNoteId(null)}
             >
               {/* 영역 썸네일 — 박스친 영역만 잘라 행 좌측에 미리보기. 정지
-                  이미지/GIF 의 region 노트에만 노출(영상은 호버 비디오 프리뷰가
-                  담당). 박스 종횡비를 region 픽셀 종횡비에 맞춰 왜곡 없이 표시.
-                  호버하면 우측 포털 팝오버로 크게 보인다. */}
+                  이미지/GIF/영상의 region 노트에 노출(영상은 포스터를 크롭).
+                  박스 종횡비를 region 픽셀 종횡비에 맞춰 왜곡 없이 표시. 호버
+                  확대는 이미지/GIF 는 region 포털 팝오버, 영상은 시점 <video>
+                  프리뷰가 담당한다. */}
               {showsRegionThumb && hasRegion && note.region ? (
                 <button
                   type="button"
@@ -2507,7 +2624,14 @@ function TimestampNotesSection({
                   title={labelTitle}
                   aria-label={labelTitle}
                   className="ml-1 mr-0.5 h-9 w-9 shrink-0 self-center border border-border-subtle bg-muted transition-[border-color] hover:border-primary"
-                  style={regionCoverStyle(regionThumbSrc as string, note.region, selected.width, selected.height)}
+                  style={regionCoverStyle(
+                    /* 영상은 그 노트 시점의 프레임을 우선 사용(추출 전이면
+                       포스터로 폴백). 이미지/GIF 는 기존 정적 썸네일. */
+                    (isVideo ? (videoNoteFrames.get(note.id) ?? regionThumbSrc) : regionThumbSrc) as string,
+                    note.region,
+                    selected.width,
+                    selected.height,
+                  )}
                 />
               ) : null}
               {/* 라벨 — video/gif 노트는 시간/프레임 텍스트(+ region 이 있으면
@@ -2533,7 +2657,10 @@ function TimestampNotesSection({
                     : isGif
                       ? (note.frameIndex !== undefined ? `#${note.frameIndex + 1}` : "#?")
                       : formatDuration(note.atSec)}</span>
-                  {hasRegion ? (
+                  {/* region 인디케이터 — 좌측에 region 썸네일이 이미 나오는
+                      경우(gif/이미지)엔 중복이라 생략하고, 썸네일이 없는
+                      영상/PDF 노트에서만 BoxSelect 로 region 보유를 표시. */}
+                  {hasRegion && !showsRegionThumb ? (
                     <BoxSelect
                       className="h-3 w-3 text-primary"
                       aria-label={t("library.inspector.hasRegion")}

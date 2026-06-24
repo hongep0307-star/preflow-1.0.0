@@ -16,6 +16,12 @@ import type { ReferenceItem } from "./referenceLibrary";
 
 /** Brief 분석 결과에서 뽑은 신호. 비어 있는 필드는 그냥 점수에 기여하지 않음. */
 export interface BriefSignals {
+  /** 쿼리의 *핵심 주제* 토큰(1-4개). "네온사인" → ["neon","sign","네온","간판"].
+   *  다른 카테고리(lighting/product 등)와 개념이 겹칠 수 있으나, 이 필드는
+   *  "매칭되는 자료가 반드시 가지고 있어야 하는 1차 의도" 를 표시하는 마커다.
+   *  scoreReferences 의 requirePrimary 게이트가 이 토큰의 매칭을 강제할 때 쓴다.
+   *  선택 필드 — 기존 호출부(brief/scene/recommend)는 채우지 않아도 동작한다. */
+  primary?: string[];
   /** mood/tone keywords — 분석의 tone_manner.keywords 등에서 합류. */
   mood: string[];
   /** Genre / content type — "tutorial", "ad", "documentary" 같은 키워드. */
@@ -189,6 +195,8 @@ function intersect(a: string[], b: string[]): string[] {
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
 export interface ExtractBriefSignalsInput {
+  /** 핵심 주제 토큰 — 보통 NL AI 검색(moodSearch)만 채운다. */
+  primary?: Array<string | null | undefined>;
   /** tone_manner.keywords / mood — 정확히 알면 여기에. */
   mood?: Array<string | null | undefined>;
   /** content_type / hook_strategy.kind / production_notes.shooting_style 등. */
@@ -207,6 +215,7 @@ export interface ExtractBriefSignalsInput {
 
 export function extractBriefSignals(input: ExtractBriefSignalsInput): BriefSignals {
   return {
+    primary: normalizeArray(input.primary),
     mood: normalizeArray(input.mood),
     genre: normalizeArray(input.genre),
     product: normalizeArray(input.product),
@@ -367,6 +376,7 @@ const HIGH_WEIGHT_THRESHOLD = 0.9;
  * "keyword" 는 BriefSignals 의 keywords (SceneSignals 도 같은 prefix 공유).
  * camera / location / genre 는 의도적 제외 — 보조 정보. */
 const ANCHOR_CATEGORIES: ReadonlySet<string> = new Set([
+  "primary",
   "mood",
   "keyword",
   "lighting",
@@ -430,6 +440,7 @@ function flattenSignal(signals: BriefSignals | SceneSignals): Array<{ tokens: st
   if ("genre" in signals) {
     // BriefSignals
     return [
+      { tokens: signals.primary ?? [], reasonPrefix: "primary" },
       { tokens: signals.mood, reasonPrefix: "mood" },
       { tokens: signals.genre, reasonPrefix: "genre" },
       { tokens: signals.product, reasonPrefix: "product" },
@@ -461,6 +472,18 @@ export interface ScoreReferencesOptions {
    *  필요. 기본 false — 기존 추천 호출부(RecommendedReferences, ReferencePickerDrawer
    *  등)의 동작을 보존. AI Search(LibraryPage) 만 명시적으로 true 로 전달. */
   strict?: boolean;
+  /** 토큰별 IDF down-weight multiplier (token → 0.25..1.0). 라이브러리에서
+   *  흔한 토큰("night"/"city" 등)의 가중치를 자동으로 깎아 변별력을 높인다.
+   *  `buildReferenceTokenIdf` 로 만든 map 을 전달. 미전달 시 모든 토큰 ×1.0. */
+  idf?: ReadonlyMap<string, number>;
+  /** 최소 카테고리 커버리지 — 서로 다른 *비-weak* 신호 카테고리(primary 제외)
+   *  중 몇 개가 매치돼야 결과에 포함되는지. 기본 0(비활성). AI Search strict
+   *  모드가 신호 풍부도 기반으로 1~2 를 전달해 "쿼리 의도의 여러 축을 동시에
+   *  충족한 자료" 만 통과시킨다. */
+  minCoverage?: number;
+  /** true 면 signals.primary 토큰이 1개 이상 매치돼야 통과. signals.primary
+   *  가 비어 있으면(=핵심 토큰 미제공) 자동 무시. 기본 false. */
+  requirePrimary?: boolean;
 }
 
 const DEFAULT_KINDS: ReadonlySet<ReferenceItem["kind"]> = new Set(["image", "gif", "video", "youtube"]);
@@ -503,11 +526,21 @@ export function scoreReferences(
   const minScore = options.minScore ?? 0.5;
   const limit = options.limit ?? 12;
   const strict = options.strict === true;
+  const idf = options.idf ?? null;
+  const minCoverage = options.minCoverage ?? 0;
   const flatSignals = flattenSignal(signals);
 
   // 신호가 아예 비어있으면 더 계산할 필요가 없음 — 빈 배열 반환.
   // (호출부가 fallback 으로 "최근 사용" 정렬을 띄우면 됨.)
   if (flatSignals.every((bucket) => bucket.tokens.length === 0)) return [];
+
+  /* requirePrimary 는 signals.primary 가 실제로 있을 때만 의미. 핵심 토큰이
+     비어 있으면(LLM 미제공 / legacy spec) 게이트를 자동 비활성화해 결과가
+     통째로 사라지는 것을 막는다. */
+  const hasPrimarySignals = flatSignals.some(
+    (b) => b.reasonPrefix === "primary" && b.tokens.length > 0,
+  );
+  const requirePrimary = options.requirePrimary === true && hasPrimarySignals;
 
   /* Strict anchor 게이트용으로 ANCHOR_CATEGORIES (mood ∪ keywords ∪ lighting
      ∪ product) 의 비-weak 토큰 집합을 미리 계산. SceneSignals 는 mood +
@@ -544,6 +577,11 @@ export function scoreReferences(
        묶어 v2 의 백도어("anchor 는 약한 토큰 / high-weight 는 무관 토큰" 조합)
        을 차단. strict OFF 면 의미 없음. */
     let hasAnchorHighWeightHit = false;
+    /* 커버리지 — 비-weak 토큰이 매치된 서로 다른 *신호 카테고리* 집합
+       (primary 는 제외 — requirePrimary 가 따로 담당). minCoverage 게이트용. */
+    const matchedCategories = new Set<string>();
+    /* primary 신호 토큰(=쿼리 핵심 주제) 이 한 번이라도 매치됐는지. */
+    let matchedPrimary = false;
 
     for (const sigBucket of flatSignals) {
       if (sigBucket.tokens.length === 0) continue;
@@ -559,6 +597,12 @@ export function scoreReferences(
           if (!tokenReasonPrefix.has(token)) {
             tokenReasonPrefix.set(token, sigBucket.reasonPrefix);
           }
+          const isWeak = WEAK_SIGNAL_TOKENS.has(token);
+          if (sigBucket.reasonPrefix === "primary") {
+            if (!isWeak) matchedPrimary = true;
+          } else if (!isWeak) {
+            matchedCategories.add(sigBucket.reasonPrefix);
+          }
           if (
             strict
             && anchorTokens?.has(token)
@@ -572,14 +616,22 @@ export function scoreReferences(
 
     if (tokenBestWeight.size === 0) continue;
 
-    /* 가중합 — 각 토큰당 (채택 weight × strength multiplier).
-       Weak 토큰은 0.3 배로 깎여 임계 통과 기여도가 작아진다. */
+    /* 가중합 — 각 토큰당 (채택 weight × strength multiplier × IDF multiplier).
+       Weak 토큰은 0.3 배로, 라이브러리에서 흔한 토큰은 IDF 로 추가 감점되어
+       변별력 낮은 매칭의 임계 통과 기여도가 작아진다. */
     let score = 0;
     for (const [token, weight] of tokenBestWeight) {
-      score += weight * tokenStrengthMultiplier(token);
+      const idfMul = idf?.get(token) ?? 1;
+      score += weight * tokenStrengthMultiplier(token) * idfMul;
     }
 
     if (score < minScore) continue;
+    /* 커버리지 게이트 — 쿼리의 서로 다른 의도 축(카테고리) 을 충분히 충족하지
+       못한 자료는 탈락. 한두 개의 흔한 토큰만 우연 매치된 false-positive 를
+       점수와 별개로 차단한다(절대 점수 하한으로는 못 거르는 부류). */
+    if (matchedCategories.size < minCoverage) continue;
+    /* Primary 게이트 — 쿼리의 핵심 주제 토큰이 자료에 실제로 없으면 탈락. */
+    if (requirePrimary && !matchedPrimary) continue;
     /* Strict 결합 게이트 — anchor 토큰이 high-weight ref bucket 과 직접
        매치된 흔적이 없으면 탈락. 점수가 임계를 넘어도 의도-매치 증거가
        구조화 메타에 없으면 false-positive 로 본다. */
@@ -649,6 +701,62 @@ export function buildReferenceTokenInventory(
     }
   }
   return inv;
+}
+
+/* ───────────────────────────────────────────────────────────────
+ * IDF (inverse document frequency) 자동 down-weight
+ *
+ * WEAK_SIGNAL_TOKENS 가 손수 관리하는 generic 단어 리스트라면, IDF 는 *이
+ * 라이브러리에서* 실제로 흔한 토큰을 자동으로 찾아 가중치를 깎는다. "night" /
+ * "city" / "close" 처럼 자료 절반에 등장하는 토큰은 변별력이 없어(=거의 모든
+ * 자료를 끌어들임) AI 검색의 false-positive 주원인이 된다. multiplier 를 낮춰
+ * 그런 토큰 단독 매칭으로는 임계를 통과하기 어렵게 한다. 변별력 높은(희귀)
+ * 토큰은 1.0(감점 없음) 으로 둬 점수 스케일/기존 minScore 의미를 보존한다.
+ * ─────────────────────────────────────────────────────────────── */
+/** 통계 모집단이 이보다 작으면(df/N 이 noisy) IDF 비활성. */
+const IDF_MIN_LIBRARY = 30;
+/** ≤5% 자료에만 등장 → multiplier 1.0(감점 없음). */
+const IDF_DF_FULL = 0.05;
+/** ≥50% 자료에 등장 → multiplier 하한(IDF_FLOOR). */
+const IDF_DF_FLOOR = 0.5;
+const IDF_FLOOR = 0.25;
+
+/** 라이브러리 자료들의 토큰 document-frequency 로부터 down-weight multiplier
+ *  map(token → 0.25..1.0) 을 만든다. multiplier 1.0(감점 없음) 토큰은 map 에
+ *  넣지 않아(조회 시 기본 1.0) 메모리를 절약한다. 라이브러리가 너무 작으면
+ *  빈 map 을 돌려 IDF 를 사실상 끈다.
+ *
+ *  scoreReferences 의 `idf` 옵션으로 그대로 전달한다. tokensFromReference 를
+ *  공유하므로 매칭 좌표계가 100% 일치한다. */
+export function buildReferenceTokenIdf(
+  items: ReadonlyArray<ReferenceItem>,
+): Map<string, number> {
+  const result = new Map<string, number>();
+  const live = items.filter((it) => !it.deleted_at);
+  const n = live.length;
+  if (n < IDF_MIN_LIBRARY) return result;
+
+  const df = new Map<string, number>();
+  for (const item of live) {
+    const refTokens = tokensFromReference(item);
+    // 한 자료 안 같은 토큰은 한 번만(document frequency).
+    const seen = new Set<string>();
+    for (const bucket of refTokens.buckets) {
+      for (const tok of bucket.tokens) seen.add(tok);
+    }
+    for (const tok of seen) df.set(tok, (df.get(tok) ?? 0) + 1);
+  }
+
+  for (const [tok, count] of df) {
+    const freq = count / n;
+    if (freq <= IDF_DF_FULL) continue; // multiplier 1.0 → map 에 미포함
+    const mult =
+      freq >= IDF_DF_FLOOR
+        ? IDF_FLOOR
+        : 1 - ((freq - IDF_DF_FULL) / (IDF_DF_FLOOR - IDF_DF_FULL)) * (1 - IDF_FLOOR);
+    result.set(tok, mult);
+  }
+  return result;
 }
 
 /** Brief 분석 결과에서 호출부가 흔히 가진 필드들을 한 번에 취하는 편의 함수.

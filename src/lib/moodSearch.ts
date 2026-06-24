@@ -60,7 +60,8 @@ export const MOOD_MIN_SCORE_MAX = 2.0;
  *  사용자가 슬라이더로 더 빡빡하게 조이는 것은 여전히 가능. */
 export function pickMinScore(signals: BriefSignals): number {
   const total =
-    signals.mood.length
+    (signals.primary?.length ?? 0)
+    + signals.mood.length
     + signals.genre.length
     + signals.product.length
     + signals.location.length
@@ -70,6 +71,28 @@ export function pickMinScore(signals: BriefSignals): number {
   if (total <= 3) return 0.4;
   if (total <= 6) return 0.7;
   return DEFAULT_MOOD_MIN_SCORE;
+}
+
+/** Strict 모드에서 적용할 최소 카테고리 커버리지(서로 다른 *비-primary* 신호
+ *  카테고리 중 몇 개가 매치돼야 하는지). primary 는 카테고리 수에서 제외 —
+ *  핵심 토큰 강제는 requirePrimary 게이트가 따로 담당한다.
+ *
+ *  쿼리가 단일 개념(비-primary 카테고리 ≤1) 이면 그 1개만 충족하면 되고,
+ *  여러 축으로 풍부한 쿼리는 ≥2개 카테고리를 동시에 충족해야 통과시켜
+ *  "흔한 토큰 한두 개만 우연 매칭된" 자료를 걸러낸다. 실제로 쿼리에 존재하는
+ *  카테고리 수를 넘지 않게 clamp 해 결과가 통째로 비는 것을 막는다. */
+export function pickMinCoverage(signals: BriefSignals): number {
+  const realCategories = [
+    signals.mood,
+    signals.genre,
+    signals.product,
+    signals.location,
+    signals.lighting,
+    signals.camera,
+    signals.keywords,
+  ].filter((arr) => arr.length > 0).length;
+  if (realCategories <= 1) return realCategories; // 0 또는 1
+  return 2;
 }
 
 /** AI Search 의 활성 필터. `strict` 는 cross-bucket dedup 위에 얹는 두 번째
@@ -167,6 +190,7 @@ function coerceSignals(value: unknown): BriefSignals {
     return arr.filter((t): t is string => typeof t === "string");
   };
   return {
+    primary: pick("primary"),
     mood: pick("mood"),
     genre: pick("genre"),
     product: pick("product"),
@@ -284,6 +308,7 @@ function normTokens(value: unknown, fallback: string[] = []): string[] {
 
 function emptySignals(): BriefSignals {
   return {
+    primary: [],
     mood: [],
     genre: [],
     product: [],
@@ -333,6 +358,7 @@ export async function expandMoodQuery(
       "",
       "Fill the following JSON shape — use empty arrays when a category does not apply:",
       "{",
+      '  "primary": string[],',
       '  "mood": string[],',
       '  "genre": string[],',
       '  "product": string[],',
@@ -343,6 +369,7 @@ export async function expandMoodQuery(
       "}",
       "",
       "Rules:",
+      "- `primary`: THE CORE SUBJECT of the query — the 1-3 essential concepts a matching reference MUST contain. Be strict: only the literal subject(s), not inferred attributes. Emit BOTH languages (e.g. query \"네온사인\" → [\"neon\",\"sign\",\"signage\",\"네온\",\"네온사인\",\"간판\"]; query \"비 오는 도시 밤거리\" → [\"rain\",\"city\",\"night\",\"비\",\"도시\",\"밤\"]). Do NOT put incidental/inferred attributes here.",
       "- `mood`: emotion / atmosphere words (warm, tense, dreamy, melancholic / 따뜻한, 긴장감, 몽환적, 쓸쓸한).",
       "- `genre`: content kind (ad, music-video, documentary, tutorial, vlog / 광고, 뮤직비디오, 다큐멘터리, 튜토리얼, 브이로그).",
       "- `product`: product or subject names if the query names them (otherwise empty). Keep brand names as-is in original script.",
@@ -355,7 +382,8 @@ export async function expandMoodQuery(
       "- Use spaces, not hyphens, for multi-word phrases (\"golden hour\" not \"golden-hour\").",
       "- Lowercase all English tokens. Korean tokens as-is.",
       "- Never invent product or brand names that the query does not mention.",
-      "- 2-10 tokens per non-empty category (counting both languages together).",
+      "- Be precise, not exhaustive: only fill categories the query actually implies. Do NOT pad with loosely-related tokens (e.g. for \"네온사인\" do not add generic camera/location guesses unless the query mentions them).",
+      "- 2-5 tokens per non-empty category (counting both languages together). `primary`: 1-3 concepts max.",
       "",
       `Query: ${trimmed}`,
       "",
@@ -386,6 +414,7 @@ export async function expandMoodQuery(
       parsed = {};
     }
     const signals: BriefSignals = {
+      primary: normTokens(parsed.primary),
       mood: normTokens(parsed.mood),
       genre: normTokens(parsed.genre),
       product: normTokens(parsed.product),

@@ -51,6 +51,9 @@ interface PdfViewerProps {
    *  1회 점프할 페이지(1-based). GIF 의 initialFrameIndex 와 같은 큐잉 패턴. */
   initialPageIndex?: number | null;
   onInitialPageConsumed?: () => void;
+  /** 인스펙터 슬라이드 노트 클릭으로 진입 시 잠깐 강조할 노트 id. 해당 노트의
+   *  페이지로 점프한 직후 RegionOverlay 가 그 박스를 하이라이트한다. */
+  highlightNoteId?: string | null;
 }
 
 export function PdfViewer({
@@ -61,6 +64,7 @@ export function PdfViewer({
   onDeleteRegion,
   initialPageIndex,
   onInitialPageConsumed,
+  highlightNoteId,
 }: PdfViewerProps) {
   const { t } = useUiLanguage();
   const fileUrl = item.file_url ?? "";
@@ -717,6 +721,7 @@ export function PdfViewer({
                   onAfterCreate={handleAfterRegion}
                   onDeleteRegion={onDeleteRegion}
                   onEditRegion={onEditRegion}
+                  highlightNoteId={highlightNoteId}
                 />
               ) : null}
             </div>

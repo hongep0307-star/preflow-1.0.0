@@ -45,6 +45,8 @@ import {
   AlignVerticalDistributeCenter,
   Bold,
   BringToFront,
+  Check,
+  ChevronDown,
   Clipboard,
   Contrast,
   Crop,
@@ -7465,12 +7467,88 @@ function ConnectionLine({
  *  - 출력 종류(image/video) 토글, 삭제 버튼.
  *  - 실행(▶)은 M4 에서 배선 — 지금은 비활성 placeholder.
  *  좌표는 캔버스(plane) 좌표계라 부모 plane 의 transform 으로 카메라가 적용된다. */
+/** 생성 노드 전용 드롭다운.
+ *
+ *  왜 Radix `Select` 가 아니라 `Popover` 인가:
+ *    네이티브 `<select>` 는 펼친 옵션 리스트가 OS(윈도우) 기본 UI 라 다크 테마와
+ *    어긋난다. 그렇다고 Radix `Select` 를 쓰면 이 컴포넌트가 pointerdown 시점에
+ *    열리는데, 캔버스 노드/뷰포트가 pointerdown 에서 setPointerCapture 로 드래그를
+ *    가로채는 구조라 열림/선택 제스처가 깨진다. 반면 `Popover` 는 click 기반이라
+ *    노트 툴바(글자색/배경색 피커)에서 이미 캔버스 안에서 안정적으로 동작 중이다.
+ *    그 검증된 패턴을 그대로 재사용해 UI 를 앱 다크 테마로 통일한다. */
+function CanvasNodeSelect({
+  value,
+  triggerLabel,
+  options,
+  onChange,
+  title,
+  className,
+}: {
+  value: string;
+  /** 트리거에 표시할 라벨(옵션 라벨과 다를 수 있어 분리). */
+  triggerLabel: string;
+  options: { value: string; label: string }[];
+  onChange: (value: string) => void;
+  title: string;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const stopPd = (e: ReactPointerEvent) => e.stopPropagation();
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          title={title}
+          onPointerDown={stopPd}
+          className={cn(
+            "flex items-center justify-between gap-1 border border-muted-foreground/30 bg-background px-1 py-0.5 text-2xs text-foreground hover:bg-accent",
+            className,
+          )}
+        >
+          <span className="truncate">{triggerLabel}</span>
+          <ChevronDown className="h-3 w-3 shrink-0 opacity-60" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="w-[var(--radix-popover-trigger-width)] min-w-28 p-1"
+        onPointerDown={stopPd}
+      >
+        <div className="flex flex-col">
+          {options.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              onPointerDown={stopPd}
+              onClick={() => { onChange(o.value); setOpen(false); }}
+              className={cn(
+                "flex items-center gap-1.5 px-1.5 py-1 text-left text-2xs hover:bg-accent",
+                o.value === value && "bg-accent/60",
+              )}
+            >
+              {o.value === value ? (
+                <Check className="h-3 w-3 shrink-0" />
+              ) : (
+                <span className="h-3 w-3 shrink-0" />
+              )}
+              <span className="truncate">{o.label}</span>
+            </button>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 /** 생성 노드 사이즈(화면비) 옵션 — openai-image 의 imageSize 문자열로 그대로 전달.
- *  NB2 는 sizeToNB2Aspect 로 9:16/16:9/1:1 로 매핑된다. */
-const GEN_SIZE_OPTIONS: { value: string; labelKey: string }[] = [
-  { value: "1024x1536", labelKey: "library.canvas.gen.sizePortrait" },
-  { value: "1536x1024", labelKey: "library.canvas.gen.sizeLandscape" },
-  { value: "1024x1024", labelKey: "library.canvas.gen.sizeSquare" },
+ *  비율 숫자는 모델마다 다르다: GPT 는 픽셀 그대로(2:3/3:2/1:1), NB2 는
+ *  sizeToNB2Aspect 로 9:16/16:9/1:1 에 매핑된다. 라벨에 선택 모델 기준 비율을
+ *  동적으로 붙이기 위해 두 비율을 함께 들고 있는다(전자=GPT, 후자=NB2). */
+const GEN_SIZE_OPTIONS: { value: string; labelKey: string; gptRatio: string; nb2Ratio: string }[] = [
+  { value: "1024x1536", labelKey: "library.canvas.gen.sizePortrait", gptRatio: "2:3", nb2Ratio: "9:16" },
+  { value: "1536x1024", labelKey: "library.canvas.gen.sizeLandscape", gptRatio: "3:2", nb2Ratio: "16:9" },
+  { value: "1024x1024", labelKey: "library.canvas.gen.sizeSquare", gptRatio: "1:1", nb2Ratio: "1:1" },
 ];
 
 function CanvasGenNodeView({
@@ -7515,6 +7593,8 @@ function CanvasGenNodeView({
   const quality = (node.params?.quality as GptQuality | undefined) ?? getGptQualityDefault("canvas");
   const isGpt = modelIsGpt("canvas", model);
   const modelOptions = getFeatureSpec("canvas").models;
+  const sizeOpt = GEN_SIZE_OPTIONS.find((s) => s.value === imageSize) ?? GEN_SIZE_OPTIONS[0];
+  const sizeLabel = `${t(sizeOpt.labelKey)} (${isGpt ? sizeOpt.gptRatio : sizeOpt.nb2Ratio})`;
   const running = !!runState?.running;
   const error = runState?.error;
   const isVideo = node.outputKind === "video";
@@ -7629,45 +7709,37 @@ function CanvasGenNodeView({
         </div>
 
         {/* 모델 */}
-        <select
+        <CanvasNodeSelect
           value={model}
-          className="w-full border border-muted-foreground/30 bg-background px-1 py-0.5 text-2xs text-foreground"
+          triggerLabel={IMAGE_GEN_MODEL_LABELS[model] ?? model}
           title={t("library.canvas.gen.model")}
-          onPointerDown={stop}
-          onChange={(e) => { e.stopPropagation(); onSetModel(node.id, e.target.value); }}
-        >
-          {modelOptions.map((m) => (
-            <option key={m.id} value={m.id}>
-              {IMAGE_GEN_MODEL_LABELS[m.id] ?? m.id}
-            </option>
-          ))}
-        </select>
+          className="w-full"
+          options={modelOptions.map((m) => ({ value: m.id, label: IMAGE_GEN_MODEL_LABELS[m.id] ?? m.id }))}
+          onChange={(v) => onSetModel(node.id, v)}
+        />
 
         {/* 사이즈 + (GPT 한정) 품질 */}
         <div className="flex gap-1">
-          <select
+          <CanvasNodeSelect
             value={imageSize}
-            className="flex-1 border border-muted-foreground/30 bg-background px-1 py-0.5 text-2xs text-foreground"
+            triggerLabel={sizeLabel}
             title={t("library.canvas.gen.size")}
-            onPointerDown={stop}
-            onChange={(e) => { e.stopPropagation(); onSetParams(node.id, { imageSize: e.target.value }); }}
-          >
-            {GEN_SIZE_OPTIONS.map((s) => (
-              <option key={s.value} value={s.value}>{t(s.labelKey)}</option>
-            ))}
-          </select>
+            className="flex-1"
+            options={GEN_SIZE_OPTIONS.map((s) => ({
+              value: s.value,
+              label: `${t(s.labelKey)} (${isGpt ? s.gptRatio : s.nb2Ratio})`,
+            }))}
+            onChange={(v) => onSetParams(node.id, { imageSize: v })}
+          />
           {isGpt ? (
-            <select
+            <CanvasNodeSelect
               value={quality}
-              className="flex-1 border border-muted-foreground/30 bg-background px-1 py-0.5 text-2xs text-foreground"
+              triggerLabel={quality}
               title={t("library.canvas.gen.quality")}
-              onPointerDown={stop}
-              onChange={(e) => { e.stopPropagation(); onSetParams(node.id, { quality: e.target.value }); }}
-            >
-              {(["low", "medium", "high"] as const).map((q) => (
-                <option key={q} value={q}>{q}</option>
-              ))}
-            </select>
+              className="flex-1"
+              options={(["low", "medium", "high"] as const).map((q) => ({ value: q, label: q }))}
+              onChange={(v) => onSetParams(node.id, { quality: v })}
+            />
           ) : null}
         </div>
 

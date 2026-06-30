@@ -62,7 +62,7 @@ export const IMAGE_GEN_FEATURES: ImageGenFeatureSpec[] = [
       { id: "gpt", isGpt: true },
       { id: "nano-banana-2", isGpt: false },
     ],
-    defaultModel: "gpt",
+    defaultModel: "nano-banana-2",
     defaultQuality: "medium",
   },
   {
@@ -85,7 +85,7 @@ export const IMAGE_GEN_FEATURES: ImageGenFeatureSpec[] = [
       { id: "gpt-image-1.5", isGpt: true },
       { id: "gpt-image-2", isGpt: true },
     ],
-    defaultModel: "gpt-image-1.5",
+    defaultModel: "gpt-image-2",
     defaultQuality: "medium",
   },
   {
@@ -155,7 +155,7 @@ export const IMAGE_GEN_FEATURES: ImageGenFeatureSpec[] = [
       { id: "gpt-image-1.5-text", isGpt: true },
     ],
     defaultModel: "gpt-image-1.5-ref",
-    defaultQuality: "medium",
+    defaultQuality: "low",
   },
   {
     // 캐릭터 시트/보드 — 둘 다 같은 inpaint 파이프라인(원본 사진 → 16:9 레퍼런스)
@@ -170,7 +170,7 @@ export const IMAGE_GEN_FEATURES: ImageGenFeatureSpec[] = [
       { id: "gpt-image-1.5", isGpt: true },
       { id: "gpt-image-2", isGpt: true },
     ],
-    defaultModel: "nano-banana-2",
+    defaultModel: "gpt-image-2",
     defaultQuality: "medium",
   },
   {
@@ -184,7 +184,7 @@ export const IMAGE_GEN_FEATURES: ImageGenFeatureSpec[] = [
       { id: "nano-banana-2", isGpt: false },
       { id: "gpt-image-2", isGpt: true },
     ],
-    defaultModel: "nano-banana-2",
+    defaultModel: "gpt-image-2",
     defaultQuality: "medium",
   },
   {

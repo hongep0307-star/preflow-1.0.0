@@ -1333,15 +1333,30 @@ const LibraryPage = () => {
   }, []);
   const [gridSize, setGridSize] = useState(() => Number(localStorage.getItem("preflow.library.gridSize")) || 180);
   const [viewMode, setViewMode] = useState<LibraryViewMode>("grid");
+  /* 캔버스 모드 허용 조건 — 단일 폴더 컨텍스트에서만 의미가 있다.
+   *  · 폴더가 아닌 컨텍스트(All/Smart/Tag/Trash) → 비허용.
+   *  · 단일 폴더 선택 → 허용(하위 폴더 보유 여부 무관).
+   *  · 다중 선택 → 기본 비허용. 단, 선택이 "한 폴더의 하위트리"
+   *    (선택된 조상 1개 + 그 자손 폴더들)로만 이루어진 경우는 허용 —
+   *    서로 무관한 폴더를 다중 선택했을 때만 캔버스를 막는다. */
+  const canvasAllowed = useMemo(() => {
+    const folderTags = selectedFolderTags.filter((tag) => tag.startsWith("folder:"));
+    if (folderTags.length === 0) return false;
+    if (folderTags.length === 1) return true;
+    return folderTags.some((root) =>
+      folderTags.every((tag) => tag === root || tag.startsWith(`${root}/`)),
+    );
+  }, [selectedFolderTags]);
   /* Canvas 뷰는 폴더 컨텍스트(`folder:` 접두) 에서만 의미가 있다. 사용자가
    *  Canvas 인 채로 사이드바의 All/Smart/Tag/Trash 등 폴더가 아닌 컨텍스트로
-   *  이동하면 즉시 grid 로 폴백 — Toolbar 도 Canvas 메뉴 항목을 숨기므로
-   *  사용자가 다시 캔버스로 돌아오려면 폴더 선택 후 다시 켜야 한다. */
+   *  이동하거나, 무관한 폴더를 다중 선택하면 즉시 grid 로 폴백 — Toolbar 도
+   *  Canvas 항목을 숨기므로 사용자가 다시 캔버스로 돌아오려면 단일 폴더(또는
+   *  한 폴더의 하위트리) 선택 후 다시 켜야 한다. */
   useEffect(() => {
-    if (viewMode === "canvas" && !activeTag?.startsWith("folder:")) {
+    if (viewMode === "canvas" && !canvasAllowed) {
       setViewMode("grid");
     }
-  }, [viewMode, activeTag]);
+  }, [viewMode, canvasAllowed]);
   /** Immersive(몰입) 모드 — 좌측 사이드바 + 상단 LibraryToolbar + 우측
    *  LibraryInspector 를 모두 숨겨 캔버스 또는 preview 만 풀 화면으로 보여준다.
    *  PureRef 의 캔버스 풀화면 제스처와 유사한 UX. 단축키는 백틱(`).
@@ -5510,7 +5525,7 @@ const LibraryPage = () => {
           setViewMode("list");
           return;
         }
-        if (event.key === "3" && activeTag?.startsWith("folder:")) {
+        if (event.key === "3" && canvasAllowed) {
           event.preventDefault();
           setViewMode("canvas");
           return;
@@ -5716,7 +5731,7 @@ const LibraryPage = () => {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeTag, filteredItems, handleCopySelectionToClipboard, handleDeleteSelected, handleDuplicateReference, handleRenameReference, handleTogglePin, handleCreateVariation, handleAddToBrief, handleAddToAgent, handleAddToConti, handleSearchByImage, handleOpenDefault, handleShowInFolder, handleCopyFilePath, handleCopyTags, handlePasteTags, handleClassifyReference, handleRegenerateThumbnail, handleMergeDuplicates, handleOpenPromoteDialog, immersiveCanvas, previewMode, selected, selectedItems, toggleGridHiddenForSelection, tryRunLatestUndo, viewMode]);
+  }, [activeTag, canvasAllowed, filteredItems, handleCopySelectionToClipboard, handleDeleteSelected, handleDuplicateReference, handleRenameReference, handleTogglePin, handleCreateVariation, handleAddToBrief, handleAddToAgent, handleAddToConti, handleSearchByImage, handleOpenDefault, handleShowInFolder, handleCopyFilePath, handleCopyTags, handlePasteTags, handleClassifyReference, handleRegenerateThumbnail, handleMergeDuplicates, handleOpenPromoteDialog, immersiveCanvas, previewMode, selected, selectedItems, toggleGridHiddenForSelection, tryRunLatestUndo, viewMode]);
 
   /* timestamp 노트 추가 — 인자가 모두 비어 있으면 인스펙터의 timestampText
      state + 현재 video.currentTime 를 사용(인스펙터의 인라인 Add 행 동작).
@@ -7790,7 +7805,7 @@ const LibraryPage = () => {
             showHidden={showHidden}
             onToggleShowHidden={() => setShowHidden((v) => !v)}
             hiddenCount={gridHiddenCount}
-            activeFolderTag={activeTag?.startsWith("folder:") ? activeTag : null}
+            activeFolderTag={canvasAllowed && activeTag?.startsWith("folder:") ? activeTag : null}
             typesFilter={typesFilter}
             onTypesFilterChange={setTypesFilter}
             linkPlatformsFilter={linkPlatformsFilter}
@@ -7881,7 +7896,7 @@ const LibraryPage = () => {
                 onHighlightRegionConsumed={() => setPendingRegionNoteId(null)}
                 onOpenInDefaultApp={handleOpenDefault}
               />
-            ) : viewMode === "canvas" && activeTag?.startsWith("folder:") ? (
+            ) : viewMode === "canvas" && canvasAllowed && activeTag?.startsWith("folder:") ? (
               /* Canvas 뷰 — 같은 filteredItems 를 받지만 grid/list 와 달리
                  자유 배치 + transform. doc 은 내부에서 자동 제외.
                  selectedIds 는 부모와 양방향 공유 — Inspector 가 같은

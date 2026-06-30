@@ -95,25 +95,25 @@ export function pickMinCoverage(signals: BriefSignals): number {
   return 2;
 }
 
-/** AI Search 의 활성 필터. `strict` 는 cross-bucket dedup 위에 얹는 두 번째
- *  precision 레이어 (intent-anchor + high-weight ref bucket 게이트) 의 ON/OFF.
- *  기본은 ON — 사용자 호소("정확도 안 맞는다") 의 일차 해결책이라, 새로
- *  적용되는 모든 쿼리는 strict 로 시작한다. UI 의 토글로 즉시 OFF 전환 가능. */
+/** AI Search 의 활성 필터.
+ *
+ *  @deprecated `strict` 게이트는 제거됨 — 매칭은 항상 점수 기반(완화)으로
+ *  동작하고 minScore 슬라이더 하나로만 표본 폭을 조절한다. 필드는 직렬화
+ *  호환을 위해 남겨두되 항상 false 로 채워지며 스코어러에서 무시된다. */
 export interface MoodFilterSpec {
   rawQuery: string;
   signals: BriefSignals;
   minScore: number;
-  /** strict ON 일 때 추가 게이트 적용 (기본 true). legacy spec 로드 시
-   *  부재하면 `?? true` 로 채운다. */
+  /** @deprecated 항상 false. 더 이상 게이트로 사용되지 않음. */
   strict: boolean;
 }
 
-/** localStorage 의 v1/v2 recent 엔트리 또는 자체 spec 직렬화에서 strict
- *  필드가 누락된 경우 안전하게 기본값 true 로 채운다. */
+/** 직렬화 호환용 — strict 필드가 누락된 legacy 엔트리를 false 로 정규화한다.
+ *  (게이트는 제거되어 값 자체는 무시되지만 타입 일관성을 위해 채운다.) */
 export function withStrictDefault<T extends { strict?: boolean }>(
   spec: T,
 ): T & { strict: boolean } {
-  return { ...spec, strict: spec.strict ?? true };
+  return { ...spec, strict: false };
 }
 
 /** 슬라이더 값이 새 max 를 넘으면 clamp. UI 슬라이더는 마운트 시 이 함수로
@@ -330,17 +330,17 @@ export async function expandMoodQuery(
     /* 빈 쿼리는 어차피 scoreReferences 가 empty signals 로 0건을 돌려
        주므로 minScore 값 자체는 무의미. 일관성을 위해 dynamic 으로 계산. */
     const empty = emptySignals();
-    return { rawQuery: "", signals: empty, minScore: pickMinScore(empty), strict: true };
+    return { rawQuery: "", signals: empty, minScore: pickMinScore(empty), strict: false };
   }
   const key = makeKey(trimmed);
   const cached = cacheGet(key);
   if (cached) {
-    return { rawQuery: trimmed, signals: cached, minScore: pickMinScore(cached), strict: true };
+    return { rawQuery: trimmed, signals: cached, minScore: pickMinScore(cached), strict: false };
   }
   const pending = inflight.get(key);
   if (pending) {
     const sig = await pending;
-    return { rawQuery: trimmed, signals: sig, minScore: pickMinScore(sig), strict: true };
+    return { rawQuery: trimmed, signals: sig, minScore: pickMinScore(sig), strict: false };
   }
 
   const promise = (async (): Promise<BriefSignals> => {
@@ -451,7 +451,7 @@ export async function expandMoodQuery(
   inflight.set(key, promise);
   try {
     const signals = await promise;
-    return { rawQuery: trimmed, signals, minScore: pickMinScore(signals), strict: true };
+    return { rawQuery: trimmed, signals, minScore: pickMinScore(signals), strict: false };
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") throw err;
     /* 실패 시 빈 신호로 둔갑시키지 않고 그대로 던진다. 호출부

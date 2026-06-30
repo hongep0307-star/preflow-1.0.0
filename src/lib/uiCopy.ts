@@ -463,6 +463,9 @@ export const UI_COPY: Record<string, Record<UiLanguage, string>> = {
   "library.types.video": { en: "Video", ko: "영상" },
   "library.types.url": { en: "URL", ko: "URL" },
   "library.types.document": { en: "Document", ko: "문서" },
+  "library.types.etc": { en: "Etc", ko: "기타" },
+  "library.types.expand": { en: "Expand", ko: "펼치기" },
+  "library.types.collapse": { en: "Collapse", ko: "접기" },
   /* DocSubtype — 카드 / 인스펙터 / 필터 행에서 공유. 키는 sub-type id 와
      1:1 매칭되어 한 곳에서만 갱신해도 모든 표시 지점이 따라간다. */
   "library.docSubtype.pdf": { en: "PDF", ko: "PDF" },
@@ -874,8 +877,16 @@ export const UI_COPY: Record<string, Record<UiLanguage, string>> = {
   // ── C: Mood AI 필터 칩 추가 키 (기존 library.mood.* 가 일부 이미 정의됨) ──
   "library.mood.clear": { en: "Clear", ko: "해제" },
   "library.mood.signalsPreview": { en: "Signals", ko: "추출 신호" },
+  "library.mood.resultCount": { en: "{count} results", ko: "결과 {count}개" },
   "library.mood.signalsMood": { en: "Mood", ko: "무드" },
   "library.mood.signalsDetails": { en: "Details", ko: "세부 신호" },
+  "library.signal.mood": { en: "Mood", ko: "무드" },
+  "library.signal.genre": { en: "Genre", ko: "장르" },
+  "library.signal.lighting": { en: "Lighting", ko: "조명" },
+  "library.signal.camera": { en: "Camera", ko: "카메라" },
+  "library.signal.location": { en: "Location", ko: "장소" },
+  "library.signal.product": { en: "Product", ko: "제품" },
+  "library.signal.keywords": { en: "Keywords", ko: "키워드" },
   "library.mood.noSignals": {
     en: "No signals extracted — try different wording.",
     ko: "추출된 신호가 없습니다. 다른 표현으로 다시 시도해 주세요.",
@@ -3027,6 +3038,16 @@ export const UI_COPY: Record<string, Record<UiLanguage, string>> = {
   "library.inspector.selectReferenceHint": {
     en: "Select a reference to preview details.",
     ko: "자료를 선택하면 상세 정보가 표시됩니다.",
+  },
+  "library.inspector.brief.section": { en: "Brief", ko: "브리프" },
+  "library.inspector.brief.briefText": { en: "Brief", ko: "브리프 내용" },
+  "library.inspector.brief.ideaNote": { en: "Idea note", ko: "아이디어 노트" },
+  "library.inspector.brief.pdfText": { en: "PDF text", ko: "PDF 텍스트" },
+  "library.inspector.brief.images": { en: "Images ({count})", ko: "이미지 {count}개" },
+  "library.inspector.brief.zoomHint": { en: "Click to view larger", ko: "클릭하면 크게 보기" },
+  "library.inspector.brief.empty": {
+    en: "No saved brief content for this folder.",
+    ko: "이 폴더에 보관된 브리프 내용이 없습니다.",
   },
   "library.inspector.setCoverTitle": { en: "Set Cover — make this frame the reference cover", ko: "표지로 설정 — 이 프레임을 자료의 표지로 사용" },
   "library.inspector.setCoverAria": { en: "Set Cover", ko: "표지로 설정" },

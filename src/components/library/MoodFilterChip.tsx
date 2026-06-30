@@ -17,7 +17,7 @@
  *     자동으로 끊어진다 — useEffect cleanup 으로 처리.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, Sparkles, X } from "lucide-react";
+import { Clock, Loader2, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -54,6 +54,23 @@ const SIGNAL_KEYS = [
   "keywords",
 ] as const satisfies ReadonlyArray<keyof BriefSignals>;
 type SignalKey = (typeof SIGNAL_KEYS)[number];
+
+/** 팝오버 내 섹션 헤더(오버라인) 공통 스타일 — 모든 섹션 라벨을 한 톤으로
+ *  통일해 "패널 타이틀 vs 섹션 라벨" 의 2단계 위계를 명확히 한다. */
+const SECTION_OVERLINE =
+  "block text-2xs font-semibold uppercase tracking-[0.08em] text-muted-foreground";
+
+/** 세부 신호 칩을 카테고리별로 묶을 때 쓰는 카테고리 라벨 i18n 키.
+ *  칩마다 "lighting:" 접두사를 반복하지 않고, 그룹 헤더로 한 번만 노출한다. */
+const SIGNAL_LABEL_KEYS: Record<SignalKey, string> = {
+  mood: "library.signal.mood",
+  genre: "library.signal.genre",
+  lighting: "library.signal.lighting",
+  camera: "library.signal.camera",
+  location: "library.signal.location",
+  product: "library.signal.product",
+  keywords: "library.signal.keywords",
+};
 
 /** Hangul/CJK 검출 — 페어링 단에서 각 토큰을 EN 그룹과 KO/CJK 그룹으로
  *  분리하는 데 쓴다. Hangul Jamo + Syllables + 일반 CJK Ideograph 범위를
@@ -168,12 +185,17 @@ export interface MoodFilterChipProps {
    *  주어지면 신호 칩 렌더 단에서 0건 매치 토큰을 자동 숨김.
    *  점수/필터 계산엔 영향 없음 — 표시 잡음 제거 한정. */
   inventoryTokens?: ReadonlySet<string>;
+  /** 현재 그리드에 보이는 결과 수 — 슬라이더 옆에 "결과 N개" 로 노출해
+   *  슬라이더 조절 시 표본 증감을 즉시 체감하게 한다(C10). 다른 필터까지
+   *  반영된 현재 결과 수라 정확히 mood-only 카운트는 아니지만 충분한 맥락. */
+  matchedCount?: number;
 }
 
 export function MoodFilterChip({
   spec,
   onChange,
   inventoryTokens,
+  matchedCount,
 }: MoodFilterChipProps) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -227,15 +249,11 @@ export function MoodFilterChip({
            clampMinScore 로 v2 슬라이더 상한(2.0) 내에 강제 — 과거 spec 이
            3.0 으로 박혀 있던 사용자도 자동 안전 범위로. */
         const minScore = clampMinScore(spec?.minScore ?? next.minScore);
-        /* strict 도 동일하게 사용자가 직전 spec 에서 명시 조정했으면 보존,
-           아니면 next 의 기본(true) 채택. AI Search 적용 시점부터 strict
-           ON 이 디폴트라 첫 적용 자료는 항상 엄격 매칭부터 시작한다. */
-        const strict = spec?.strict ?? next.strict;
         /* signals 까지 함께 저장해 다음에 "최근 검색" 에서 클릭하면 즉시
-           복원되도록(LLM 재호출 없음). */
+           복원되도록(LLM 재호출 없음). strict 게이트는 제거됨 — 항상 false. */
         rememberMoodEntry({ rawQuery: trimmed, signals: next.signals });
         setRecent(getRecentMoodEntries());
-        onChange({ rawQuery: trimmed, signals: next.signals, minScore, strict });
+        onChange({ rawQuery: trimmed, signals: next.signals, minScore, strict: false });
         setBusy(false);
         setOpen(false);
       } catch (err) {
@@ -287,12 +305,11 @@ export function MoodFilterChip({
          clampMinScore 로 v2 상한 내 강제. strict 는 spec 이 있으면 그
          값, 없으면 true 기본. */
       const minScore = clampMinScore(spec?.minScore ?? pickMinScore(entry.signals));
-      const strict = spec?.strict ?? true;
       /* row 를 다시 맨 위로 올려 두는 의미에서 rememberMoodEntry 호출 —
-         signals 는 그대로, savedAt 만 now() 로 갱신된다. */
+         signals 는 그대로, savedAt 만 now() 로 갱신된다. strict 게이트 제거됨. */
       rememberMoodEntry({ rawQuery: entry.rawQuery, signals: entry.signals });
       setRecent(getRecentMoodEntries());
-      onChange({ rawQuery: entry.rawQuery, signals: entry.signals, minScore, strict });
+      onChange({ rawQuery: entry.rawQuery, signals: entry.signals, minScore, strict: false });
       setError(null);
       setBusy(false);
       setOpen(false);
@@ -325,15 +342,6 @@ export function MoodFilterChip({
     },
     [onChange, spec],
   );
-  /* Strict 토글 — 기본 true. 즉시 onChange 로 spec 갱신하면 LibraryPage 의
-     moodScoreMap useMemo 가 재계산돼 그리드가 바로 좁아지거나 넓어진다.
-     LLM 재호출 없음 — 같은 signals 위에서 게이트만 켰다 껐다. */
-  const strict = spec?.strict ?? true;
-  const handleStrictToggle = useCallback(() => {
-    if (!spec) return;
-    onChange({ ...spec, strict: !strict });
-  }, [onChange, spec, strict]);
-
   /* 칩 렌더용 데이터.
      · 0 건 자동 숨김: inventoryTokens 가 주어지면 LLM 추정 토큰 중 라이브러리
        에 한 자료도 매치되지 않는 것은 칩에서 제외.
@@ -347,6 +355,21 @@ export function MoodFilterChip({
   );
   const moodChips = visibleChips.mood;
   const detailChips = visibleChips.details;
+  /* 세부 신호를 카테고리(key)별로 묶는다 — SIGNAL_KEYS 순서를 유지해
+     조명/카메라/장소… 순으로 안정 정렬. 각 그룹은 라벨을 한 번만 보이고
+     칩에는 접두사를 달지 않아 "lighting lighting lighting" 반복을 없앤다. */
+  const detailGroups = useMemo(() => {
+    const byKey = new Map<SignalKey, typeof detailChips>();
+    for (const chip of detailChips) {
+      const list = byKey.get(chip.key) ?? [];
+      list.push(chip);
+      byKey.set(chip.key, list);
+    }
+    return SIGNAL_KEYS.filter((k) => byKey.has(k)).map((k) => ({
+      key: k,
+      chips: byKey.get(k)!,
+    }));
+  }, [detailChips]);
   /* count 는 *화면에 노출된 유효 신호 토큰 수* 와 일치시켜, 칩 안 보이는데
      배지만 큰 숫자로 뜨는 회귀를 막는다. spec 에 21 개 토큰이 있어도
      0건 필터로 5 개만 보이면 배지도 5 로 표기. inventory prop 이 없으면
@@ -378,17 +401,15 @@ export function MoodFilterChip({
           >
             <Sparkles className="h-3.5 w-3.5" />
             <span className="max-w-[200px] truncate">{chipLabel}</span>
-            {count > 0 ? (
+            {/* 배지는 *현재 결과 수* — 최소 관련도 슬라이더에 따라 변동되는
+                값을 그대로 노출한다(고정 토큰 수가 아니라). matchedCount 가
+                없으면(legacy) 신호 토큰 수로 폴백. */}
+            {active ? (
               <span
-                className={cn(
-                  "ml-0.5 inline-flex h-4 min-w-[16px] items-center justify-center px-1 font-mono text-micro",
-                  active
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-muted text-foreground",
-                )}
+                className="ml-0.5 inline-flex h-4 min-w-[16px] items-center justify-center bg-primary px-1 font-mono text-micro text-primary-foreground"
                 style={{ borderRadius: 0 }}
               >
-                {count}
+                {typeof matchedCount === "number" ? matchedCount : count}
               </span>
             ) : null}
           </Button>
@@ -398,17 +419,23 @@ export function MoodFilterChip({
           className="rounded-none p-0"
           style={{ width: 360 }}
         >
-          <div className="flex flex-col gap-3 p-3">
+          {/* (A3) 패널 타이틀 바 — 본문보다 한 단계 강한 위계. */}
+          <div className="flex items-center gap-1.5 border-b border-border-subtle bg-surface-panel/60 px-3 py-2">
+            <Sparkles className="h-3.5 w-3.5 shrink-0 text-primary" />
+            <span className="text-meta font-semibold text-foreground">
+              {t("library.mood.chipLabel")}
+            </span>
+          </div>
+
+          <div className="flex flex-col gap-3.5 p-3">
+            {/* (B4) 입력 — 평상시 border 를 한 단계 또렷하게(border-border). */}
             <div className="space-y-1.5">
-              <label className="block text-caption font-semibold tracking-[0.04em] text-muted-foreground">
-                {t("library.mood.chipLabel")}
-              </label>
               <textarea
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 placeholder={t("library.mood.placeholder")}
                 rows={2}
-                className="w-full resize-none border border-border-subtle bg-surface-panel px-2 py-1.5 text-meta text-text-secondary placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+                className="w-full resize-none border border-border bg-surface-panel px-2.5 py-2 text-meta text-text-secondary placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
                 style={{ borderRadius: 0 }}
                 onKeyDown={(event) => {
                   /* Enter (no shift) → Apply. Shift+Enter 는 줄바꿈 유지. */
@@ -423,138 +450,114 @@ export function MoodFilterChip({
               ) : null}
             </div>
 
-            {/* 추출된 신호 미리보기 — mood 와 details 두 그룹으로 분리.
-                · Mood: 헤더 + 약간 큰 칩(h-24px font-medium), 카테고리 prefix 생략.
-                · Details: 작은 outline 칩(h-22px), "category:" prefix 유지.
-                두 그룹 모두 brand-neutral 톤 — 노란색 강조는 의미 근거가
-                없어 제거. mood 의 시각 우선순위는 *크기/굵기* 로 유지된다.
-                칩 하나에 EN + KO 동의어가 묶여 있을 수 있고, × 클릭 시
-                묶음 전체가 spec 에서 빠진다. */}
+            {/* (C7+C8) 추출된 신호 — 하나의 패널로 묶어 "결과 영역" 임을 명확히.
+                · Mood: 채워진 primary 톤 칩으로 주요 신호임을 강조.
+                · Details: 카테고리별 그룹 + outline 칩(접두사 없음). */}
             {spec && (moodChips.length > 0 || detailChips.length > 0) ? (
-              <div className="space-y-2">
-                {moodChips.length > 0 ? (
-                  <div className="space-y-1.5">
-                    <span className="block text-2xs font-semibold tracking-normal text-muted-foreground">
-                      {t("library.mood.signalsMood")}
-                    </span>
-                    <div className="flex flex-wrap gap-1">
-                      {moodChips.map((chip) => (
-                        <button
-                          key={`${chip.key}:${chip.main}`}
-                          type="button"
-                          title={t("library.mood.removeSignal")}
-                          onClick={() =>
-                            onChange({
-                              ...spec,
-                              signals: removeSignalTokens(spec.signals, chip.key, chip.tokens),
-                            })
-                          }
-                          className="inline-flex h-[24px] items-center gap-1.5 border border-border-subtle bg-transparent px-2 text-meta font-medium text-text-secondary transition-colors hover:border-destructive/50 hover:bg-destructive/10 hover:text-foreground"
-                          style={{ borderRadius: 0 }}
+              <div className="space-y-2 border-t border-border-subtle pt-3">
+                <span className={SECTION_OVERLINE}>
+                  {t("library.mood.signalsPreview")}
+                </span>
+                <div className="space-y-2 border border-border-subtle bg-surface-panel/50 p-2">
+                  {moodChips.length > 0 ? (
+                    <div className="space-y-1.5">
+                      <span className="block text-2xs font-medium text-muted-foreground/80">
+                        {t("library.mood.signalsMood")}
+                      </span>
+                      <div className="flex flex-wrap gap-1">
+                        {moodChips.map((chip) => (
+                          <button
+                            key={`${chip.key}:${chip.main}`}
+                            type="button"
+                            title={t("library.mood.removeSignal")}
+                            onClick={() =>
+                              onChange({
+                                ...spec,
+                                signals: removeSignalTokens(spec.signals, chip.key, chip.tokens),
+                              })
+                            }
+                            className="inline-flex h-[24px] items-center gap-1.5 border border-primary/30 bg-primary/10 px-2 text-meta font-medium text-primary transition-colors hover:border-destructive/50 hover:bg-destructive/10 hover:text-foreground"
+                            style={{ borderRadius: 0 }}
+                          >
+                            <span>{chip.main}</span>
+                            {chip.aliases.length > 0 ? (
+                              <span className="text-2xs font-normal text-primary/60">
+                                {chip.aliases.join(", ")}
+                              </span>
+                            ) : null}
+                            <X className="h-2.5 w-2.5 opacity-70" aria-hidden />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {detailGroups.length > 0 ? (
+                    <div
+                      className={cn(
+                        "space-y-1",
+                        moodChips.length > 0 && "border-t border-dashed border-border-subtle/60 pt-2",
+                      )}
+                    >
+                      {/* 카테고리별 한 행 — 라벨은 우측정렬 + 옅게(보조), 칩이 주인공. */}
+                      {detailGroups.map((group) => (
+                        <div
+                          key={group.key}
+                          className="grid grid-cols-[52px_1fr] items-start gap-x-2 gap-y-1"
                         >
-                          <span>{chip.main}</span>
-                          {chip.aliases.length > 0 ? (
-                            <span className="text-2xs font-normal text-muted-foreground/70">
-                              {chip.aliases.join(", ")}
-                            </span>
-                          ) : null}
-                          <X className="h-2.5 w-2.5 opacity-70" aria-hidden />
-                        </button>
+                          <span className="pt-[3px] text-right text-2xs font-normal text-muted-foreground/60">
+                            {t(SIGNAL_LABEL_KEYS[group.key])}
+                          </span>
+                          <div className="flex flex-wrap gap-1">
+                            {group.chips.map((chip) => (
+                              <button
+                                key={`${chip.key}:${chip.main}`}
+                                type="button"
+                                title={t("library.mood.removeSignal")}
+                                onClick={() =>
+                                  onChange({
+                                    ...spec,
+                                    signals: removeSignalTokens(spec.signals, chip.key, chip.tokens),
+                                  })
+                                }
+                                className="inline-flex h-[22px] items-center gap-1 border border-border-subtle bg-background px-1.5 text-2xs text-text-secondary transition-colors hover:border-destructive/50 hover:bg-destructive/10"
+                                style={{ borderRadius: 0 }}
+                              >
+                                <span>{chip.main}</span>
+                                {chip.aliases.length > 0 ? (
+                                  <span className="text-muted-foreground/70">
+                                    {chip.aliases.join(", ")}
+                                  </span>
+                                ) : null}
+                                <X className="h-2.5 w-2.5 opacity-70" aria-hidden />
+                              </button>
+                            ))}
+                          </div>
+                        </div>
                       ))}
                     </div>
-                  </div>
-                ) : null}
-
-                {detailChips.length > 0 ? (
-                  <div
-                    className={cn(
-                      "space-y-1.5",
-                      moodChips.length > 0 && "border-t border-dashed border-border-subtle/60 pt-2",
-                    )}
-                  >
-                    <span className="block text-2xs font-semibold tracking-normal text-muted-foreground">
-                      {t("library.mood.signalsDetails")}
-                    </span>
-                    <div className="flex flex-wrap gap-1">
-                      {detailChips.map((chip) => (
-                        <button
-                          key={`${chip.key}:${chip.main}`}
-                          type="button"
-                          title={t("library.mood.removeSignal")}
-                          onClick={() =>
-                            onChange({
-                              ...spec,
-                              signals: removeSignalTokens(spec.signals, chip.key, chip.tokens),
-                            })
-                          }
-                          className="inline-flex h-[22px] items-center gap-1 border border-border-subtle bg-transparent px-1.5 text-2xs text-text-secondary transition-colors hover:border-destructive/50 hover:bg-destructive/10"
-                          style={{ borderRadius: 0 }}
-                        >
-                          <span className="text-muted-foreground/70">{chip.key}:</span>
-                          <span>{chip.main}</span>
-                          {chip.aliases.length > 0 ? (
-                            <span className="text-muted-foreground/50">
-                              {chip.aliases.join(", ")}
-                            </span>
-                          ) : null}
-                          <X className="h-2.5 w-2.5 opacity-70" aria-hidden />
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-
-            {/* Strict matching 토글 — 활성 spec 있을 때만 보임. Min relevance
-                슬라이더 위에 한 줄로 — 사용자가 게이트와 임계를 가까이 놓고
-                튜닝할 수 있게. 토글 변경 시 즉시 onChange → moodScoreMap 재계산.
-                ON 일 때 brand primary(red), OFF 일 때 muted — amber 강조는
-                의미 근거가 없어 제거. */}
-            {spec ? (
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex min-w-0 flex-col">
-                  <span className="text-2xs font-semibold tracking-normal text-muted-foreground">
-                    {t("library.mood.strict")}
-                  </span>
-                  <span className="text-2xs leading-snug text-muted-foreground/70">
-                    {t("library.mood.strictHint")}
-                  </span>
+                  ) : null}
                 </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={strict}
-                  onClick={handleStrictToggle}
-                  className={cn(
-                    "relative inline-flex h-4 w-7 shrink-0 items-center border transition-colors",
-                    strict
-                      ? "border-primary/70 bg-primary/30"
-                      : "border-border-subtle bg-surface-panel hover:bg-muted/60",
-                  )}
-                  style={{ borderRadius: 0 }}
-                  title={t("library.mood.strictHint")}
-                >
-                  <span
-                    className={cn(
-                      "block h-2.5 w-2.5 transition-transform",
-                      strict ? "translate-x-3.5 bg-primary" : "translate-x-0.5 bg-muted-foreground/70",
-                    )}
-                    style={{ borderRadius: 0 }}
-                    aria-hidden
-                  />
-                </button>
               </div>
             ) : null}
 
             {/* Min relevance slider — active 일 때만 의미가 있어 spec 없으면 숨김.
-                v2 에서 raw 가중합이 낮아진 만큼 범위도 0.3 ~ 2.0 으로 좁혔다. */}
+                (C10) 라벨 옆에 현재 결과 수를 같이 노출해 표본 증감을 체감. */}
             {spec ? (
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 border-t border-border-subtle pt-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-2xs font-semibold tracking-normal text-muted-foreground">
-                    {t("library.mood.minRelevance")}
-                  </span>
+                  {/* 좌: 라벨 + 결과 수(고정 위치), 우: 슬라이더 수치값.
+                      결과 수와 수치값을 양끝으로 분리해 동시에 움직이지 않도록. */}
+                  <div className="flex items-baseline gap-2">
+                    <span className={SECTION_OVERLINE}>
+                      {t("library.mood.minRelevance")}
+                    </span>
+                    {typeof matchedCount === "number" ? (
+                      <span className="text-micro font-normal normal-case tracking-normal text-muted-foreground/50">
+                        {t("library.mood.resultCount", { count: matchedCount })}
+                      </span>
+                    ) : null}
+                  </div>
                   <span className="font-mono text-2xs text-text-secondary">
                     {minScore.toFixed(1)}
                   </span>
@@ -574,10 +577,10 @@ export function MoodFilterChip({
             ) : null}
 
             {/* Recent queries — 저장된 signals 그대로 복원해 LLM 재호출 없이
-                즉시 적용. row hover 시 X 버튼이 노출돼 개별 삭제 가능. */}
+                즉시 적용. (B5) 각 행에 Clock 아이콘 + 또렷한 hover. */}
             {recent.length > 0 ? (
-              <div className="space-y-1">
-                <span className="block text-2xs font-semibold tracking-normal text-muted-foreground">
+              <div className="space-y-1 border-t border-border-subtle pt-3">
+                <span className={SECTION_OVERLINE}>
                   {t("library.mood.recent")}
                 </span>
                 <div className="flex flex-col gap-0.5">
@@ -589,10 +592,11 @@ export function MoodFilterChip({
                       <button
                         type="button"
                         onClick={() => handleRecentClick(entry)}
-                        className="min-w-0 flex-1 truncate px-2 py-1 text-left text-caption text-text-secondary hover:bg-muted/40 hover:text-foreground"
+                        className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1 text-left text-caption text-text-secondary transition-colors hover:bg-muted/50 hover:text-foreground"
                         title={entry.rawQuery}
                       >
-                        {entry.rawQuery}
+                        <Clock className="h-3 w-3 shrink-0 text-muted-foreground/60" aria-hidden />
+                        <span className="min-w-0 flex-1 truncate">{entry.rawQuery}</span>
                       </button>
                       <button
                         type="button"
@@ -612,7 +616,7 @@ export function MoodFilterChip({
               </div>
             ) : null}
 
-            <div className="flex items-center justify-between gap-2 border-t border-border-subtle pt-2">
+            <div className="flex items-center justify-between gap-2 border-t border-border-subtle pt-2.5">
               <button
                 type="button"
                 onClick={handleClear}
@@ -620,7 +624,7 @@ export function MoodFilterChip({
                 className={cn(
                   "h-7 px-2 text-caption transition-colors",
                   active || draft
-                    ? "text-muted-foreground hover:text-foreground"
+                    ? "text-muted-foreground hover:text-destructive"
                     : "cursor-not-allowed text-muted-foreground/50",
                 )}
               >

@@ -216,7 +216,7 @@ import {
   useLibraryShowBadges,
   useLibraryShowTypeLabel,
 } from "@/lib/libraryGridDisplayPreferences";
-import { resolveTypeLabel } from "@/lib/linkPlatform";
+import { resolveFormatLabel } from "@/lib/linkPlatform";
 import { INTERNAL_DRAG_MIME } from "@/lib/libraryDragChannel";
 import { useT } from "@/lib/uiLanguage";
 import { useToast } from "@/hooks/use-toast";
@@ -5999,7 +5999,7 @@ function CanvasItemViewBase({
       {showBadges && showTypeLabel ? (
         <div className="pointer-events-none absolute left-1 top-1 z-30">
           <span className="flex h-5 items-center justify-center bg-secondary px-1.5 text-micro font-medium text-secondary-foreground">
-            {resolveTypeLabel(item)}
+            {resolveFormatLabel(item)}
           </span>
         </div>
       ) : null}

@@ -120,7 +120,7 @@ import {
   scoreReferences,
   type BriefSignals,
 } from "@/lib/referenceRecommender";
-import { pickMinCoverage, type MoodFilterSpec } from "@/lib/moodSearch";
+import { type MoodFilterSpec } from "@/lib/moodSearch";
 import { rerankReferencesForBrief } from "@/lib/briefReferenceRerank";
 import { LibraryCanvas } from "@/components/library/LibraryCanvas";
 import { OrphanCleanupDialog } from "@/components/library/OrphanCleanupDialog";
@@ -182,6 +182,8 @@ import {
   hasBriefContent,
   cascadeRenameBriefMatchEntries,
   cascadeDuplicateBriefMatchEntries,
+  BRIEF_MATCH_STORE_CHANGED_EVENT,
+  type BriefMatchEntry,
 } from "@/lib/briefMatchStore";
 import { setPendingBriefMatchProject } from "@/lib/pendingBriefMatchProject";
 import {
@@ -281,18 +283,8 @@ import {
   countPromotedAssetsForRef,
   type BriefRefUsageLocation,
 } from "@/lib/briefRefUsageScan";
-import { detectLinkPlatform, extensionFromItem, LINK_PLATFORM_ORDER, resolveDisplayKind, type LinkPlatform } from "@/lib/linkPlatform";
-
-const FILTERS: Array<{ id: "all" | ReferenceKind; labelKey: string }> = [
-  { id: "all", labelKey: "library.filter.all" },
-  { id: "image", labelKey: "library.filter.images" },
-  { id: "webp", labelKey: "library.filter.webp" },
-  { id: "gif", labelKey: "library.filter.gifs" },
-  { id: "video", labelKey: "library.filter.videos" },
-  { id: "youtube", labelKey: "library.filter.youtube" },
-  { id: "link", labelKey: "library.filter.links" },
-  { id: "doc", labelKey: "library.filter.docs" },
-];
+import { extensionFromItem } from "@/lib/linkPlatform";
+import { computeTypeCounts, matchTypeFilter } from "@/lib/typeFilter";
 
 const REFERENCE_LOAD_LIMIT = 10_000;
 
@@ -395,19 +387,18 @@ const cancelIdle = (handle: number): void => {
 };
 
 /** 네비바 브레드크럼에 노출되는 Quick Filter 라벨. LibrarySidebar 의
- *  QUICK_FILTERS 와 의미가 동일해야 사용자가 좌측 사이드바와 상단 위치
- *  표기를 1:1 로 매칭할 수 있다. 사이드바에서 별도 export 하지 않고
- *  여기서 한 번 더 선언해 의존을 끊는다 — 항목이 7개로 적고 변동이
- *  드물어 동기화 비용이 작다. */
+ *  QUICK_FILTERS 와 "동일한 i18n 키" 를 가리켜, 좌측 사이드바 빠른 필터의
+ *  네이밍을 단일 기준(single source) 으로 삼는다. 이렇게 하면 상단 표기와
+ *  사이드바 표기가 절대 어긋나지 않고 1:1 로 매칭된다. */
 const QUICK_FILTER_LABEL_KEYS: Record<QuickFilter, string> = {
-  all: "library.page.allReferences",
-  favorites: "library.filter.favorites",
-  untagged: "library.filter.untagged",
-  recentlyUsed: "library.filter.recentlyUsed",
-  unclassified: "library.filter.unclassified",
-  variations: "library.filter.variations",
-  duplicates: "library.filter.duplicateCandidates",
-  trash: "library.page.trash",
+  all: "library.sidebar.all",
+  favorites: "library.sidebar.favorites",
+  untagged: "library.sidebar.untagged",
+  recentlyUsed: "library.sidebar.recentlyUsed",
+  unclassified: "library.sidebar.unclassified",
+  variations: "library.sidebar.variations",
+  duplicates: "library.sidebar.duplicates",
+  trash: "library.sidebar.trash",
 };
 
 type ExportDialogState = {
@@ -1179,12 +1170,10 @@ const LibraryPage = () => {
   const [eagleImportOpen, setEagleImportOpen] = useState(false);
   // ── 툴바 필터(Eagle 스타일 다중 + include/exclude). 사이드바의 단일
   // activeTag/quickFilter 와 AND 결합으로 적용된다(아래 filteredItems 참조).
-  const [typesFilter, setTypesFilter] = useState<MultiFilter<ReferenceKind>>(() => emptyMulti());
-  /* URL 계열 자료의 플랫폼별 필터 — TypesHierarchyPicker 의 자식 행이 토글한다.
-     active 이면 그 플랫폼에 속한 URL 자료만 통과, 비 URL 자료는 자동 탈락. */
-  const [linkPlatformsFilter, setLinkPlatformsFilter] = useState<MultiFilter<LinkPlatform>>(
-    () => emptyMulti(),
-  );
+  /* 계층형 Types 필터 — 카테고리(image/video/doc/url) + 리프(포맷/플랫폼/기타)를
+     단일 MultiFilter<string> 로 표현한다(typeFilter.ts). 카테고리 id="image",
+     리프 id="image/png" 식. activeTag/quickFilter 와 AND 결합. */
+  const [typeFilter, setTypeFilter] = useState<MultiFilter<string>>(() => emptyMulti());
   const [tagsFilter, setTagsFilter] = useState<MultiFilter<string>>(() => emptyMulti());
   /* Moods 칩(B 단계) — `ai.mood_labels` 기반 multi-select 필터. row.id /
      filter set 은 항상 lowercase EN canonical (referenceAi.ts safeJson 의
@@ -2615,22 +2604,18 @@ const LibraryPage = () => {
        용도엔 너무 작아 명시적으로 items.length 로 풀어 둔다. allowedKinds
        기본값에 포함되지 않는 자료(image/gif/video/youtube 외) 는 자연
        탈락 — 이는 추천기 정책상 의도된 동작이다.
-       strict 는 MoodFilterSpec 의 사용자 토글값을 그대로 전달 — 게이트
-       (intent anchor + high-weight ref) 적용 여부를 결정한다. legacy spec
-       에서 strict 가 undefined 면 `?? true` 로 안전 기본값(엄격) 적용. */
-    const useStrict = moodFilter.strict ?? true;
+       strict 게이트는 제거됨 — 항상 점수 기반(완화) 매칭으로, minScore 슬라이더
+       하나로만 표본 폭을 조절한다. 커버리지/핵심토큰(primary) 게이트를 끄면
+       슬라이더를 내릴수록 표본이 매끄럽게 늘어 사용자가 폭을 직관적으로 통제. */
     const scored = scoreReferences(moodFilter.signals, items, {
       minScore: moodFilter.minScore,
       limit: items.length || 1,
-      strict: useStrict,
-      /* IDF 는 strict 여부와 무관하게 항상 적용 — 흔한 토큰 감점은 정렬/
-         minScore 효과를 모든 모드에서 개선한다. */
+      strict: false,
+      /* IDF 는 항상 적용 — 흔한 토큰 감점은 정렬/minScore 효과를 개선한다. */
       idf: referenceTokenIdf,
-      /* strict 일 때만 커버리지 + 핵심토큰(primary) 게이트를 켠다. 신호
-         풍부도 기반 동적 커버리지로 "여러 의도 축을 동시에 충족한 자료" 만
-         통과. strict OFF 면 게이트 없이 점수 기반(완화). */
-      minCoverage: useStrict ? pickMinCoverage(moodFilter.signals) : 0,
-      requirePrimary: useStrict,
+      /* 게이트 없이 점수 기반만 사용(완화). */
+      minCoverage: 0,
+      requirePrimary: false,
     });
     for (const r of scored) map.set(r.item.id, r.score);
     /* Brief Match 앵커는 사용자가 명시적으로 고른 자료라 점수와 무관하게
@@ -2941,15 +2926,9 @@ const LibraryPage = () => {
       if (activeSavedFilter && !matchesSavedFilter(item, activeSavedFilter)) return false;
 
       // 툴바 필터: Types / Tags / Folders / Ratings / Shapes / Note.
-      // resolveDisplayKind 로 매칭 — animated WebP 가 "WebP" 행 토글에 잡히도록.
-      if (!matchMulti(resolveDisplayKind(item), typesFilter)) return false;
-      /* URL 계열 자료의 플랫폼 필터 — TypesHierarchyPicker 의 URL 자식(또는
-         부모 "URL=other")에서 토글한다. active 이면 비 URL 자료는 자동 탈락. */
-      if (multiFilterActive(linkPlatformsFilter)) {
-        const platform = detectLinkPlatform(item);
-        if (platform == null) return false;
-        if (!matchMulti(platform, linkPlatformsFilter)) return false;
-      }
+      // 계층형 Types 필터(카테고리/포맷/플랫폼/기타) — typeFilter.ts 가 자료의
+      // 카테고리·리프 id 를 계산해 include/exclude 를 적용한다.
+      if (!matchTypeFilter(item, typeFilter.include, typeFilter.exclude)) return false;
       // tags 와 folder-tags 를 분리해 둘 필터에 각각 던진다. 같은 item.tags
       // 배열에 두 종류가 섞여 있지만 의미상 다른 차원이므로, Tags 칩에는
       // 일반 태그만, Folder 칩에는 `folder:` 접두 태그만 보낸다.
@@ -3274,7 +3253,6 @@ const LibraryPage = () => {
     gridHiddenIds,
     items,
     koreanAliasIndex,
-    linkPlatformsFilter,
     manualOrderVersion,
     effectiveMoodMap,
     moodsFilter,
@@ -3288,7 +3266,7 @@ const LibraryPage = () => {
     sortKey,
     sortOrder,
     tagsFilter,
-    typesFilter,
+    typeFilter,
     viewMode,
   ]);
 
@@ -3390,36 +3368,11 @@ const LibraryPage = () => {
   const selectedRegularTags = selected?.tags.filter((tag) => !tag.startsWith("folder:")) ?? [];
   const selectedItemFolderTags = selected?.tags.filter((tag) => tag.startsWith("folder:")) ?? [];
   const activeItems = useMemo(() => items.filter((item) => !item.deleted_at), [items]);
-  const counts = useMemo(() => {
-    /* resolveDisplayKind 로 정규화 — animated WebP (kind=gif & mime=image/webp)
-       가 WebP 카운트에 잡히고 GIF 에서 빠지도록. 그리드 배지 라벨과 동일 정의. */
-    return activeItems.reduce<Record<"all" | ReferenceKind, number>>(
-      (acc, item) => {
-        acc.all += 1;
-        acc[resolveDisplayKind(item)] += 1;
-        return acc;
-      },
-      { all: 0, image: 0, webp: 0, gif: 0, video: 0, youtube: 0, link: 0, doc: 0 },
-    );
-  }, [activeItems]);
-  const typeRows = useMemo(
-    () => FILTERS.map((filter) => ({ id: filter.id, label: t(filter.labelKey), count: counts[filter.id] })),
-    [counts, t],
-  );
-  /* 플랫폼 카운트 — TypesHierarchyPicker 의 자식 행/부모 URL 행 우측에 표시.
-     activeItems 기준이라 사이드바 / quickFilter 적용 후의 현 컨텍스트 카운트.
-     LINK_PLATFORM_ORDER 의 5 개 + 부모 "URL" 대응 "other" 까지 합산. */
-  const linkPlatformCounts = useMemo(() => {
-    const map = new Map<LinkPlatform, number>([
-      ...LINK_PLATFORM_ORDER.map((p) => [p, 0] as const),
-      ["other", 0],
-    ]);
-    for (const item of activeItems) {
-      const platform = detectLinkPlatform(item);
-      if (platform) map.set(platform, (map.get(platform) ?? 0) + 1);
-    }
-    return map;
-  }, [activeItems]);
+  /* 계층형 Types 필터의 카운트 — 카테고리 id(image/video/doc/url) 와 리프 id
+     (image/png, url/youtube, video/etc …) 별 항목 수. TypesHierarchyPicker 가
+     ReadonlyMap 으로 받아 각 행 우측에 표시한다. activeItems 기준(사이드바/
+     quickFilter 적용 후 현 컨텍스트). */
+  const typeCounts = useMemo(() => computeTypeCounts(activeItems), [activeItems]);
   const folders = useMemo(() => folderRows(activeItems, userFolderPaths), [activeItems, userFolderPaths]);
   /* 브리프 매치 폴더는 일반 '폴더' 트리에서 분리해 전용 섹션에만 노출한다.
      일반 폴더와 동일하게 FolderRow 로 렌더하므로 LibraryFolderRow 그대로 전달. */
@@ -3455,6 +3408,36 @@ const LibraryPage = () => {
     },
     [items],
   );
+
+  /* 인스펙터(빈 선택)에서 보여줄 "현재 브리프 매치 폴더의 브리프 내용".
+     활성(앵커) 폴더가 브리프 매치 경로일 때만 채워지고, 그 외엔 null 이라
+     일반 폴더에서는 브리프 섹션이 노출되지 않는다. */
+  const briefMatchFolderPath = useMemo<string | null>(() => {
+    if (!activeTag || !activeTag.startsWith("folder:")) return null;
+    const path = activeTag.replace(/^folder:/, "");
+    return isBriefMatchPath(path) ? path : null;
+  }, [activeTag]);
+  /* briefMatchStore 는 localStorage 라 React 가 변경을 모른다 — 전용 이벤트로
+     tick 을 bump 해 엔트리를 다시 읽는다(다른 윈도우의 storage 이벤트 포함). */
+  const [briefStoreVersion, setBriefStoreVersion] = useState(0);
+  useEffect(() => {
+    const bump = () => setBriefStoreVersion((v) => v + 1);
+    const onStorage = (event: StorageEvent) => {
+      if (event.key && event.key.includes("briefMatchStore")) bump();
+    };
+    window.addEventListener(BRIEF_MATCH_STORE_CHANGED_EVENT, bump);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(BRIEF_MATCH_STORE_CHANGED_EVENT, bump);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
+  const briefMatchEntry = useMemo<BriefMatchEntry | null>(() => {
+    if (!briefMatchFolderPath) return null;
+    return getBriefMatchEntry(briefMatchFolderPath);
+    // briefStoreVersion 은 의도적 의존 — store 변경 시 재조회.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [briefMatchFolderPath, briefStoreVersion]);
 
   /* 다이얼로그 확인 → (reload 전, 라이브러리 활성 상태에서) 선택 레퍼런스를 사전 분석한
      뒤 pending 으로 stash 하고 대상 워크스페이스로 전환(reload)한다. 대상이 현재 활성
@@ -6286,8 +6269,7 @@ const LibraryPage = () => {
     setQuickFilter("all");
     setActiveSavedFilterId(null);
     resetFolderSelection();
-    setTypesFilter(emptyMulti());
-    setLinkPlatformsFilter(emptyMulti());
+    setTypeFilter(emptyMulti());
     setTagsFilter(emptyMulti());
     setMoodsFilter(emptyMulti());
     setFoldersFilter(emptyMulti());
@@ -7879,11 +7861,9 @@ const LibraryPage = () => {
             onToggleShowHidden={() => setShowHidden((v) => !v)}
             hiddenCount={gridHiddenCount}
             activeFolderTag={canvasAllowed && activeTag?.startsWith("folder:") ? activeTag : null}
-            typesFilter={typesFilter}
-            onTypesFilterChange={setTypesFilter}
-            linkPlatformsFilter={linkPlatformsFilter}
-            onLinkPlatformsFilterChange={setLinkPlatformsFilter}
-            linkPlatformCounts={linkPlatformCounts}
+            typeFilter={typeFilter}
+            onTypeFilterChange={setTypeFilter}
+            typeCounts={typeCounts}
             tagsFilter={tagsFilter}
             onTagsFilterChange={setTagsFilter}
             moodsFilter={moodsFilter}
@@ -7902,7 +7882,6 @@ const LibraryPage = () => {
             moodFilter={moodFilter}
             onMoodFilterChange={setMoodFilter}
             moodInventoryTokens={moodInventoryTokens}
-            typeRows={typeRows}
             tagRows={tagsList}
             folderRows={folders}
             koreanAliasIndex={koreanAliasIndex}
@@ -8209,6 +8188,12 @@ const LibraryPage = () => {
                 && Boolean(selected.thumbnail_url || selected.file_url)
                 && !selected.deleted_at,
               )}
+              briefMatchEntry={briefMatchEntry}
+              onCreateProjectFromBrief={
+                briefMatchFolderPath
+                  ? () => handleCreateProjectFromBriefMatch(briefMatchFolderPath)
+                  : undefined
+              }
             />
             </div>
             </div>

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { listReferences, type ReferenceItem, type ReferenceKind } from "@/lib/referenceLibrary";
-import { resolveTypeLabel } from "@/lib/linkPlatform";
+import { resolveFormatLabel } from "@/lib/linkPlatform";
 import {
   scoreReferences,
   type BriefSignals,
@@ -216,7 +216,7 @@ export function ReferencePickerDrawer({
                             <Icon className="h-7 w-7 text-muted-foreground" />
                           )}
                           <Badge variant="secondary" className="absolute left-2 top-2 h-5 rounded-none px-1.5 text-micro">
-                            {resolveTypeLabel(item)}
+                            {resolveFormatLabel(item)}
                           </Badge>
                           {checked ? (
                             <span className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center bg-primary text-primary-foreground">

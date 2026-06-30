@@ -20,7 +20,7 @@ import { useT } from "@/lib/uiLanguage";
 import { getImageSearchSourceUrl, withReferenceVersion, type ReferenceItem, type ReferenceKind } from "@/lib/referenceLibrary";
 import { IMAGE_SEARCH_ENGINES, type ImageSearchEngineId } from "@/lib/imageSearchEngines";
 import { docExtensionTag, docHueClasses, docPresentationOf } from "@/lib/docPresentation";
-import { extensionFromItem, resolveTypeLabel } from "@/lib/linkPlatform";
+import { extensionFromItem, resolveFormatLabel } from "@/lib/linkPlatform";
 import {
   saveAnimatedThumbnailsAutoplay,
   useAnimatedThumbnailsAutoplay,
@@ -1888,7 +1888,7 @@ function LibraryCard({
                   <div className="absolute left-2 top-2 flex flex-col items-start gap-1">
                     {showTypeLabel ? (
                       <Badge className="h-5 px-1.5 text-micro" variant="secondary">
-                        {resolveTypeLabel(item)}
+                        {resolveFormatLabel(item)}
                       </Badge>
                     ) : null}
                     {item.is_favorite ? (

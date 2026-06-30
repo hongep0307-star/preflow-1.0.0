@@ -15,7 +15,10 @@ import {
   Camera,
   Check,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   ExternalLink,
+  FileText,
   Film,
   Image as ImageIcon,
   Info,
@@ -61,6 +64,7 @@ import {
   type AiTagLanguageMode,
 } from "@/lib/aiOutputLanguage";
 import type { LibraryFolderRow } from "@/components/library/LibrarySidebar";
+import type { BriefMatchEntry } from "@/lib/briefMatchStore";
 import { withReferenceVersion, type ReferenceItem } from "@/lib/referenceLibrary";
 import { decodeAnimatedAllFrames } from "@/lib/gifFrames";
 import { docExtensionTag, docHueClasses, docPresentationOf, docSubtypeOf } from "@/lib/docPresentation";
@@ -237,6 +241,13 @@ interface LibraryInspectorProps {
    *  v4 — image/PSD region 노트는 regionNoteId 를 넘겨 큰 프리뷰 진입 +
    *  해당 영역 하이라이트. */
   onJumpToTimestamp?: (atSec?: number, frameIndex?: number, pageIndex?: number, regionNoteId?: string) => void;
+  /** 스마트 브리프 매치 폴더가 선택(레퍼런스 미선택)됐을 때, 그 폴더에 보관된
+   *  브리프 내용(텍스트/아이디어/PDF 텍스트/이미지). 빈 선택 패널에서 읽기
+   *  전용으로 노출한다. null 이면 일반 폴더라 섹션을 그리지 않는다. */
+  briefMatchEntry?: BriefMatchEntry | null;
+  /** 위 브리프 내용을 "프로젝트로 생성" 하는 액션. 브리프 매치 폴더일 때만
+   *  내려오며, 빈 선택 패널의 버튼에 연결된다. */
+  onCreateProjectFromBrief?: () => void;
 }
 
 export function LibraryInspector({
@@ -292,6 +303,8 @@ export function LibraryInspector({
   onSetRating,
   onClearSourceUrl,
   onJumpToTimestamp,
+  briefMatchEntry,
+  onCreateProjectFromBrief,
 }: LibraryInspectorProps) {
   const t = useT();
   const [inspectorTab, setInspectorTabState] = useState<InspectorTab>(() => readStoredInspectorTab());
@@ -1189,6 +1202,12 @@ export function LibraryInspector({
               {t("library.inspector.selectReferenceHint")}
             </div>
           )}
+          {briefMatchEntry ? (
+            <BriefMatchInspectorPanel
+              entry={briefMatchEntry}
+              onCreateProject={onCreateProjectFromBrief}
+            />
+          ) : null}
         </div>
       )}
     </aside>
@@ -1215,6 +1234,200 @@ function SectionLabel({ children, icon, className }: SectionLabelProps) {
     >
       {icon}
       {children}
+    </div>
+  );
+}
+
+/* 스마트 브리프 매치 폴더 선택(레퍼런스 미선택) 시, 빈 선택 패널에 끼워지는
+   브리프 내용 패널 — 생성 당시 입력한 브리프 텍스트/아이디어 노트/PDF 텍스트/
+   이미지를 읽기 전용으로 보여주고, "프로젝트로 생성" 액션을 제공한다. */
+function BriefMatchInspectorPanel({
+  entry,
+  onCreateProject,
+}: {
+  entry: BriefMatchEntry;
+  onCreateProject?: () => void;
+}) {
+  const t = useT();
+  const hasText = !!(entry.briefText && entry.briefText.trim());
+  const hasIdea = !!(entry.ideaNote && entry.ideaNote.trim());
+  const hasPdf = !!(entry.pdfText && entry.pdfText.trim());
+  const images = entry.images ?? [];
+  const hasAny = hasText || hasIdea || hasPdf || images.length > 0;
+
+  /* 첨부 이미지 "크게 보기" — 클릭 시 인덱스를 잡아 포털 라이트박스를 띄운다.
+     Esc 닫기 / ←→ 로 이미지 간 이동. 다른 폴더로 전환되면 entry 가 바뀌므로
+     인덱스를 안전 범위로 정리한다. */
+  const [zoomIndex, setZoomIndex] = useState<number | null>(null);
+  const zoomOpen = zoomIndex !== null && zoomIndex >= 0 && zoomIndex < images.length;
+  useEffect(() => {
+    // entry(폴더) 가 바뀌면 라이트박스를 닫는다.
+    setZoomIndex(null);
+  }, [entry]);
+  useEffect(() => {
+    if (!zoomOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setZoomIndex(null);
+      } else if (e.key === "ArrowLeft") {
+        setZoomIndex((i) => (i === null ? i : Math.max(0, i - 1)));
+      } else if (e.key === "ArrowRight") {
+        setZoomIndex((i) => (i === null ? i : Math.min(images.length - 1, i + 1)));
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [zoomOpen, images.length]);
+  return (
+    <div
+      className="mt-3 border border-border-subtle bg-surface-panel p-3"
+      style={{ borderRadius: 0 }}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <SectionLabel>{t("library.inspector.brief.section")}</SectionLabel>
+        {entry.createdAt ? (
+          <span className="text-2xs text-muted-foreground">
+            {formatDateTime(entry.createdAt, t("common.unknown"))}
+          </span>
+        ) : null}
+      </div>
+      {hasAny ? (
+        <div className="mt-3 space-y-3">
+          {hasText ? (
+            <div>
+              <div className="mb-1 text-2xs font-medium text-muted-foreground">
+                {t("library.inspector.brief.briefText")}
+              </div>
+              <div className="max-h-48 overflow-auto whitespace-pre-wrap break-words text-caption leading-relaxed text-foreground/90">
+                {entry.briefText}
+              </div>
+            </div>
+          ) : null}
+          {hasIdea ? (
+            <div>
+              <div className="mb-1 text-2xs font-medium text-muted-foreground">
+                {t("library.inspector.brief.ideaNote")}
+              </div>
+              <div className="max-h-32 overflow-auto whitespace-pre-wrap break-words text-caption leading-relaxed text-foreground/90">
+                {entry.ideaNote}
+              </div>
+            </div>
+          ) : null}
+          {hasPdf ? (
+            <div>
+              <div className="mb-1 text-2xs font-medium text-muted-foreground">
+                {t("library.inspector.brief.pdfText")}
+              </div>
+              <div className="max-h-32 overflow-auto whitespace-pre-wrap break-words text-2xs leading-relaxed text-muted-foreground">
+                {entry.pdfText}
+              </div>
+            </div>
+          ) : null}
+          {images.length > 0 ? (
+            <div>
+              <div className="mb-1.5 text-2xs font-medium text-muted-foreground">
+                {t("library.inspector.brief.images", { count: images.length })}
+              </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {images.map((img, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => setZoomIndex(i)}
+                    title={t("library.inspector.brief.zoomHint")}
+                    className="group relative block aspect-square w-full overflow-hidden border border-border-subtle transition-colors hover:border-primary/60"
+                    style={{ borderRadius: 0 }}
+                  >
+                    <img
+                      src={`data:${img.mediaType};base64,${img.base64}`}
+                      alt=""
+                      loading="lazy"
+                      className="h-full w-full object-cover transition-transform group-hover:scale-[1.03]"
+                    />
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <div className="mt-3 text-2xs leading-snug text-muted-foreground">
+          {t("library.inspector.brief.empty")}
+        </div>
+      )}
+      {onCreateProject ? (
+        <Button
+          type="button"
+          onClick={onCreateProject}
+          className="mt-3 h-8 w-full gap-2 text-meta"
+          style={{ borderRadius: 0 }}
+        >
+          <FileText className="h-3.5 w-3.5" />
+          {t("briefMatch.createProject")}
+        </Button>
+      ) : null}
+
+      {zoomOpen
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[120] flex items-center justify-center bg-black/85"
+              onClick={() => setZoomIndex(null)}
+              role="dialog"
+              aria-modal="true"
+            >
+              <button
+                type="button"
+                onClick={() => setZoomIndex(null)}
+                className="absolute right-4 top-4 p-2 text-white/80 transition-colors hover:text-white"
+                aria-label={t("common.close")}
+              >
+                <X className="h-6 w-6" />
+              </button>
+              {zoomIndex! > 0 ? (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setZoomIndex((i) => (i === null ? i : Math.max(0, i - 1)));
+                  }}
+                  className="absolute left-4 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
+                  aria-label={t("common.previous")}
+                >
+                  <ChevronLeft className="h-5 w-5" />
+                </button>
+              ) : null}
+              {zoomIndex! < images.length - 1 ? (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setZoomIndex((i) => (i === null ? i : Math.min(images.length - 1, i + 1)));
+                  }}
+                  className="absolute right-4 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
+                  aria-label={t("common.next")}
+                >
+                  <ChevronRight className="h-5 w-5" />
+                </button>
+              ) : null}
+              <img
+                src={`data:${images[zoomIndex!].mediaType};base64,${images[zoomIndex!].base64}`}
+                alt=""
+                onClick={(e) => e.stopPropagation()}
+                style={{ maxHeight: "90vh", maxWidth: "92vw", objectFit: "contain" }}
+              />
+              {images.length > 1 ? (
+                <div
+                  className="absolute bottom-5 left-1/2 -translate-x-1/2 rounded-full bg-black/60 px-3 py-1 text-xs tabular-nums text-white/90"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {zoomIndex! + 1} / {images.length}
+                </div>
+              ) : null}
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

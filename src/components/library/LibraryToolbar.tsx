@@ -3,6 +3,7 @@ import {
   ArrowDownAZ,
   ArrowUpAZ,
   Check,
+  ChevronRight,
   CircleDashed,
   Download,
   Drama,
@@ -54,7 +55,7 @@ import { formatTitleShortcuts } from "@/lib/shortcutLabel";
 import type { LibraryFilterRow, LibraryFolderRow } from "./LibrarySidebar";
 import { normalizeFolderPath, type ReferenceItem, type ReferenceKind } from "@/lib/referenceLibrary";
 import { BRIEF_MATCH_ROOT, isBriefMatchPath } from "@/lib/briefMatch";
-import { LINK_PLATFORM_LABEL, LINK_PLATFORM_ORDER, type LinkPlatform } from "@/lib/linkPlatform";
+import { ETC_LEAF, TYPE_CATEGORY_SPECS, typeLeafLabel, type TypeCategory } from "@/lib/typeFilter";
 import { aspectOf } from "./LibraryGrid";
 import { ColorPicker } from "./ColorPicker";
 import { MoodFilterChip } from "./MoodFilterChip";
@@ -836,114 +837,177 @@ function SummaryGroup<T extends string>({
 
 /* ───────────────── Types hierarchy picker ─────────────────
  *
- * Types 필터의 특수 picker — 평면 MultiFilter 두 개 (ReferenceKind, LinkPlatform)
- * 를 한 popover 에서 계층적으로 렌더한다. 평범한 MultiPicker 가 단일 dimension
- * 만 다루기 때문에 별도 컴포넌트로 분리.
- *
- * 행 구성:
- *   - Image / WebP / GIF / Video → typesFilter (ReferenceKind)
- *   - URL (depth 0) → linkPlatformsFilter 의 "other" — 부모 토글은 "어떤
- *     플랫폼에도 매칭 안 되는 기타 URL" 만 필터 (사용자 명시). 이렇게 함으로써
- *     부모/자식 토글이 동일한 LinkPlatform 차원에서 OR 매칭되어 일관적이다.
- *   - YouTube / Pinterest / Instagram / TikTok / Behance (depth 1) →
- *     linkPlatformsFilter (LinkPlatform). */
+ * 단일 MultiFilter<string>(typeFilter.ts) 로 4개 카테고리(image/video/doc/url) +
+ * 각 카테고리의 하위 리프(포맷/플랫폼/기타)를 한 popover 에서 계층적으로 렌더한다.
+ * 카테고리 행은 chevron 클릭으로 하위 리프를 펼친다. */
 
 interface TypesHierarchyPickerProps {
-  typesFilter: MultiFilter<ReferenceKind>;
-  onTypesFilterChange: (next: MultiFilter<ReferenceKind>) => void;
-  typeCounts: ReadonlyMap<ReferenceKind, number>;
-  linkPlatformsFilter: MultiFilter<LinkPlatform>;
-  onLinkPlatformsFilterChange: (next: MultiFilter<LinkPlatform>) => void;
-  linkPlatformCounts: ReadonlyMap<LinkPlatform, number>;
+  typeFilter: MultiFilter<string>;
+  onTypeFilterChange: (next: MultiFilter<string>) => void;
+  /** 카테고리 id + 리프 id 별 카운트 (computeTypeCounts). */
+  typeCounts: ReadonlyMap<string, number>;
 }
 
+/* 계층형 Types picker — 4개 최상위 카테고리(이미지/영상/문서/URL) + 행 클릭(chevron)
+ * 으로 펼치는 하위 리프(포맷/플랫폼/기타).
+ *   · 카테고리 체크 = 그 종류 전체. 펼쳐서 리프 체크 = 그 리프만(카테고리 전체와 상호
+ *     배타 — 리프를 고르면 카테고리 전체 선택은 해제, 그 반대도).
+ *   · 좌클릭=include, 우클릭=exclude (ToggleRow 와 동일).
+ *   · 단일 MultiFilter<string> 로 표현(typeFilter.ts). */
 function TypesHierarchyPicker({
-  typesFilter,
-  onTypesFilterChange,
+  typeFilter,
+  onTypeFilterChange,
   typeCounts,
-  linkPlatformsFilter,
-  onLinkPlatformsFilterChange,
-  linkPlatformCounts,
 }: TypesHierarchyPickerProps) {
   const t = useT();
-  const kindRows: Array<{ id: ReferenceKind; label: string }> = [
-    { id: "image", label: t("library.types.image") },
-    { id: "webp", label: t("library.types.webp") },
-    { id: "gif", label: t("library.types.gif") },
-    { id: "video", label: t("library.types.video") },
-    /* Document — 모든 doc sub-type(PDF/PPT/XLS/TTF/ZIP/HTML…) 을 한 토글로
-       묶는다. Sub-type 단위 토글은 별도 dimension 으로 추후 추가될 수 있고
-       (DocSubtype MultiFilter), 그 때까지는 단일 행으로 충분히 의미 있는
-       필터링이 가능. URL 부모 행과 동일 시각 무게로 노출. */
-    { id: "doc", label: t("library.types.document") },
-  ];
+  const [expanded, setExpanded] = useState<Set<TypeCategory>>(() => new Set());
 
-  const stateOf = <T extends string | number>(
-    f: MultiFilter<T>,
-    id: T,
-  ): "include" | "exclude" | "none" =>
-    f.include.has(id) ? "include" : f.exclude.has(id) ? "exclude" : "none";
+  const stateOf = (id: string): "include" | "exclude" | "none" =>
+    typeFilter.include.has(id) ? "include" : typeFilter.exclude.has(id) ? "exclude" : "none";
 
-  const anyActive =
-    multiFilterActive(typesFilter) || multiFilterActive(linkPlatformsFilter);
+  const clearCategoryLeaves = (set: Set<string>, catId: string) => {
+    for (const id of [...set]) if (id.startsWith(`${catId}/`)) set.delete(id);
+  };
+  // 카테고리 전체 토글 — 선택 시 그 카테고리의 리프 선택은 비운다(상호 배타).
+  const toggleCategoryInclude = (catId: string) => {
+    const include = new Set(typeFilter.include);
+    const exclude = new Set(typeFilter.exclude);
+    if (include.has(catId)) include.delete(catId);
+    else {
+      include.add(catId);
+      exclude.delete(catId);
+      clearCategoryLeaves(include, catId);
+      clearCategoryLeaves(exclude, catId);
+    }
+    onTypeFilterChange({ include, exclude });
+  };
+  const toggleCategoryExclude = (catId: string) => {
+    const include = new Set(typeFilter.include);
+    const exclude = new Set(typeFilter.exclude);
+    if (exclude.has(catId)) exclude.delete(catId);
+    else {
+      exclude.add(catId);
+      include.delete(catId);
+      clearCategoryLeaves(include, catId);
+      clearCategoryLeaves(exclude, catId);
+    }
+    onTypeFilterChange({ include, exclude });
+  };
+  // 리프 토글 — 선택 시 그 카테고리 전체 선택(catId)은 해제(리프가 우선).
+  const toggleLeafInclude = (leafId: string) => {
+    const catId = leafId.split("/")[0];
+    const include = new Set(typeFilter.include);
+    const exclude = new Set(typeFilter.exclude);
+    if (include.has(leafId)) include.delete(leafId);
+    else {
+      include.add(leafId);
+      exclude.delete(leafId);
+      include.delete(catId);
+    }
+    onTypeFilterChange({ include, exclude });
+  };
+  const toggleLeafExclude = (leafId: string) => {
+    const catId = leafId.split("/")[0];
+    const include = new Set(typeFilter.include);
+    const exclude = new Set(typeFilter.exclude);
+    if (exclude.has(leafId)) exclude.delete(leafId);
+    else {
+      exclude.add(leafId);
+      include.delete(leafId);
+      exclude.delete(catId);
+    }
+    onTypeFilterChange({ include, exclude });
+  };
+
+  const leafLabel = (leafId: string) =>
+    leafId.endsWith(`/${ETC_LEAF}`) ? t("library.types.etc") : typeLeafLabel(leafId);
 
   return (
     <div className="flex flex-col">
       <div className="overflow-y-auto" style={{ maxHeight: 360 }}>
-        {/* 1차 ReferenceKind 행. */}
-        {kindRows.map((row) => (
-          <ToggleRow
-            key={row.id}
-            id={row.id}
-            label={row.label}
-            rightLabel={String(typeCounts.get(row.id) ?? 0)}
-            state={stateOf(typesFilter, row.id)}
-            onInclude={() => onTypesFilterChange(toggleInclude(typesFilter, row.id))}
-            onExclude={() => onTypesFilterChange(toggleExclude(typesFilter, row.id))}
-          />
-        ))}
-
-        {/* URL 부모 — linkPlatformsFilter 의 "other" 토글. 의미: "어떤 플랫폼에도
-            매칭 안 되는 일반 URL". 자식 행과 동일 차원이라 OR 매칭에 자연스럽게
-            합류한다. */}
-        <ToggleRow
-          id={"other" as LinkPlatform}
-          label={t("library.types.url")}
-          rightLabel={String(linkPlatformCounts.get("other") ?? 0)}
-          state={stateOf(linkPlatformsFilter, "other")}
-          onInclude={() =>
-            onLinkPlatformsFilterChange(toggleInclude(linkPlatformsFilter, "other"))
-          }
-          onExclude={() =>
-            onLinkPlatformsFilterChange(toggleExclude(linkPlatformsFilter, "other"))
-          }
-        />
-
-        {/* 플랫폼 자식 행 — LinkPlatform 차원의 토글. depth=1 들여쓰기. */}
-        {LINK_PLATFORM_ORDER.map((platform) => (
-          <ToggleRow
-            key={platform}
-            id={platform}
-            label={LINK_PLATFORM_LABEL[platform]}
-            rightLabel={String(linkPlatformCounts.get(platform) ?? 0)}
-            state={stateOf(linkPlatformsFilter, platform)}
-            onInclude={() =>
-              onLinkPlatformsFilterChange(toggleInclude(linkPlatformsFilter, platform))
-            }
-            onExclude={() =>
-              onLinkPlatformsFilterChange(toggleExclude(linkPlatformsFilter, platform))
-            }
-            indent={16}
-          />
-        ))}
+        {TYPE_CATEGORY_SPECS.map((spec) => {
+          const isOpen = expanded.has(spec.id);
+          const catState = stateOf(spec.id);
+          const hasLeafSel = spec.leaves.some(
+            (l) => typeFilter.include.has(l) || typeFilter.exclude.has(l),
+          );
+          return (
+            <div key={spec.id}>
+              <div
+                className={cn(
+                  "flex w-full items-center hover:bg-muted",
+                  catState !== "none" && "bg-muted/40",
+                )}
+              >
+                <button
+                  type="button"
+                  onClick={() => toggleCategoryInclude(spec.id)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    toggleCategoryExclude(spec.id);
+                  }}
+                  className={cn(
+                    "flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-xs",
+                    catState === "exclude" && "text-destructive line-through",
+                    catState === "include" && "text-foreground",
+                  )}
+                >
+                  <span className="flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center border border-border-subtle bg-background">
+                    {catState === "include" ? (
+                      <Check className="h-3 w-3 text-primary" />
+                    ) : catState === "exclude" ? (
+                      <Minus className="h-3 w-3 text-destructive" />
+                    ) : null}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{t(spec.labelKey)}</span>
+                  {/* 카테고리 전체는 아니지만 하위 리프가 선택돼 있으면 부분 선택 점 표시. */}
+                  {hasLeafSel && catState === "none" ? (
+                    <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-primary" />
+                  ) : null}
+                  <span className="font-mono text-2xs text-muted-foreground">
+                    {typeCounts.get(spec.id) ?? 0}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setExpanded((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(spec.id)) next.delete(spec.id);
+                      else next.add(spec.id);
+                      return next;
+                    })
+                  }
+                  className="flex h-7 w-7 flex-shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
+                  aria-label={t(isOpen ? "library.types.collapse" : "library.types.expand")}
+                >
+                  <ChevronRight
+                    className={cn("h-3.5 w-3.5 transition-transform", isOpen && "rotate-90")}
+                  />
+                </button>
+              </div>
+              {isOpen
+                ? spec.leaves.map((leafId) => (
+                    <ToggleRow
+                      key={leafId}
+                      id={leafId}
+                      label={leafLabel(leafId)}
+                      rightLabel={String(typeCounts.get(leafId) ?? 0)}
+                      state={stateOf(leafId)}
+                      onInclude={() => toggleLeafInclude(leafId)}
+                      onExclude={() => toggleLeafExclude(leafId)}
+                      indent={16}
+                    />
+                  ))
+                : null}
+            </div>
+          );
+        })}
       </div>
-      {anyActive ? (
+      {multiFilterActive(typeFilter) ? (
         <button
           type="button"
-          onClick={() => {
-            onTypesFilterChange(emptyMulti<ReferenceKind>());
-            onLinkPlatformsFilterChange(emptyMulti<LinkPlatform>());
-          }}
+          onClick={() => onTypeFilterChange(emptyMulti<string>())}
           className="border-t border-border-subtle px-2 py-1.5 text-left text-caption text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           {t("library.toolbar.clearThisFilter")}
@@ -1126,20 +1190,40 @@ function NotePicker({ value, onChange }: NotePickerProps) {
  *
  * active 상태에서도 칩의 text-primary 색에 영향받지 않도록 background
  * 와 mask 만 사용 — currentColor 의존 없음. */
-function ColorWheelIcon() {
+function ColorWheelIcon({ color }: { color?: string | null }) {
+  // 색이 선택되면 그 hex 로 그라데이션(짙음→옅음)을, 없으면 무채색을 그린다.
+  // stopOpacity 방식이라 임의 hex 에도 색 계산 없이 자연스러운 그라데이션이 난다.
+  const gradId = color ? "colorWheelTint" : "colorWheelGray";
   return (
-    <span
+    <svg
       aria-hidden
+      viewBox="0 0 16 16"
       className="inline-block h-3.5 w-3.5 flex-shrink-0"
-      style={{
-        background:
-          "conic-gradient(from 0deg, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000)",
-        WebkitMaskImage:
-          "radial-gradient(circle, transparent 28%, black 30%)",
-        maskImage: "radial-gradient(circle, transparent 28%, black 30%)",
-        borderRadius: "50%",
-      }}
-    />
+    >
+      <defs>
+        <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="1">
+          {color ? (
+            <>
+              <stop offset="0%" stopColor={color} stopOpacity={1} />
+              <stop offset="100%" stopColor={color} stopOpacity={0.35} />
+            </>
+          ) : (
+            <>
+              <stop offset="0%" stopColor="#ededed" />
+              <stop offset="100%" stopColor="#5a5a5a" />
+            </>
+          )}
+        </linearGradient>
+      </defs>
+      <circle
+        cx="8"
+        cy="8"
+        r="5.25"
+        fill="none"
+        stroke={`url(#${gradId})`}
+        strokeWidth="3.75"
+      />
+    </svg>
   );
 }
 
@@ -1164,14 +1248,12 @@ export interface LibraryToolbarProps {
    *  폴더를 벗어난 경우는 LibraryPage 의 useEffect 가 자동으로 grid 로 폴백). */
   activeFolderTag: string | null;
 
-  typesFilter: MultiFilter<ReferenceKind>;
-  onTypesFilterChange: (next: MultiFilter<ReferenceKind>) => void;
-  /* URL 계열 추가 필터 — Types picker 의 URL 자식 (YouTube/Pinterest/...) 이
-     이 차원을 토글한다. 부모 "URL" 행과는 독립적. */
-  linkPlatformsFilter: MultiFilter<LinkPlatform>;
-  onLinkPlatformsFilterChange: (next: MultiFilter<LinkPlatform>) => void;
-  /* 플랫폼별 항목 카운트 — LibraryPage 가 detectLinkPlatform 으로 집계해 전달. */
-  linkPlatformCounts: ReadonlyMap<LinkPlatform, number>;
+  /* 계층형 Types 필터 — 카테고리(image/video/doc/url) + 리프(포맷/플랫폼/기타)를
+     단일 MultiFilter<string> 로 표현(typeFilter.ts). */
+  typeFilter: MultiFilter<string>;
+  onTypeFilterChange: (next: MultiFilter<string>) => void;
+  /** 카테고리 id + 리프 id 별 항목 카운트 — LibraryPage 의 computeTypeCounts 결과. */
+  typeCounts: ReadonlyMap<string, number>;
   tagsFilter: MultiFilter<string>;
   onTagsFilterChange: (next: MultiFilter<string>) => void;
   /** Moods 칩 — `ai.mood_labels` 기반 multi-select. row.id 는 lowercase EN
@@ -1208,8 +1290,6 @@ export interface LibraryToolbarProps {
    *  점수 계산엔 영향 없음 — 단순 표시 잡음 제거용. */
   moodInventoryTokens?: ReadonlySet<string>;
 
-  /** 카운트 표시 전용 — 형태는 기존 LibraryPage 의 typeRows 와 동일. */
-  typeRows: Array<{ id: "all" | ReferenceKind; label: string; count: number }>;
   tagRows: LibraryFilterRow[];
   folderRows: LibraryFolderRow[];
 
@@ -1256,11 +1336,9 @@ export function LibraryToolbar({
   onToggleShowHidden,
   hiddenCount,
   activeFolderTag,
-  typesFilter,
-  onTypesFilterChange,
-  linkPlatformsFilter,
-  onLinkPlatformsFilterChange,
-  linkPlatformCounts,
+  typeFilter,
+  onTypeFilterChange,
+  typeCounts,
   tagsFilter,
   onTagsFilterChange,
   moodsFilter,
@@ -1279,7 +1357,6 @@ export function LibraryToolbar({
   moodFilter,
   onMoodFilterChange,
   moodInventoryTokens,
-  typeRows,
   tagRows,
   folderRows,
   koreanAliasIndex,
@@ -1301,15 +1378,6 @@ export function LibraryToolbar({
   classifyQueue,
 }: LibraryToolbarProps) {
   const t = useT();
-  // Types picker 의 각 행이 우측에 표시할 카운트 — typeRows 에서 ReferenceKind
-  // 별로 모은다. TypesHierarchyPicker 가 ReadonlyMap 으로 받아서 lookup.
-  const typeCountMap = useMemo(() => {
-    const m = new Map<ReferenceKind, number>();
-    for (const row of typeRows) {
-      if (row.id !== "all") m.set(row.id as ReferenceKind, row.count);
-    }
-    return m;
-  }, [typeRows]);
 
   // 폴더 태그(`folder:` 접두)는 Tags 칩에선 빼고 Folder 칩이 따로 다룬다.
   // row.source === "ai" 이면 sparkle 마커로 노출 — 사용자가 머지한 적은 없는
@@ -1392,10 +1460,11 @@ export function LibraryToolbar({
           spec={moodFilter}
           onChange={onMoodFilterChange}
           inventoryTokens={moodInventoryTokens}
+          matchedCount={filteredCount}
         />
         <FilterChipShell
           icon={Palette}
-          iconNode={<ColorWheelIcon />}
+          iconNode={<ColorWheelIcon color={colorFilter} />}
           label={t("library.filter.color")}
           count={colorFilter ? 1 : 0}
           active={!!colorFilter}
@@ -1403,7 +1472,6 @@ export function LibraryToolbar({
             <ColorPicker value={colorFilter} onChange={onColorFilterChange} />
           }
           contentWidth={232}
-          accentSwatch={colorFilter ?? undefined}
           onClear={() => onColorFilterChange(null)}
         />
         <FilterChipShell
@@ -1479,26 +1547,17 @@ export function LibraryToolbar({
         <FilterChipShell
           icon={FileType2}
           label={t("library.filter.types")}
-          count={multiFilterCount(typesFilter) + multiFilterCount(linkPlatformsFilter)}
-          active={multiFilterActive(typesFilter) || multiFilterActive(linkPlatformsFilter)}
+          count={multiFilterCount(typeFilter)}
+          active={multiFilterActive(typeFilter)}
           popoverContent={
             <TypesHierarchyPicker
-              typesFilter={typesFilter}
-              onTypesFilterChange={onTypesFilterChange}
-              typeCounts={typeCountMap}
-              linkPlatformsFilter={linkPlatformsFilter}
-              onLinkPlatformsFilterChange={onLinkPlatformsFilterChange}
-              linkPlatformCounts={linkPlatformCounts}
+              typeFilter={typeFilter}
+              onTypeFilterChange={onTypeFilterChange}
+              typeCounts={typeCounts}
             />
           }
           contentWidth={240}
-          /* Types 칩은 ReferenceKind 와 LinkPlatform 두 차원이 한 picker
-             안에 묶여 있으므로 한 번에 둘 다 비워야 "Types 필터 해제" 가
-             된다. */
-          onClear={() => {
-            onTypesFilterChange(emptyMulti<ReferenceKind>());
-            onLinkPlatformsFilterChange(emptyMulti<LinkPlatform>());
-          }}
+          onClear={() => onTypeFilterChange(emptyMulti<string>())}
         />
         <FilterChipShell
           icon={MessageSquare}

@@ -192,6 +192,32 @@ const CONTI_PENDING_SINGLE_KEY_PREFIX = "preflow_conti_pending_single:";
 const VERSION_TAB_FONT_FAMILY =
   '"SF Mono", "Cascadia Mono", "Cascadia Code", "Consolas", "Liberation Mono", "Pretendard Variable", "Pretendard", monospace';
 
+/** export 컨테이너가 쓰는 폰트 패밀리. 앱이 로드하는 실제 폰트 이름은
+ *  "Pretendard Variable"(CDN)인데, 과거 export 는 등록돼 있지 않은 `Pretendard`
+ *  만 지정해 항상 시스템 폰트로 폴백됐다. macOS(Apple SD Gothic Neo) 폴백에서
+ *  html2canvas 가 한글 advance width 를 잘못 측정해 글자가 겹쳐 깨지던 원인. */
+const EXPORT_FONT_FAMILY = '"Pretendard Variable", Pretendard, Inter, sans-serif';
+
+/** PDF/PNG/ZIP export 의 html2canvas 캡처 전에 호출 — export 에 쓰는 Pretendard
+ *  Variable weight 들을 명시적으로 로드하고 document.fonts.ready 를 기다린다.
+ *  CDN 비동기 로드라 캡처 시점에 폰트가 준비 안 돼 있으면(특히 macOS) 폴백
+ *  폰트로 렌더돼 한글이 깨진다. 캔버스 노트 렌더러(LibraryCanvas)가 이미 쓰는
+ *  것과 같은 안전장치를 export 경로에도 적용. best-effort — 실패해도 export 는 진행. */
+async function ensureExportFontsReady(): Promise<void> {
+  try {
+    if (typeof document === "undefined" || !document.fonts) return;
+    await Promise.all([
+      document.fonts.load('400 15px "Pretendard Variable"'),
+      document.fonts.load('500 15px "Pretendard Variable"'),
+      document.fonts.load('600 17px "Pretendard Variable"'),
+      document.fonts.load('700 17px "Pretendard Variable"'),
+    ]);
+    await document.fonts.ready;
+  } catch {
+    /* 폰트 로드 실패해도 export 자체는 막지 않는다 */
+  }
+}
+
 // 전체 생성 / 스타일 변형의 동시 실행 상한. 예전에는 상한 없이 전 씬을 한꺼번에
 // 병렬로 띄워, 응답들이 비슷한 시점에 돌아오며 (이미지 디코드 + 캔버스 크롭 +
 // PNG 인코딩 + 스토어/DB write-back) 메인스레드를 포화시켜 탭/워크스페이스 이동이
@@ -5274,6 +5300,9 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
         import("html2canvas"),
         import("jspdf"),
       ]);
+      // 캡처 전에 Pretendard 로드를 보장 — 폴백 폰트(특히 macOS Apple SD Gothic
+      // Neo)로 한글이 깨지는 회귀 방지.
+      await ensureExportFontsReady();
       const pdf = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
       const pageW = pdf.internal.pageSize.getWidth();
       const pageH = pdf.internal.pageSize.getHeight();
@@ -5307,7 +5336,7 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
           isFirstPage = false;
           const pageRows = rows.slice(pageStart, pageStart + rowsPerPage);
           const container = document.createElement("div");
-          container.style.cssText = `position:fixed; left:-9999px; top:0; z-index:-1; width:${renderW}px; background:#141414; padding:${padX}px; font-family:Pretendard,Inter,sans-serif; display:flex; flex-direction:column; gap:10px;`;
+          container.style.cssText = `position:fixed; left:-9999px; top:0; z-index:-1; width:${renderW}px; background:#141414; padding:${padX}px; font-family:${EXPORT_FONT_FAMILY}; display:flex; flex-direction:column; gap:10px;`;
           const header = document.createElement("div");
           header.style.cssText = "display:flex; align-items:baseline; gap:10px; margin-bottom:6px;";
           header.innerHTML = `<span style="font-size:22px; font-weight:600; color:#ffffff;">${escHtml(projectInfo.title || "Pre-Flow")}</span><span style="font-size:18px; font-weight:400; color:#f9423a;">${escHtml(label)}</span>`;
@@ -5482,6 +5511,8 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
     setIsExporting(true);
     try {
       const html2canvas = (await import("html2canvas")).default;
+      // 캡처 전에 Pretendard 로드를 보장 — 폴백 폰트로 한글이 깨지는 회귀 방지.
+      await ensureExportFontsReady();
       const allFiles: { name: string; blob: Blob; folder?: string }[] = [];
       const aspectMap: Record<string, string> = { vertical: "9/16", horizontal: "16/9", square: "1/1" };
       const aspect = aspectMap[videoFormat] ?? "9/16";
@@ -5515,7 +5546,7 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
           for (let pageStart = 0; pageStart < rows.length; pageStart += rowsPerPage) {
             const pageRows = rows.slice(pageStart, pageStart + rowsPerPage);
             const container = document.createElement("div");
-            container.style.cssText = `position:fixed; left:-9999px; top:0; z-index:-1; width:${renderW}px; background:#141414; padding:${padX}px; font-family:Pretendard,Inter,sans-serif; display:flex; flex-direction:column; gap:10px;`;
+            container.style.cssText = `position:fixed; left:-9999px; top:0; z-index:-1; width:${renderW}px; background:#141414; padding:${padX}px; font-family:${EXPORT_FONT_FAMILY}; display:flex; flex-direction:column; gap:10px;`;
             const header = document.createElement("div");
             header.style.cssText = "display:flex; align-items:baseline; gap:10px; margin-bottom:6px;";
             header.innerHTML = `<span style="font-size:22px; font-weight:600; color:#ffffff;">${escHtml(projectInfo.title || "Pre-Flow")}</span><span style="font-size:18px; font-weight:400; color:#f9423a;">${escHtml(label)}</span>`;
@@ -5667,7 +5698,7 @@ export const ContiTab = ({ projectId, videoFormat, isActive = true }: Props) => 
           const folderName = selectedVersions.length > 1 ? label : undefined;
           for (const scene of scenes) {
             const container = document.createElement("div");
-            container.style.cssText = `position:fixed; left:-9999px; top:0; z-index:-1; width:800px; background:#141414; font-family:Pretendard,Inter,sans-serif; display:flex; flex-direction:column;`;
+            container.style.cssText = `position:fixed; left:-9999px; top:0; z-index:-1; width:800px; background:#141414; font-family:${EXPORT_FONT_FAMILY}; display:flex; flex-direction:column;`;
             const imgWrap = document.createElement("div");
             imgWrap.style.cssText = `position:relative; width:100%; aspect-ratio:${aspect}; background:#2a2a2a; overflow:hidden;`;
             if (scene.conti_image_url) {

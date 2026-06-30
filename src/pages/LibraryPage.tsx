@@ -273,7 +273,7 @@ import {
   type UploadReferenceOptions,
 } from "@/lib/referenceLibrary";
 import { docSubtypeOf } from "@/lib/docPresentation";
-import { DEFAULT_IMAGE_SEARCH_ENGINE, type ImageSearchEngineId } from "@/lib/imageSearchEngines";
+import { DEFAULT_IMAGE_SEARCH_ENGINE, imageSearchEngineName, type ImageSearchEngineId } from "@/lib/imageSearchEngines";
 import { CONVERT_CANCELLED_FLAG, REFERENCE_UPLOAD_MAX_BYTES, VIDEO_CONVERT_TARGET_BYTES, VIDEO_CONVERT_THRESHOLD_BYTES } from "@shared/constants";
 import { MAX_DURATION_SEC } from "@/lib/videoFrames";
 import { probeVideoMeta, transcodeVideoFile, TranscodeCancelledError } from "@/lib/videoTranscode";
@@ -4723,7 +4723,8 @@ const LibraryPage = () => {
       }
       // 메인이 이미지를 Imgur 에 업로드한 뒤 선택 엔진의 by-URL 검색을 외부
       // 브라우저로 연다. 로컬 파일도 검색 가능. 업로드에 1~3초가 걸리므로 진행 토스트.
-      toast({ title: t("library.toast.searchPreparing") });
+      // 토스트는 실제 선택한 엔진명을 노출한다(Google Lens 고정 표기 버그 수정).
+      toast({ title: t("library.toast.searchPreparing", { engine: imageSearchEngineName(engineId) }) });
       void (async () => {
         try {
           await searchByImage(img, engineId);

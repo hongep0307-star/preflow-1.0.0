@@ -3700,7 +3700,7 @@ export const UI_COPY: Record<string, Record<UiLanguage, string>> = {
   "library.toast.refRenamed": { en: "Reference renamed", ko: "레퍼런스 이름 변경됨" },
   "library.toast.renameFailed": { en: "Rename failed", ko: "이름 변경 실패" },
   "library.toast.searchUnavailable": { en: "Search unavailable", ko: "검색 불가" },
-  "library.toast.searchPreparing": { en: "Preparing Google Lens search...", ko: "Google Lens 검색 준비 중..." },
+  "library.toast.searchPreparing": { en: "Preparing {engine} search...", ko: "{engine} 검색 준비 중..." },
   "library.toast.searchByImageNoImage": { en: "This item has no image to search.", ko: "이 자료에는 검색할 이미지가 없습니다." },
   "library.toast.searchByImageFailed": { en: "Image search failed. Please try again.", ko: "이미지 검색에 실패했습니다. 잠시 후 다시 시도하세요." },
   "library.toast.aiClassifyReady": { en: "AI classification ready", ko: "AI 분류 준비됨" },

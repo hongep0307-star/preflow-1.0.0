@@ -306,6 +306,9 @@ function FilterChipShell({
             className={cn(
               "h-8 gap-1.5 px-2 text-caption",
               active && "border-primary/60 bg-primary/15 text-primary",
+              // 활성 시 우상단 코너에 × 버튼이 떠 카운트 배지와 겹치므로,
+              // 오른쪽 패딩을 늘려 배지를 왼쪽으로 밀어 코너를 비워 둔다.
+              active && onClear && "pr-3.5",
             )}
             title={disabledTitle}
           >
@@ -362,7 +365,8 @@ function FilterChipShell({
              튀어 보였다. neutral-700 은 다크 토템 위에서 자연스럽게 가라
              앉으면서, 옅은 회색 X 와 살짝 어두운 ring 으로 칩 경계와
              구분되게. */
-          className="absolute -right-1.5 -top-1.5 z-10 inline-flex h-4 w-4 items-center justify-center rounded-full bg-neutral-700 text-neutral-200 ring-1 ring-neutral-900 transition-colors hover:bg-neutral-600 hover:text-white"
+          className="absolute -right-1.5 -top-1.5 z-10 inline-flex h-4 w-4 items-center justify-center rounded-none bg-neutral-700 text-neutral-200 ring-1 ring-neutral-900 transition-colors hover:bg-neutral-600 hover:text-white"
+          style={{ borderRadius: 0 }}
         >
           <X className="h-2.5 w-2.5" strokeWidth={3} />
         </button>

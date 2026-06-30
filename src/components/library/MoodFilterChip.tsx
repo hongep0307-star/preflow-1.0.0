@@ -395,6 +395,8 @@ export function MoodFilterChip({
                  브랜드 red 톤. 아이콘·라벨·카운트 배지까지 한 덩어리로 정렬
                  되도록 text-primary 적용. amber 강조는 의미 근거 없어 제거. */
               active && "border-primary/60 bg-primary/10 text-primary",
+              // 활성 시 우상단 × 버튼이 카운트 배지와 겹치지 않게 오른쪽 패딩 확장.
+              active && "pr-3.5",
             )}
             style={{ borderRadius: 0 }}
             title={active ? spec.rawQuery : t("library.mood.placeholder")}
@@ -665,7 +667,8 @@ export function MoodFilterChip({
             event.stopPropagation();
             handleClear();
           }}
-          className="absolute -right-1.5 -top-1.5 z-10 inline-flex h-4 w-4 items-center justify-center rounded-full bg-neutral-700 text-neutral-200 ring-1 ring-neutral-900 transition-colors hover:bg-neutral-600 hover:text-white"
+          className="absolute -right-1.5 -top-1.5 z-10 inline-flex h-4 w-4 items-center justify-center rounded-none bg-neutral-700 text-neutral-200 ring-1 ring-neutral-900 transition-colors hover:bg-neutral-600 hover:text-white"
+          style={{ borderRadius: 0 }}
         >
           <X className="h-2.5 w-2.5" strokeWidth={3} />
         </button>

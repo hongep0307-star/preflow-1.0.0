@@ -15,15 +15,23 @@ export interface ImageSearchEngineMeta {
   id: ImageSearchEngineId;
   /** uiCopy.ts 의 라벨 키 */
   labelKey: string;
+  /** 토스트 등에 쓰는 짧은 브랜드명(부가 설명 없는 순수 명칭). 고유명사라
+   *  i18n 대상이 아니다. */
+  name: string;
 }
 
 export const IMAGE_SEARCH_ENGINES: ImageSearchEngineMeta[] = [
-  { id: "google-lens", labelKey: "library.grid.ctx.searchByImage.googleLens" },
-  { id: "yandex", labelKey: "library.grid.ctx.searchByImage.yandex" },
-  { id: "tineye", labelKey: "library.grid.ctx.searchByImage.tineye" },
+  { id: "google-lens", labelKey: "library.grid.ctx.searchByImage.googleLens", name: "Google Lens" },
+  { id: "yandex", labelKey: "library.grid.ctx.searchByImage.yandex", name: "Yandex" },
+  { id: "tineye", labelKey: "library.grid.ctx.searchByImage.tineye", name: "TinEye" },
 ];
 
 export const DEFAULT_IMAGE_SEARCH_ENGINE: ImageSearchEngineId = "google-lens";
+
+/** 엔진 id → 짧은 브랜드명. 미지의 id 면 "Google Lens" 로 폴백. */
+export function imageSearchEngineName(id: ImageSearchEngineId): string {
+  return IMAGE_SEARCH_ENGINES.find((e) => e.id === id)?.name ?? "Google Lens";
+}
 
 export function isImageSearchEngineId(value: unknown): value is ImageSearchEngineId {
   return (

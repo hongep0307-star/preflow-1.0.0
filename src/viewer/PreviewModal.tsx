@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ExternalLink, FileText, Link2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { youtubeEmbedUrl } from "@/lib/youtube";
+import { vimeoEmbedUrl } from "@/lib/vimeo";
 import { useImagePanZoom } from "@/lib/useImagePanZoom";
 import { VideoPlayer } from "./VideoPlayer";
 import { GifPlayer, GifFallback } from "./GifPlayer";
@@ -162,6 +163,7 @@ function MediaBranch({
     return <YouTubeView item={item} />;
   }
   if (item.kind === "link") {
+    if (vimeoEmbedUrl(item.source_url)) return <VimeoView item={item} />;
     return <LinkView item={item} />;
   }
   if (item.kind === "doc") {
@@ -306,6 +308,29 @@ function YouTubeView({ item }: { item: ReferenceItem }) {
           className="absolute inset-0 h-full w-full"
           referrerPolicy="strict-origin-when-cross-origin"
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowFullScreen
+        />
+      </div>
+    </div>
+  );
+}
+
+/* ────────────── Vimeo ────────────── */
+
+function VimeoView({ item }: { item: ReferenceItem }) {
+  const embed = vimeoEmbedUrl(item.source_url);
+  if (!embed) {
+    return <LinkView item={item} />;
+  }
+  return (
+    <div className="flex h-full w-full items-center justify-center bg-black p-4">
+      <div className="relative h-full max-h-[90vh] w-full" style={{ aspectRatio: "16 / 9" }}>
+        <iframe
+          src={embed}
+          title={item.title}
+          className="absolute inset-0 h-full w-full"
+          referrerPolicy="strict-origin-when-cross-origin"
+          allow="autoplay; fullscreen; picture-in-picture"
           allowFullScreen
         />
       </div>

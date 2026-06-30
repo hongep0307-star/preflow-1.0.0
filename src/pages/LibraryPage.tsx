@@ -4073,12 +4073,32 @@ const LibraryPage = () => {
     const clamped = rating === null ? null : Math.max(0, Math.min(5, Math.round(rating)));
     const stored = clamped && clamped > 0 ? clamped : null;
     try {
-      const next = await updateReference(selected.id, { rating: stored });
+      // touch:false — 별점은 메타데이터 변경이므로 updated_at 을 보존해 썸네일
+      // 재로드(깜빡임/GIF 첫프레임 리셋)를 막는다.
+      const next = await updateReference(selected.id, { rating: stored }, { touch: false });
       replaceItem(next);
     } catch (err) {
       toast({ variant: "destructive", title: t("library.toast.ratingSaveFailed"), description: err instanceof Error ? err.message : String(err) });
     }
   }, [replaceItem, selected, toast, t]);
+
+  /* 숫자패드 0~5 단축키용 — 현재 선택(다중 포함)에 별점을 일괄 적용한다.
+     selectedItems(다중)이 있으면 그 전체, 없으면 단일 selected. rating=null
+     (0 입력)이면 별점 해제(디폴트로 복귀). */
+  const handleSetRatingForSelected = useCallback(async (rating: number | null) => {
+    const targets = selectedItems.length > 0 ? selectedItems : selected ? [selected] : [];
+    if (targets.length === 0) return;
+    const clamped = rating === null ? null : Math.max(0, Math.min(5, Math.round(rating)));
+    const stored = clamped && clamped > 0 ? clamped : null;
+    try {
+      // touch:false — updated_at 보존으로 썸네일 캐시버스터가 안 바뀌게 해
+      // 선택 카드(특히 GIF/animated-WebP)가 깜빡이거나 리셋되지 않게 한다.
+      const updated = await Promise.all(targets.map((it) => updateReference(it.id, { rating: stored }, { touch: false })));
+      for (const next of updated) replaceItem(next);
+    } catch (err) {
+      toast({ variant: "destructive", title: t("library.toast.ratingSaveFailed"), description: err instanceof Error ? err.message : String(err) });
+    }
+  }, [selectedItems, selected, replaceItem, toast, t]);
 
   const handleClearSelectedSourceUrl = useCallback(async () => {
     if (!selected) return;
@@ -5531,6 +5551,21 @@ const LibraryPage = () => {
           return;
         }
       }
+      // 숫자패드 0~5 — 선택한 자료(다중 포함)에 별점 즉시 적용. 0 은 별점 해제
+      // (디폴트로 복귀). event.code(Numpad0..Numpad5)로 보아 NumLock 상태나
+      // 상단 숫자열과 무관하게 *우측 숫자패드* 만 잡고, 수정자 키가 눌려 있으면
+      // 무시(다른 단축키와 충돌 방지).
+      if (
+        !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey
+        && /^Numpad[0-5]$/.test(event.code)
+      ) {
+        if (selectedItems.length > 0 || selected) {
+          event.preventDefault();
+          const n = Number(event.code.slice("Numpad".length));
+          void handleSetRatingForSelected(n === 0 ? null : n);
+          return;
+        }
+      }
       // 우클릭 메뉴 액션 단축키 — 알파벳 단독 대신 수정자 조합(Eagle 스타일).
       // 선택 항목이 있을 때만. 매핑 안 된 키는 아래 Enter/Delete/화살표 체인으로.
       if (selected) {
@@ -5731,7 +5766,7 @@ const LibraryPage = () => {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeTag, canvasAllowed, filteredItems, handleCopySelectionToClipboard, handleDeleteSelected, handleDuplicateReference, handleRenameReference, handleTogglePin, handleCreateVariation, handleAddToBrief, handleAddToAgent, handleAddToConti, handleSearchByImage, handleOpenDefault, handleShowInFolder, handleCopyFilePath, handleCopyTags, handlePasteTags, handleClassifyReference, handleRegenerateThumbnail, handleMergeDuplicates, handleOpenPromoteDialog, immersiveCanvas, previewMode, selected, selectedItems, toggleGridHiddenForSelection, tryRunLatestUndo, viewMode]);
+  }, [activeTag, canvasAllowed, filteredItems, handleCopySelectionToClipboard, handleDeleteSelected, handleDuplicateReference, handleRenameReference, handleTogglePin, handleCreateVariation, handleAddToBrief, handleAddToAgent, handleAddToConti, handleSearchByImage, handleOpenDefault, handleShowInFolder, handleCopyFilePath, handleCopyTags, handlePasteTags, handleClassifyReference, handleRegenerateThumbnail, handleMergeDuplicates, handleOpenPromoteDialog, handleSetRatingForSelected, immersiveCanvas, previewMode, selected, selectedItems, toggleGridHiddenForSelection, tryRunLatestUndo, viewMode]);
 
   /* timestamp 노트 추가 — 인자가 모두 비어 있으면 인스펙터의 timestampText
      state + 현재 video.currentTime 를 사용(인스펙터의 인라인 Add 행 동작).

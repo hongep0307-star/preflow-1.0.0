@@ -10,6 +10,7 @@ import type { ReferenceItem, ReferenceKind } from "./types";
 
 export type LinkPlatform =
   | "youtube"
+  | "vimeo"
   | "pinterest"
   | "instagram"
   | "tiktok"
@@ -18,6 +19,7 @@ export type LinkPlatform =
 
 const LINK_PLATFORM_LABEL: Record<LinkPlatform, string> = {
   youtube: "YouTube",
+  vimeo: "Vimeo",
   pinterest: "Pinterest",
   instagram: "Instagram",
   tiktok: "TikTok",
@@ -28,6 +30,7 @@ const LINK_PLATFORM_LABEL: Record<LinkPlatform, string> = {
 const HOST_PATTERNS: ReadonlyArray<{ platform: Exclude<LinkPlatform, "other">; regex: RegExp }> = [
   { platform: "youtube", regex: /^((www|m)\.)?(youtube\.com|youtube-nocookie\.com)$/ },
   { platform: "youtube", regex: /^youtu\.be$/ },
+  { platform: "vimeo", regex: /^(www\.|player\.)?vimeo\.com$/ },
   { platform: "pinterest", regex: /^([a-z0-9-]+\.)?pinterest\.([a-z]{2,3})(\.[a-z]{2})?$/ },
   { platform: "pinterest", regex: /^pin\.it$/ },
   { platform: "instagram", regex: /^(www\.)?instagram\.com$/ },

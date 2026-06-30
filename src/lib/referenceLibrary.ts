@@ -1028,10 +1028,22 @@ export async function createReference(input: CreateReferenceInput): Promise<Refe
   return created;
 }
 
-export async function updateReference(id: string, patch: Partial<CreateReferenceInput>): Promise<ReferenceItem> {
+export async function updateReference(
+  id: string,
+  patch: Partial<CreateReferenceInput>,
+  opts: { touch?: boolean } = {},
+): Promise<ReferenceItem> {
+  /* touch=false 는 *메타데이터 전용* 변경(별점 등)에서 updated_at 을 일부러
+     건드리지 않기 위한 옵션이다. withReferenceVersion 의 `?v=updated_at` 캐시
+     버스터가 updated_at 변화에 묶여 있어, 별점만 바꿔도 썸네일 URL 이 바뀌어
+     이미지가 새로 로드(=깜빡임)되고 GIF/animated-WebP 는 첫 프레임으로 리셋된다.
+     별점은 이미지 바이트와 무관하므로 updated_at 을 보존해 src 를 안정화한다.
+     (recent 정렬은 created_at, lastUsed 정렬은 last_used_at 을 쓰므로 영향 없음.) */
+  const { touch = true } = opts;
+  const fields = touch ? { ...patch, updated_at: new Date().toISOString() } : { ...patch };
   const { data, error } = await supabase
     .from("reference_items")
-    .update({ ...patch, updated_at: new Date().toISOString() })
+    .update(fields)
     .eq("id", id)
     .select()
     .single();

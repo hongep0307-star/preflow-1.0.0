@@ -14,6 +14,7 @@ import { docPresentationOfSubtype } from "./docPresentation";
 
 export type LinkPlatform =
   | "youtube"
+  | "vimeo"
   | "pinterest"
   | "instagram"
   | "tiktok"
@@ -23,6 +24,7 @@ export type LinkPlatform =
 /* 표시 라벨 — 공식 표기. 그리드/인스펙터/드로어/툴바 모두 이 맵을 사용. */
 export const LINK_PLATFORM_LABEL: Record<LinkPlatform, string> = {
   youtube: "YouTube",
+  vimeo: "Vimeo",
   pinterest: "Pinterest",
   instagram: "Instagram",
   tiktok: "TikTok",
@@ -35,6 +37,7 @@ export const LINK_PLATFORM_LABEL: Record<LinkPlatform, string> = {
    부모 URL 행이 직접 다루므로 자식 목록에 포함하지 않는다. */
 export const LINK_PLATFORM_ORDER: ReadonlyArray<Exclude<LinkPlatform, "other">> = [
   "youtube",
+  "vimeo",
   "pinterest",
   "instagram",
   "tiktok",
@@ -47,6 +50,8 @@ const HOST_PATTERNS: ReadonlyArray<{ platform: Exclude<LinkPlatform, "other">; r
   /* youtu.be 단축 도메인, youtube-nocookie 임베드 도메인까지 포함. */
   { platform: "youtube", regex: /^((www|m)\.)?(youtube\.com|youtube-nocookie\.com)$/ },
   { platform: "youtube", regex: /^youtu\.be$/ },
+  /* vimeo 는 watch 도메인(vimeo.com) 과 임베드 플레이어 도메인(player.vimeo.com). */
+  { platform: "vimeo", regex: /^(www\.|player\.)?vimeo\.com$/ },
   /* pinterest 는 국가별 TLD (.co.kr, .jp 등) 와 단축 도메인 pin.it 둘 다 받음. */
   { platform: "pinterest", regex: /^([a-z0-9-]+\.)?pinterest\.([a-z]{2,3})(\.[a-z]{2})?$/ },
   { platform: "pinterest", regex: /^pin\.it$/ },

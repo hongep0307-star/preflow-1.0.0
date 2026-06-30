@@ -1430,24 +1430,31 @@ app.on("web-contents-created", (_event, contents) => {
  *  도메인 화이트리스트로 제한 — youtube 도메인 트래픽에만 적용. 다른 외부
  *  도메인 / 우리 앱 자체 요청에는 영향 없음. 화이트리스트가 짧으므로 보안
  *  영향도 제한적이고, 이 세션은 사용자 인증 흐름이 일어나지 않는다. */
-function configureDefaultSessionForYoutubeEmbed(): void {
-  // 응답 헤더(frame-block / CORP 등) 제거는 *영상 CDN(googlevideo) 포함* 전체에
-  // 적용해야 한다 — 안 그러면 cross-origin 영상 응답이 CORP 로 차단될 수 있다.
+function configureDefaultSessionForVideoEmbeds(): void {
+  // 응답 헤더(frame-block / CORP 등) 제거는 *영상 CDN(googlevideo / vimeocdn /
+  // akamaized) 포함* 전체에 적용해야 한다 — 안 그러면 cross-origin 영상 응답이
+  // CORP 로 차단될 수 있다. (Vimeo 세그먼트는 vimeocdn / akamaized 에서 온다.)
   const filter = {
     urls: [
       "https://*.youtube.com/*",
       "https://*.youtube-nocookie.com/*",
       "https://*.ytimg.com/*",
       "https://*.googlevideo.com/*",
+      "https://player.vimeo.com/*",
+      "https://*.vimeocdn.com/*",
+      "https://*.akamaized.net/*",
     ],
   };
-  // 요청 Referer/Origin spoof 는 *임베드 호스트에만* 적용한다 — googlevideo 는
-  // 의도적으로 제외한다. (아래 onBeforeSendHeaders 주석 참조: 재생 불가 fix)
+  // 요청 Referer/Origin spoof 는 *임베드 호스트에만* 적용한다 — 영상 segment CDN
+  // (googlevideo / vimeocdn / akamaized) 은 의도적으로 제외한다(hot-link 토큰
+  // 보존). Vimeo 는 임베드 문서/플레이어 JS 가 player.vimeo.com 에서 로드되므로
+  // 그 호스트만 spoof 한다. (아래 onBeforeSendHeaders 주석 참조: 재생 불가 fix)
   const embedReferrerFilter = {
     urls: [
       "https://*.youtube.com/*",
       "https://*.youtube-nocookie.com/*",
       "https://*.ytimg.com/*",
+      "https://player.vimeo.com/*",
     ],
   };
   session.defaultSession.webRequest.onHeadersReceived(filter, (details, callback) => {
@@ -1496,7 +1503,7 @@ function configureDefaultSessionForYoutubeEmbed(): void {
 
 app.whenReady().then(async () => {
   configureWebviewSession();
-  configureDefaultSessionForYoutubeEmbed();
+  configureDefaultSessionForVideoEmbeds();
   protocol.handle("local-file", async (request) => {
     // local-file://C:/path/to/file.png?t=12345 → 디스크에서 직접 읽어 Response로 반환
     try {

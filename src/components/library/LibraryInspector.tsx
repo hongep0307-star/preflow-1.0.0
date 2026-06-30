@@ -48,6 +48,7 @@ import { Input } from "@/components/ui/input";
 import { PLAYBACK_RATE_OPTIONS } from "@/components/library/LibraryPreviewPanel";
 import { cn } from "@/lib/utils";
 import { youtubeEmbedUrl } from "@/lib/youtube";
+import { vimeoEmbedUrl } from "@/lib/vimeo";
 import { useT, useUiLanguage } from "@/lib/uiLanguage";
 import {
   getAiOutputLanguageMode,
@@ -575,6 +576,16 @@ export function LibraryInspector({
                     className="aspect-video w-full"
                     referrerPolicy="strict-origin-when-cross-origin"
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowFullScreen
+                  />
+                ) : selected.kind === "link" && vimeoEmbedUrl(selected.source_url) ? (
+                  /* Vimeo 링크 — 재생 전용 player.vimeo.com 임베드. */
+                  <iframe
+                    src={vimeoEmbedUrl(selected.source_url) ?? undefined}
+                    title={selected.title}
+                    className="aspect-video w-full"
+                    referrerPolicy="strict-origin-when-cross-origin"
+                    allow="autoplay; fullscreen; picture-in-picture"
                     allowFullScreen
                   />
                 ) : selected.kind === "link" ? (
@@ -2106,7 +2117,9 @@ function RatingStars({ value, onChange }: RatingStarsProps) {
             }}
             className={cn(
               "transition-colors",
-              filled ? "text-primary" : "text-muted-foreground/40 hover:text-muted-foreground",
+              /* 별점은 즐겨찾기(primary/빨강)와 구분되도록 툴바와 동일한 노란색
+                 (amber)을 쓴다 — 둘 다 빨강이면 오인지 소지. */
+              filled ? "text-amber-500" : "text-muted-foreground/40 hover:text-muted-foreground",
             )}
             aria-label={t("library.inspector.ratingN", { n })}
             disabled={!onChange}

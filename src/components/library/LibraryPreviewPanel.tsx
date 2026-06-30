@@ -45,6 +45,7 @@ import type { GifExportOptions } from "@/lib/gifExportPreferences";
 import { useUiLanguage } from "@/lib/uiLanguage";
 import { useImagePanZoom } from "@/lib/useImagePanZoom";
 import { youtubeEmbedUrl } from "@/lib/youtube";
+import { vimeoEmbedUrl } from "@/lib/vimeo";
 
 /* 배속 select 옵션 — 큰 프리뷰와 인스펙터의 배속 select 가 동일 목록을
    공유하도록 export. Eagle/Premiere 류와 비슷하게 0.25x~8x 범위. select
@@ -1139,6 +1140,20 @@ export function LibraryPreviewPanel({
                  더 일관됨. */
               referrerPolicy="strict-origin-when-cross-origin"
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+            />
+          ) : item.kind === "link" && vimeoEmbedUrl(item.source_url) ? (
+            /* Vimeo URL 자료 — watch 페이지(vimeo.com/123)는 동의/로그인 가드로
+               재생 버튼이 안 뜨는 경우가 많아, YouTube 와 동일하게 재생 전용
+               player.vimeo.com 임베드를 <iframe> 으로 띄운다. 소유자가 임베드를
+               막아둔 영상이면 iframe 안에서 에러가 뜨므로, 그 경우엔 사용자가
+               우클릭 "Open in browser" 로 폴백할 수 있다. */
+            <iframe
+              src={vimeoEmbedUrl(item.source_url) ?? undefined}
+              title={item.title}
+              className="absolute inset-0 h-full w-full"
+              referrerPolicy="strict-origin-when-cross-origin"
+              allow="autoplay; fullscreen; picture-in-picture"
               allowFullScreen
             />
           ) : item.kind === "link" ? (

@@ -37,7 +37,13 @@ import { ProjectExportDialog } from "@/components/ProjectExportDialog";
 import { ProjectImportDialog } from "@/components/ProjectImportDialog";
 import { previewProjectPackFromPath } from "@/lib/preflowProjClient";
 import type { ProjPackPreview } from "@/lib/preflowProj";
-import { activateWorkspace, getCachedActiveId } from "@/lib/workspaceClient";
+import { activateWorkspace, ensureWorkspacesLoaded, getCachedActive, getCachedActiveId } from "@/lib/workspaceClient";
+import {
+  clearPendingPackPath,
+  packKindFromPath,
+  readPendingPackPath,
+  subscribePendingPack,
+} from "@/lib/packOpen";
 import { prefetchLibraryPage } from "@/lib/pagePrefetch";
 import { recordProjects, reconcileWorkspaceProjects } from "@/lib/recentProjectsCache";
 import { createProjectFromPending } from "@/lib/briefMatch";
@@ -1400,6 +1406,33 @@ const DashboardPage = () => {
       });
     }
   };
+
+  /* 팩 파일(.preflowproj) 더블클릭 임포트 — 활성 워크스페이스가 프로젝트일 때만
+     소비한다. 종류 전환은 App 의 PackOpenRouter 가 담당하고, 프로젝트가 활성이
+     된 시점에 pending 을 집어 미리보기 → ProjectImportDialog(확인/import)로 연다. */
+  useEffect(() => {
+    const consume = async () => {
+      const pending = readPendingPackPath();
+      if (!pending || packKindFromPath(pending) !== "project") return;
+      await ensureWorkspacesLoaded();
+      if (getCachedActive()?.kind !== "project") return;
+      clearPendingPackPath();
+      try {
+        const preview = await previewProjectPackFromPath(pending);
+        setImportDialog({ open: true, initialPreview: preview });
+      } catch (err) {
+        toast({
+          variant: "destructive",
+          title: t("projPack.import.cannotRead"),
+          description: err instanceof Error ? err.message : String(err),
+        });
+      }
+    };
+    void consume();
+    return subscribePendingPack(() => {
+      void consume();
+    });
+  }, [toast, t]);
 
   function isProjPackFile(name: string): boolean {
     return /\.preflowproj$/i.test(name);

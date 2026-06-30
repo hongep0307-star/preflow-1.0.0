@@ -15,6 +15,7 @@ import {
 } from "@shared/constants";
 import type {
   ListWorkspacesResponse,
+  WorkspaceBootLockConflict,
   WorkspaceCounts,
   WorkspaceKind,
   WorkspaceLastActive,
@@ -32,9 +33,11 @@ interface CacheShape {
   lastActive: WorkspaceLastActive;
   /** 활성 워크스페이스 폴더의 OneDrive 충돌 사본 파일명. 비어 있으면 정상. */
   conflictCopies: string[];
+  /** 부팅 시 활성 워크스페이스가 잠겨 default 로 폴백한 경우의 충돌 정보. */
+  bootLockConflict: WorkspaceBootLockConflict | null;
 }
 
-let cache: CacheShape = { workspaces: [], counts: [], active: null, lastActive: {}, conflictCopies: [] };
+let cache: CacheShape = { workspaces: [], counts: [], active: null, lastActive: {}, conflictCopies: [], bootLockConflict: null };
 const listeners = new Set<() => void>();
 
 function notify(): void {
@@ -75,6 +78,7 @@ export async function refreshWorkspaces(): Promise<ListWorkspacesResponse> {
     active: data.active,
     lastActive: data.lastActive ?? {},
     conflictCopies: data.conflictCopies ?? [],
+    bootLockConflict: data.bootLockConflict ?? null,
   };
   notify();
   return data;
@@ -101,6 +105,12 @@ export function getCachedActive(): WorkspaceMeta | null {
  *  정상. WorkspaceSwitcher 가 부팅 후 한 번 경고 토스트를 띄우는 데 사용. */
 export function getCachedConflictCopies(): string[] {
   return cache.conflictCopies;
+}
+
+/** 부팅 시 활성 워크스페이스 잠금 충돌(있으면). default 폴백으로 부팅된 상태에서
+ *  WorkspaceSwitcher 가 [Force open] 모달을 띄우는 데 사용. 없으면 null. */
+export function getCachedBootLockConflict(): WorkspaceBootLockConflict | null {
+  return cache.bootLockConflict;
 }
 
 export function getCachedCountsFor(id: string): WorkspaceCounts | null {

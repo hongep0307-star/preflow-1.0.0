@@ -1,6 +1,20 @@
-import { lazy, Suspense, useEffect } from 'react';
+import { lazy, Suspense, useEffect, useRef } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import {
+  activateWorkspace,
+  ensureWorkspacesLoaded,
+  getCachedActive,
+  getCachedLastActiveByKind,
+  getCachedWorkspaces,
+} from '@/lib/workspaceClient';
+import {
+  clearPendingPackPath,
+  packKindFromPath,
+  readPendingPackPath,
+  setPendingPackPath,
+  subscribePendingPack,
+} from '@/lib/packOpen';
 import { Toaster } from '@/components/ui/toaster';
 import { toast } from '@/hooks/use-toast';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -109,6 +123,100 @@ function WorkspaceConvertCancelNotice() {
   return null;
 }
 
+/* 팩 파일(.preflowlib/.preflowproj) 더블클릭 → 활성 워크스페이스 임포트 라우팅.
+ *
+ * main 으로부터 팩 경로를 받아(콜드 스타트 pull + 웜 스타트 push), 팩 종류와
+ * 활성 워크스페이스 종류가 다르면 그 종류의 최근 워크스페이스로 전환(A-2)한 뒤,
+ * 종류가 맞는 페이지(/library, /dashboard)로 이동한다. 실제 임포트 다이얼로그는
+ * 각 페이지가 pending 을 소비해 연다(LibraryPage / DashboardPage).
+ *
+ * HashRouter 안에서만 useNavigate 가 동작하므로 이 컴포넌트는 라우터 내부에 둔다. */
+function PackOpenRouter() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const navRef = useRef({ navigate, location });
+  navRef.current = { navigate, location };
+  const switchingRef = useRef(false);
+
+  useEffect(() => {
+    let disposed = false;
+
+    const process = async () => {
+      const pending = readPendingPackPath();
+      if (!pending) return;
+      const kind = packKindFromPath(pending);
+      if (!kind) {
+        clearPendingPackPath();
+        return;
+      }
+      await ensureWorkspacesLoaded();
+      if (disposed) return;
+      const active = getCachedActive();
+      if (!active) return;
+
+      if (active.kind !== kind) {
+        // 팩 종류 ≠ 활성 워크스페이스 종류 → 그 종류의 최근(없으면 기본) 워크스페이스로
+        // 전환. 전환은 reload 를 일으키고, pending 은 localStorage 에 남아 reload
+        // 후 해당 페이지가 소비한다.
+        if (switchingRef.current) return;
+        const target =
+          getCachedLastActiveByKind(kind) ??
+          getCachedWorkspaces().find((w) => w.kind === kind && w.isDefault) ??
+          getCachedWorkspaces().find((w) => w.kind === kind) ??
+          null;
+        if (!target) {
+          // 그 종류의 워크스페이스가 하나도 없음 — 임포트할 대상이 없다.
+          clearPendingPackPath();
+          return;
+        }
+        switchingRef.current = true;
+        try {
+          const res = await activateWorkspace(
+            target.id,
+            false,
+            kind === "library" ? "/#/library" : "/#/dashboard",
+          );
+          // ok 면 reload 가 발생해 이 컴포넌트는 사라진다(이후는 reload 후 재개).
+          // 실패(잠금 등)면 pending 은 두고 스위처의 잠금 안내에 맡긴다.
+          if (!res.ok) switchingRef.current = false;
+        } catch {
+          switchingRef.current = false;
+        }
+        return;
+      }
+
+      // 종류 일치 → 해당 페이지로 이동(페이지가 pending 을 소비해 다이얼로그를 연다).
+      const targetPath = kind === "library" ? "/library" : "/dashboard";
+      if (navRef.current.location.pathname !== targetPath) {
+        navRef.current.navigate(targetPath);
+      }
+    };
+
+    // 콜드 스타트 pull → 이후 웜 스타트 push 구독 → pending 변경 구독.
+    void (async () => {
+      try {
+        const fromMain = await window.preflowWindow?.getPendingPackPath?.();
+        if (fromMain) setPendingPackPath(fromMain);
+      } catch {
+        /* main 미가용(웹 미리보기 등) — 무시 */
+      }
+      if (!disposed) void process();
+    })();
+    const unsubOpen = window.preflowWindow?.onOpenPack?.((p) => setPendingPackPath(p));
+    const unsubPending = subscribePendingPack(() => {
+      void process();
+    });
+
+    return () => {
+      disposed = true;
+      unsubOpen?.();
+      unsubPending();
+    };
+  }, []);
+
+  return null;
+}
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <UiLanguageProvider>
@@ -118,6 +226,7 @@ const App = () => (
         <AuroraBackground />
         <HashRouter>
           <SettingsModalProvider>
+          <PackOpenRouter />
           <div style={{ position: "relative", zIndex: 1 }}>
             <ErrorBoundary label="App">
               {/* lazy 페이지 chunk 가 fetch 되는 동안의 fallback.

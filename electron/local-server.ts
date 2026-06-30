@@ -7,6 +7,7 @@ import {
   createWorkspaceAt,
   detectConflictCopies,
   getActiveWorkspace,
+  getBootLockConflict,
   loadExistingWorkspace,
   WorkspaceLockedError,
 } from "./workspace";
@@ -724,6 +725,9 @@ function buildListWorkspacesResponse(): ListWorkspacesResponse {
     // 데이터 유실 위험을 경고한다. 비활성 워크스페이스까지 스캔하지는 않음
     // (활성 폴더만이 현재 손상 위험에 직접 노출된 대상).
     conflictCopies: active ? detectConflictCopies(active.path) : [],
+    // 부팅 시 활성 워크스페이스가 잠겨 default 로 폴백한 경우의 충돌 정보 —
+    // WorkspaceSwitcher 가 [Force open] 모달을 띄운다. 없으면 null.
+    bootLockConflict: getBootLockConflict(),
   };
 }
 

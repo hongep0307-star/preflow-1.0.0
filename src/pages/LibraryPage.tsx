@@ -28,7 +28,13 @@ import {
 import { BrandLogo } from "@/components/common/BrandLogo";
 import { TopbarToastCarveOut } from "@/components/common/TopbarToastCarveOut";
 import { useActiveWorkspaceName } from "@/lib/workspaceLabel";
-import { activateWorkspace, getCachedActiveId } from "@/lib/workspaceClient";
+import { activateWorkspace, ensureWorkspacesLoaded, getCachedActive, getCachedActiveId } from "@/lib/workspaceClient";
+import {
+  clearPendingPackPath,
+  packKindFromPath,
+  readPendingPackPath,
+  subscribePendingPack,
+} from "@/lib/packOpen";
 import { WindowControls } from "@/components/common/WindowControls";
 import { useT, useUiLanguage } from "@/lib/uiLanguage";
 import {
@@ -2121,6 +2127,36 @@ const LibraryPage = () => {
     }
   }, [toast, t]);
 
+  /* 팩 파일(.preflowlib) 더블클릭 임포트 — 활성 워크스페이스가 라이브러리일 때만
+     소비한다. 워크스페이스 종류 전환은 App 의 PackOpenRouter 가 담당하고, 전환이
+     끝나 라이브러리가 활성이 된 시점에 이 effect 가 pending 을 집어 미리보기 →
+     PackImportDialog(확인/import) 흐름으로 연결한다. */
+  useEffect(() => {
+    const consume = async () => {
+      const pending = readPendingPackPath();
+      if (!pending || packKindFromPath(pending) !== "library") return;
+      await ensureWorkspacesLoaded();
+      if (getCachedActive()?.kind !== "library") return;
+      clearPendingPackPath();
+      try {
+        const preview = await previewPackFromPath(pending);
+        setInitialPackPreview(preview);
+        setImportPackOpen(true);
+      } catch (err) {
+        const name = pending.split(/[\\/]/).pop() ?? pending;
+        toast({
+          variant: "destructive",
+          title: t("library.toast.packPreviewFailed", { name }),
+          description: err instanceof Error ? err.message : String(err),
+        });
+      }
+    };
+    void consume();
+    return subscribePendingPack(() => {
+      void consume();
+    });
+  }, [toast, t]);
+
   /**
    * Electron 네이티브 다이얼로그 / 폴더 드래그-드랍에서 받은 절대경로
    * 목록을 브라우저 File 객체로 변환. webSecurity:false 인 메인 윈도에서
@@ -4082,7 +4118,7 @@ const LibraryPage = () => {
     }
   }, [replaceItem, selected, toast, t]);
 
-  /* 숫자패드 0~5 단축키용 — 현재 선택(다중 포함)에 별점을 일괄 적용한다.
+  /* 숫자키 0~5 단축키용 — 현재 선택(다중 포함)에 별점을 일괄 적용한다.
      selectedItems(다중)이 있으면 그 전체, 없으면 단일 selected. rating=null
      (0 입력)이면 별점 해제(디폴트로 복귀). */
   const handleSetRatingForSelected = useCallback(async (rating: number | null) => {
@@ -5551,17 +5587,19 @@ const LibraryPage = () => {
           return;
         }
       }
-      // 숫자패드 0~5 — 선택한 자료(다중 포함)에 별점 즉시 적용. 0 은 별점 해제
-      // (디폴트로 복귀). event.code(Numpad0..Numpad5)로 보아 NumLock 상태나
-      // 상단 숫자열과 무관하게 *우측 숫자패드* 만 잡고, 수정자 키가 눌려 있으면
-      // 무시(다른 단축키와 충돌 방지).
+      // 숫자키 0~5 — 선택한 자료(다중 포함)에 별점 즉시 적용. 0 은 별점 해제
+      // (디폴트로 복귀). 우측 숫자패드(Numpad0~5) 와 상단 숫자열(Digit0~5) 둘 다
+      // 허용 — 맥북처럼 숫자패드가 없는 키보드도 상단 숫자키로 매길 수 있다.
+      // event.code 는 레이아웃 독립(물리 키 기준)이라 한/영·각국 배열에서도 안전.
+      // 수정자 키가 눌려 있으면 무시(Ctrl+1/2/3 뷰 전환 등과 충돌 방지).
+      const ratingKey = /^(?:Numpad|Digit)([0-5])$/.exec(event.code);
       if (
-        !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey
-        && /^Numpad[0-5]$/.test(event.code)
+        ratingKey
+        && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey
       ) {
         if (selectedItems.length > 0 || selected) {
           event.preventDefault();
-          const n = Number(event.code.slice("Numpad".length));
+          const n = Number(ratingKey[1]);
           void handleSetRatingForSelected(n === 0 ? null : n);
           return;
         }

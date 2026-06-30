@@ -90,6 +90,11 @@ declare global {
         | { ok: true; scratchRelPath: string; durationSec: number; width: number; height: number }
         | { ok: false; reason: string }
       >;
+      /** 팩 파일(.preflowlib/.preflowproj) 더블클릭으로 앱이 열렸을 때 대기 중인
+       *  팩 경로(콜드 스타트 pull). 없으면 null. */
+      getPendingPackPath?: () => Promise<string | null>;
+      /** 앱 실행 중 팩 파일 더블클릭으로 들어온 경로 push 구독. 반환값은 unsubscribe. */
+      onOpenPack?: (cb: (path: string) => void) => () => void;
     };
   }
 }

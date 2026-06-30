@@ -64,6 +64,20 @@ export interface ListWorkspacesResponse {
    *  비어 있으면 정상. 비어 있지 않으면 한쪽 PC 의 변경분이 갈라져 나갔을
    *  수 있어 UI 가 경고한다. */
   conflictCopies?: string[];
+  /** 부팅 시 원래 활성 워크스페이스가 다른 PC/프로세스 잠금에 걸려 열지 못해
+   *  default 워크스페이스로 폴백한 경우의 충돌 정보. null/미존재면 정상 부팅.
+   *  WorkspaceSwitcher 가 이 값을 보고 [Force open] 충돌 모달을 띄운다. */
+  bootLockConflict?: WorkspaceBootLockConflict | null;
+}
+
+/** 부팅 시 활성 워크스페이스 잠금 충돌 — default 로 폴백한 뒤 사용자에게 알릴
+ *  정보. 런타임 activate 의 `{ locked, lock }` 응답과 같은 모양을 공유해
+ *  WorkspaceSwitcher 의 잠금 모달을 그대로 재사용한다. */
+export interface WorkspaceBootLockConflict {
+  /** 부팅 시 잠겨 있어 열지 못한 원래 활성 워크스페이스 ID. */
+  targetId: string;
+  /** 그 워크스페이스를 점유 중인 잠금 정보. */
+  lock: WorkspaceLockInfo;
 }
 
 /** 다른 PC 가 같은 워크스페이스 폴더를 점유 중일 때 사용자에게 보여줄

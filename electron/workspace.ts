@@ -24,6 +24,7 @@ import os from "os";
 import {
   WORKSPACE_LOCK_FILENAME,
   WORKSPACE_META_FILENAME,
+  type WorkspaceBootLockConflict,
   type WorkspaceKind,
   type WorkspaceLockInfo,
   type WorkspaceMeta,
@@ -33,6 +34,7 @@ import {
   findWorkspace,
   getActiveId,
   getRegistry,
+  listWorkspaces,
   registerWorkspace,
   setActiveId,
 } from "./workspaceRegistry";
@@ -43,6 +45,15 @@ let activeId: string | null = null;
 let activePath: string = "";
 let heldLockPath: string | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+// 부팅 시 활성 워크스페이스가 잠겨 있어 default 로 폴백한 경우의 충돌 정보.
+// list 응답에 실려 WorkspaceSwitcher 가 [Force open] 모달을 띄우는 데 쓰인다.
+let bootLockConflict: WorkspaceBootLockConflict | null = null;
+
+/** 부팅 잠금 충돌 정보(있으면). default 폴백으로 정상 부팅된 상태에서 원래
+ *  활성 워크스페이스가 무엇이고 누가 점유 중인지 알려준다. */
+export function getBootLockConflict(): WorkspaceBootLockConflict | null {
+  return bootLockConflict;
+}
 
 // 락 보유 중 `renewedAt` 을 다시 찍는 주기. OneDrive 가 이 작은 파일을 자주
 // 동기화하므로 너무 짧으면 sync 채널을 시끄럽게 만들고, 너무 길면 인계 판단이
@@ -293,13 +304,40 @@ export async function initWorkspace(userDataPath: string): Promise<void> {
   // default 워크스페이스(=userData 자체) 는 락을 안 잡음 — userData 는
   // 항상 한 사용자의 한 PC 안에서만 쓰이고, 단일 인스턴스 lock 으로 이미
   // 보호되기 때문. custom 워크스페이스만 폴더 단위 락으로 보호.
+  //
+  // 잠금 충돌 시(다른 PC/OneDrive 점유) 던지지 않고 *같은 종류의 default
+  // 워크스페이스(로컬 userData, 잠금 없음)로 폴백* 해 앱이 정상 부팅되게 한다.
+  // 과거에는 여기서 throw → whenReady 콜백이 reject → 로컬서버/창 생성이 모두
+  // 건너뛰어져 "죽은 부팅"(검은 창)이 됐다. 충돌 정보는 bootLockConflict 에
+  // 보관해 UI 가 [Force open] 모달을 띄운다. registry.active 는 원래 대상
+  // 그대로 둬서(setActiveId 호출 안 함) 다음 부팅 재시도 / force 해제가
+  // 자연스럽게 원 워크스페이스로 향하게 한다.
+  let effective = ws;
   if (!ws.isDefault) {
-    acquireLock(ws.path);
+    try {
+      acquireLock(ws.path);
+    } catch (err) {
+      if (err instanceof WorkspaceLockedError) {
+        bootLockConflict = { targetId: ws.id, lock: err.lock };
+        const fallback =
+          listWorkspaces().find((w) => w.isDefault && w.kind === ws.kind) ??
+          listWorkspaces().find((w) => w.isDefault) ??
+          null;
+        if (!fallback) throw err; // default 가 전혀 없으면 폴백 불가 — 원 에러 전파
+        console.warn(
+          `[workspace] active workspace ${ws.id} is locked by ${err.lock.prettyLabel}; ` +
+            `falling back to default workspace ${fallback.id}`,
+        );
+        effective = fallback;
+      } else {
+        throw err;
+      }
+    }
   }
-  activeId = ws.id;
-  activePath = ws.path;
-  ensureWorkspaceFolderLayout(ws);
-  await openDatabaseAt(getDbFilePathFor(ws));
+  activeId = effective.id;
+  activePath = effective.path;
+  ensureWorkspaceFolderLayout(effective);
+  await openDatabaseAt(getDbFilePathFor(effective));
 }
 
 /** 활성 워크스페이스의 storage 베이스. paths.ts 가 이 값을 참조. */
@@ -387,6 +425,9 @@ export async function activateWorkspace(
   setActiveId(id);
   activeId = id;
   activePath = target.path;
+  // 사용자가 워크스페이스를 명시적으로 전환(또는 force-open) 했으면 부팅
+  // 잠금 충돌 상태는 더 이상 유효하지 않다(곧 reload 로 사라지지만 방어적 정리).
+  bootLockConflict = null;
   return target;
 }
 
@@ -457,4 +498,5 @@ export function __resetWorkspaceForTests(): void {
   activePath = "";
   heldLockPath = null;
   userDataDir = "";
+  bootLockConflict = null;
 }

@@ -174,6 +174,24 @@ const api = {
     | { ok: true; scratchRelPath: string; durationSec: number; width: number; height: number }
     | { ok: false; reason: string }
   > => ipcRenderer.invoke("preflow-video:extract-poster", args),
+  /**
+   * 팩 파일(.preflowlib / .preflowproj) 더블클릭으로 앱이 열렸을 때 대기 중인
+   * 팩 경로를 가져온다(콜드 스타트 pull). 없으면 null. 호출과 동시에 main 은
+   * 렌더러가 ready 임을 표시하므로, 이후 들어오는 팩은 onOpenPack 으로 push 된다.
+   */
+  getPendingPackPath: (): Promise<string | null> =>
+    ipcRenderer.invoke("preflow-pack:get-pending"),
+  /**
+   * 앱이 이미 실행 중일 때(웜 스타트) 팩 파일 더블클릭으로 들어온 경로를 받는다.
+   * 반환값은 unsubscribe 함수.
+   */
+  onOpenPack: (cb: (path: string) => void): (() => void) => {
+    const listener = (_e: unknown, path: string) => cb(path);
+    ipcRenderer.on("preflow-pack:open", listener);
+    return () => {
+      ipcRenderer.removeListener("preflow-pack:open", listener);
+    };
+  },
 };
 
 contextBridge.exposeInMainWorld("preflowWindow", api);

@@ -56,6 +56,7 @@ import {
   disconnectWorkspace,
   ensureWorkspacesLoaded,
   getCachedActive,
+  getCachedBootLockConflict,
   getCachedConflictCopies,
   getCachedCountsFor,
   getCachedLastActiveByKind,
@@ -87,6 +88,8 @@ interface Props {
 // 충돌 파일 목록을 시그니처로 저장해, 전환한 워크스페이스에 *새로운* 충돌이
 // 생긴 경우엔 다시 한 번 알린다.
 const CONFLICT_WARNING_KEY = "preflow:conflictWarningSig";
+// 부팅 잠금 충돌 모달을 세션당 1회만 자동으로 띄우기 위한 가드 키(targetId|acquiredAt).
+const BOOT_LOCK_SHOWN_KEY = "preflow:bootLockShownSig";
 
 function useWorkspacesCache() {
   const [, force] = useState(0);
@@ -581,6 +584,34 @@ export const WorkspaceSwitcher = ({ variant = "full" }: Props) => {
     check();
     return subscribeWorkspaces(check);
   }, [toast, t]);
+
+  // 부팅 시 활성 워크스페이스가 잠겨 default 로 폴백된 경우 — 런타임 전환과
+  // 동일한 [Force open] 잠금 모달을 세션당 1회 자동으로 띄운다. 사용자가
+  // 닫고 default 에서 계속 작업하거나, Force open 으로 원 워크스페이스를 인계
+  // 할 수 있다. 같은 충돌(targetId|acquiredAt)은 reload 후에도 다시 뜨지 않도록
+  // sessionStorage 로 가드한다.
+  useEffect(() => {
+    const check = () => {
+      const conflict = getCachedBootLockConflict();
+      if (!conflict) return;
+      const sig = `${conflict.targetId}|${conflict.lock.acquiredAt}`;
+      let shown: string | null = null;
+      try {
+        shown = sessionStorage.getItem(BOOT_LOCK_SHOWN_KEY);
+      } catch {
+        /* sessionStorage 접근 불가 — 가드 없이 진행 */
+      }
+      if (shown === sig) return;
+      try {
+        sessionStorage.setItem(BOOT_LOCK_SHOWN_KEY, sig);
+      } catch {
+        /* 저장 실패해도 모달은 한 번 띄운다 */
+      }
+      setLockConflict({ lock: conflict.lock, targetId: conflict.targetId });
+    };
+    check();
+    return subscribeWorkspaces(check);
+  }, []);
 
   // 활성 컨텍스트와 현재 라우트 정합성 — /library 라우트면 library 컨텍스트로,
   // 그 외엔 project 컨텍스트로 본다. 이 값은 trigger 의 표시 kind 를 결정.

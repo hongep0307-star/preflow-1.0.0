@@ -112,9 +112,72 @@ if (!gotTheLock) {
   app.quit();
 }
 
+// 부팅/런타임의 미처리 promise rejection 을 콘솔에 남긴다. 과거 잠금 충돌이
+// whenReady 콜백을 reject 시켜 "조용한 죽은 부팅" 이 됐을 때 단서가 전혀 없었다.
+process.on("unhandledRejection", (reason) => {
+  console.error("[main] unhandledRejection:", reason);
+});
+
 let mainWindow: BrowserWindow | null = null;
 
 const DIST = path.join(__dirname, "../dist");
+
+// ── 팩 파일(.preflowlib / .preflowproj) 더블클릭 열기 ───────────────────────
+// OS 가 파일 연결로 앱을 띄우면서 넘겨주는 팩 경로를 받아 렌더러로 전달한다.
+//   · Windows: 첫 실행은 process.argv 끝에, 이미 실행 중이면 second-instance 의
+//     argv 에 경로가 들어온다.
+//   · macOS: open-file 이벤트(앱 ready 이전에 올 수 있어 모듈 로드 시 일찍 등록).
+// 렌더러가 아직 mount 전이면 push 해도 유실되므로, 렌더러가 부팅 시 한 번
+// pull(get-pending) 하고 이후엔 push(onOpenPack) 로 받는 이중 채널을 둔다.
+let pendingPackPath: string | null = null;
+let packRendererReady = false;
+
+function extractPackPathFromArgv(argv: string[]): string | null {
+  for (const arg of argv) {
+    if (typeof arg !== "string") continue;
+    const lower = arg.toLowerCase();
+    if (lower.endsWith(".preflowlib") || lower.endsWith(".preflowproj")) {
+      try {
+        if (fs.existsSync(arg)) return arg;
+      } catch {
+        /* 접근 불가 경로 — 무시 */
+      }
+    }
+  }
+  return null;
+}
+
+function deliverPendingPack(): void {
+  if (!pendingPackPath || !mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send("preflow-pack:open", pendingPackPath);
+  pendingPackPath = null;
+}
+
+function setPendingPack(p: string | null): void {
+  if (!p) return;
+  const lower = p.toLowerCase();
+  if (!lower.endsWith(".preflowlib") && !lower.endsWith(".preflowproj")) return;
+  pendingPackPath = p;
+  // 렌더러가 이미 살아 있으면(웜 스타트) 곧장 push, 아니면 pull 을 기다린다.
+  if (packRendererReady) deliverPendingPack();
+}
+
+// 콜드 스타트(Windows): 첫 실행 argv 에서 팩 경로 추출.
+pendingPackPath = extractPackPathFromArgv(process.argv);
+
+// macOS: Finder 더블클릭 / Dock 드롭. ready 이전에도 올 수 있어 모듈 로드 시 등록.
+app.on("open-file", (event, filePath) => {
+  event.preventDefault();
+  setPendingPack(filePath);
+});
+
+// 렌더러가 부팅 시 1회 호출 — 대기 중인 팩 경로를 가져가며 ready 로 표시한다.
+ipcMain.handle("preflow-pack:get-pending", () => {
+  packRendererReady = true;
+  const p = pendingPackPath;
+  pendingPackPath = null;
+  return p ?? null;
+});
 
 /** <webview> 게스트 전용 세션 파티션.
  *
@@ -1547,9 +1610,18 @@ app.whenReady().then(async () => {
   // 워크스페이스 레지스트리 부트스트랩 + 활성 워크스페이스의 DB open.
   // userData 기본 경로를 인자로 — registry 가 처음 만들어지면 default
   // 워크스페이스 두 개(Project / Library) 가 자동 등록된다.
-  await initWorkspace(app.getPath("userData"));
-  await startLocalServer();
-  createWindow();
+  //
+  // 부팅은 절대 조용히 죽지 않아야 한다. initWorkspace 는 잠금 충돌을 내부에서
+  // default 폴백으로 처리하므로 throw 하지 않지만, 그 외 예상 못 한 오류(예:
+  // 디스크 권한, DB 손상)가 나도 최소한 창은 띄워 사용자가 상황을 인지하고
+  // devtools/콘솔로 진단할 수 있게 try/catch 로 감싼다.
+  try {
+    await initWorkspace(app.getPath("userData"));
+    await startLocalServer();
+  } catch (err) {
+    console.error("[main] workspace/local-server boot failed:", err);
+  }
+  if (!mainWindow) createWindow();
 
   // 앱 시작 시 orphan sweep 을 한 번 돌려 DB 에서 더 이상 참조되지 않는
   // 파일(과거 누수된 에셋 이미지, inpaint 중간 파일 등) 을 청소한다.
@@ -1599,11 +1671,14 @@ app.whenReady().then(async () => {
 });
 
 // Single-instance lock 2 nd 이벤트 — 두 번째 실행 시 기존 창을 전면으로.
-app.on("second-instance", () => {
+// 팩 파일 더블클릭으로 두 번째 인스턴스가 뜬 경우, 그 argv 의 팩 경로를
+// 받아 현재 실행 중인 렌더러로 전달한다(웜 스타트 임포트 흐름).
+app.on("second-instance", (_event, argv) => {
   if (mainWindow) {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
   }
+  setPendingPack(extractPackPathFromArgv(argv));
 });
 
 app.on("window-all-closed", () => {

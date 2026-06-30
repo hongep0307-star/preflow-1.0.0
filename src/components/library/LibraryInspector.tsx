@@ -65,6 +65,7 @@ import {
 } from "@/lib/aiOutputLanguage";
 import type { LibraryFolderRow } from "@/components/library/LibrarySidebar";
 import type { BriefMatchEntry } from "@/lib/briefMatchStore";
+import type { BriefImage } from "@/lib/briefMatchImageStore";
 import { withReferenceVersion, type ReferenceItem } from "@/lib/referenceLibrary";
 import { decodeAnimatedAllFrames } from "@/lib/gifFrames";
 import { docExtensionTag, docHueClasses, docPresentationOf, docSubtypeOf } from "@/lib/docPresentation";
@@ -245,6 +246,9 @@ interface LibraryInspectorProps {
    *  브리프 내용(텍스트/아이디어/PDF 텍스트/이미지). 빈 선택 패널에서 읽기
    *  전용으로 노출한다. null 이면 일반 폴더라 섹션을 그리지 않는다. */
   briefMatchEntry?: BriefMatchEntry | null;
+  /** 브리프 첨부 이미지 — IndexedDB(briefMatchImageStore)에서 비동기 로드되어
+   *  부모가 내려준다. 텍스트류(briefMatchEntry)와 별개 저장소라 분리 전달. */
+  briefMatchImages?: BriefImage[];
   /** 위 브리프 내용을 "프로젝트로 생성" 하는 액션. 브리프 매치 폴더일 때만
    *  내려오며, 빈 선택 패널의 버튼에 연결된다. */
   onCreateProjectFromBrief?: () => void;
@@ -304,6 +308,7 @@ export function LibraryInspector({
   onClearSourceUrl,
   onJumpToTimestamp,
   briefMatchEntry,
+  briefMatchImages,
   onCreateProjectFromBrief,
 }: LibraryInspectorProps) {
   const t = useT();
@@ -1205,6 +1210,7 @@ export function LibraryInspector({
           {briefMatchEntry ? (
             <BriefMatchInspectorPanel
               entry={briefMatchEntry}
+              images={briefMatchImages ?? []}
               onCreateProject={onCreateProjectFromBrief}
             />
           ) : null}
@@ -1243,16 +1249,17 @@ function SectionLabel({ children, icon, className }: SectionLabelProps) {
    이미지를 읽기 전용으로 보여주고, "프로젝트로 생성" 액션을 제공한다. */
 function BriefMatchInspectorPanel({
   entry,
+  images,
   onCreateProject,
 }: {
   entry: BriefMatchEntry;
+  images: BriefImage[];
   onCreateProject?: () => void;
 }) {
   const t = useT();
   const hasText = !!(entry.briefText && entry.briefText.trim());
   const hasIdea = !!(entry.ideaNote && entry.ideaNote.trim());
   const hasPdf = !!(entry.pdfText && entry.pdfText.trim());
-  const images = entry.images ?? [];
   const hasAny = hasText || hasIdea || hasPdf || images.length > 0;
 
   /* 첨부 이미지 "크게 보기" — 클릭 시 인덱스를 잡아 포털 라이트박스를 띄운다.

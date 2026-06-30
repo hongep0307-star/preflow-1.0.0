@@ -24,6 +24,7 @@ import { listLibraryReferences, crossRefToReferenceItem } from "./crossWorkspace
 import { addUserFolderPath, getUserFolderPaths } from "./folderCache";
 import { setFolderMeta } from "./folderPreferences";
 import { getBriefMatchEntry, setBriefMatchEntry, listBriefMatchPaths } from "./briefMatchStore";
+import { setBriefMatchImages } from "./briefMatchImageStore";
 import { addImageAttachment, addPdfAttachment, addVideoAttachment, addYoutubeAttachment } from "./briefAttachments";
 import type { RefItem } from "./refItems";
 import type { PendingBriefMatchProject } from "./pendingBriefMatchProject";
@@ -306,14 +307,19 @@ export async function saveMatchesToLibraryFolder(
   setFolderMeta(BRIEF_MATCH_ROOT, { color: "red" });
   setFolderMeta(path, { color: "red" });
   // 브리프 내용 보관 — 이후 폴더에서 언제든 프로젝트로 재생성 가능하게.
-  // 브리프 캡쳐 이미지/PDF 텍스트도 함께 보관해 내보내기 시 brief 로 carry.
+  // 텍스트/아이디어/PDF 텍스트는 localStorage(작아서 안전), 이미지(base64)는
+  // IndexedDB 로 분리 저장해 localStorage quota 로 자동 폐기되지 않게 한다.
+  const imageCount = brief?.images?.length ?? 0;
   setBriefMatchEntry(path, {
     briefText: brief?.briefText ?? "",
     ideaNote: brief?.ideaNote,
     createdAt: new Date().toISOString(),
-    images: brief?.images && brief.images.length > 0 ? brief.images : undefined,
     pdfText: brief?.pdfText || undefined,
+    imageCount: imageCount > 0 ? imageCount : undefined,
   });
+  if (imageCount > 0) {
+    await setBriefMatchImages(path, brief!.images!);
+  }
   if (referenceIds.length > 0) {
     await addReferencesToFolder(referenceIds, path);
   }

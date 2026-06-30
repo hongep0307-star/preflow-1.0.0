@@ -3595,6 +3595,7 @@ export const UI_COPY: Record<string, Record<UiLanguage, string>> = {
   "library.page.resizeInspector": { en: "Resize inspector — double-click to reset", ko: "인스펙터 크기 조정 — 더블클릭으로 초기화" },
   "library.page.allReferences": { en: "All References", ko: "전체 레퍼런스" },
   "library.page.trash": { en: "Trash", ko: "휴지통" },
+  "library.page.foldersSelectedSuffix": { en: "{label} +{n} more", ko: "{label} 외 {n}개" },
   "library.page.nSelected": { en: "{n} selected", ko: "{n}개 선택됨" },
   "library.page.projectLinkedRefs": { en: "Project linked references", ko: "프로젝트 연결 레퍼런스" },
   "library.page.moveToFolder": { en: "Move to Folder", ko: "폴더로 이동" },

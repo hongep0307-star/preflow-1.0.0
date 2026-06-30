@@ -467,6 +467,8 @@ export function detectDocSubtype(mime: string | null | undefined, name?: string 
   if (m.startsWith("font/") || [".ttf", ".otf", ".woff", ".woff2"].includes(ext)) return "font";
   if (
     m === "application/zip"
+    // Windows/일부 브라우저는 .zip 을 application/x-zip-compressed 로 보고한다.
+    || m === "application/x-zip-compressed"
     || m === "application/x-7z-compressed"
     || m === "application/x-rar-compressed"
     || m === "application/vnd.rar"

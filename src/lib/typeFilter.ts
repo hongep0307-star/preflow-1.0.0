@@ -149,7 +149,10 @@ export function typeIdsOf(
     return { category: "video", leafId: `video/${leaf}` };
   }
   if (dk === "doc") {
-    const sub = detectDocSubtype(item.mime_type ?? null, item.title ?? null);
+    // 이름은 title → file_url 순으로 폴백한다. 업로드 시 title 에서 확장자가
+    // 제거되는 경우가 많아(예: .zip/.psd), file_url 의 확장자까지 봐야
+    // archive/doc sub-type 판정이 카드 배지(docPresentation)와 일치한다.
+    const sub = detectDocSubtype(item.mime_type ?? null, item.title || item.file_url || null);
     const leaf = DOC_SUBTYPES.includes(sub) ? sub : ETC_LEAF;
     return { category: "doc", leafId: `doc/${leaf}` };
   }

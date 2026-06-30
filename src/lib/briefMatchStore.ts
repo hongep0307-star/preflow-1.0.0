@@ -16,10 +16,13 @@ export interface BriefMatchEntry {
   briefText: string;
   ideaNote?: string;
   createdAt: string;
-  /** 브리프 캡쳐 이미지(플라이아웃에 드롭/붙여넣은 것). 프로젝트 내보내기 시
-   *  브리프 첨부로 carry + 분석 입력으로 사용. base64 라 quota 초과 가능 —
-   *  write 가 실패하면 텍스트/레퍼런스만 보관된다(graceful). */
+  /** @deprecated 레거시 — 과거엔 base64 이미지를 여기(localStorage)에 들고
+   *  있었으나 quota 자동 폐기 위험이 있어 IndexedDB(briefMatchImageStore)로
+   *  이전했다. 읽기 시 자동 마이그레이션되며 신규 write 에는 쓰지 않는다. */
   images?: { base64: string; mediaType: string }[];
+  /** 첨부 이미지 개수(실제 base64 는 IndexedDB 에 보관). base64 를 들지 않고도
+   *  "이미지만 있는 브리프" 를 동기적으로 판정(hasBriefContent)하기 위한 값. */
+  imageCount?: number;
   /** 브리프 PDF 에서 추출한 텍스트(있으면 raw_text/분석에 합류). */
   pdfText?: string;
 }
@@ -97,6 +100,7 @@ export function hasBriefContent(path: string): boolean {
   if (!entry) return false;
   return (
     !!(entry.briefText && entry.briefText.trim()) ||
+    (typeof entry.imageCount === "number" && entry.imageCount > 0) ||
     (Array.isArray(entry.images) && entry.images.length > 0) ||
     !!(entry.pdfText && entry.pdfText.trim())
   );
@@ -119,6 +123,23 @@ export function cascadeRenameBriefMatchEntries(oldPath: string, newPath: string)
     } else if (key.startsWith(`${o}/`)) {
       const suffix = key.slice(o.length); // 선행 "/" 포함
       map[`${n}${suffix}`] = map[key];
+      delete map[key];
+      changed = true;
+    }
+  }
+  if (changed) write(map);
+}
+
+/** 폴더 삭제용 — 해당 경로 + `path/` 접두 자손의 브리프 엔트리를 모두 제거한다.
+ *  (folderPrefs/manualOrder 의 cascade delete 패턴과 동일.) 폴더를 지우면
+ *  고아 엔트리가 localStorage 에 무한정 쌓이지 않도록 호출부에서 부른다. */
+export function cascadeDeleteBriefMatchEntries(path: string): void {
+  const p = normalize(path);
+  if (!p) return;
+  const map = read();
+  let changed = false;
+  for (const key of Object.keys(map)) {
+    if (key === p || key.startsWith(`${p}/`)) {
       delete map[key];
       changed = true;
     }

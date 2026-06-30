@@ -182,9 +182,18 @@ import {
   hasBriefContent,
   cascadeRenameBriefMatchEntries,
   cascadeDuplicateBriefMatchEntries,
+  cascadeDeleteBriefMatchEntries,
   BRIEF_MATCH_STORE_CHANGED_EVENT,
   type BriefMatchEntry,
 } from "@/lib/briefMatchStore";
+import {
+  getBriefMatchImages,
+  setBriefMatchImages,
+  cascadeRenameBriefMatchImages,
+  cascadeDuplicateBriefMatchImages,
+  cascadeDeleteBriefMatchImages,
+  type BriefImage,
+} from "@/lib/briefMatchImageStore";
 import { setPendingBriefMatchProject } from "@/lib/pendingBriefMatchProject";
 import {
   BriefMatchExportDialog,
@@ -3438,6 +3447,26 @@ const LibraryPage = () => {
     // briefStoreVersion 은 의도적 의존 — store 변경 시 재조회.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [briefMatchFolderPath, briefStoreVersion]);
+  /* 첨부 이미지는 IndexedDB(briefMatchImageStore)에 있어 비동기 로드한다.
+     폴더/스토어 변경 시 다시 읽고, 언마운트/경로 변경 race 는 cancelled 플래그로 차단. */
+  const [briefMatchImages, setBriefMatchImagesState] = useState<BriefImage[]>([]);
+  useEffect(() => {
+    if (!briefMatchFolderPath) {
+      setBriefMatchImagesState([]);
+      return;
+    }
+    let cancelled = false;
+    getBriefMatchImages(briefMatchFolderPath)
+      .then((imgs) => {
+        if (!cancelled) setBriefMatchImagesState(imgs);
+      })
+      .catch(() => {
+        if (!cancelled) setBriefMatchImagesState([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [briefMatchFolderPath, briefStoreVersion]);
 
   /* 다이얼로그 확인 → (reload 전, 라이브러리 활성 상태에서) 선택 레퍼런스를 사전 분석한
      뒤 pending 으로 stash 하고 대상 워크스페이스로 전환(reload)한다. 대상이 현재 활성
@@ -3448,7 +3477,8 @@ const LibraryPage = () => {
       if (!ctx) return;
       const libraryWsId = getCachedActiveId() ?? "";
       const entry = getBriefMatchEntry(ctx.path);
-      const briefImages = entry?.images ?? [];
+      // 이미지는 IndexedDB 에서 로드(레거시 localStorage 이미지도 자동 마이그레이션/폴백).
+      const briefImages = await getBriefMatchImages(ctx.path);
 
       // 분석은 다이얼로그에서 블로킹하지 않는다 — 생성 후 BriefTab 진입 시 그쪽
       // 로딩바로 자동 실행(autoAnalyze)된다. 여기서는 콘텐츠/레퍼런스만 stash.
@@ -3645,13 +3675,31 @@ const LibraryPage = () => {
     if (activeTag?.startsWith("folder:")) {
       const path = activeTag.replace(/^folder:/, "");
       const parts = path.split("/").filter(Boolean);
-      const segs: BreadcrumbSegment[] = parts.map((part, i) => {
+      let segs: BreadcrumbSegment[] = parts.map((part, i) => {
         const isLast = i === parts.length - 1;
         return {
           label: part,
           folderTag: isLast ? null : `folder:${parts.slice(0, i + 1).join("/")}`,
         };
       });
+      // 스마트 브리프 매치 폴더는 루트("브리프 매치") 세그먼트를 라벨에서 숨겨
+      // 일반 폴더처럼 "워크스페이스 / 폴더명" 으로 보이게 한다. 하위 세그먼트의
+      // folderTag 는 전체 경로를 그대로 들고 있어 클릭/점프는 정상 동작.
+      if (isBriefMatchPath(path) && segs.length > 1) {
+        segs = segs.slice(1);
+      }
+      // 다중 폴더 선택 시: 마지막(앵커) 세그먼트 라벨에 "외 N개" 를 붙여
+      // 여러 폴더가 함께 선택돼 있음을 한 줄로 표기(클릭 비활성). (A안)
+      if (selectedFolderTags.length > 1 && segs.length > 0) {
+        const lastIdx = segs.length - 1;
+        segs[lastIdx] = {
+          label: t("library.page.foldersSelectedSuffix", {
+            label: segs[lastIdx].label,
+            n: selectedFolderTags.length - 1,
+          }),
+          folderTag: null,
+        };
+      }
       // 4단계 이상이면 중간을 ellipsis 한 칸으로 collapse:
       // [first, …, parent, leaf]. 첫 세그먼트는 컨텍스트 유지를 위해 살림.
       if (segs.length > 3) {
@@ -3666,7 +3714,7 @@ const LibraryPage = () => {
       return [{ label: activeSavedFilter.name, folderTag: null }];
     }
     return [{ label: t(QUICK_FILTER_LABEL_KEYS[quickFilter]), folderTag: null }];
-  }, [activeTag, activeSavedFilter, quickFilter, t]);
+  }, [activeTag, activeSavedFilter, quickFilter, selectedFolderTags, t]);
   const returnProjectId = useMemo(() => getReturnProjectId(location.search), [location.search]);
   const focusRefId = useMemo(() => getFocusReferenceId(location.search), [location.search]);
 
@@ -6486,6 +6534,7 @@ const LibraryPage = () => {
       cascadeRenameCanvasLayout(oldPath, newPath);
       // 보관된 브리프 내용도 함께 이동 — 이름만 바꿔도 브리프가 날아가던 누락 보완.
       cascadeRenameBriefMatchEntries(oldPath, newPath);
+      void cascadeRenameBriefMatchImages(oldPath, newPath);
       setUserFolderPaths(getUserFolderPaths());
       setItems((current) => current.map((item) => result.items.find((updated) => updated.id === item.id) ?? item));
       // 선택 집합/앵커의 경로도 oldPath→newPath 로 치환(자손 포함).
@@ -6522,6 +6571,10 @@ const LibraryPage = () => {
       // Canvas 레이아웃도 같이 정리 — 폴더 삭제 후 localStorage 에 dangling
       // 으로 무한 누적되지 않게.
       cascadeDeleteCanvasLayout(folderPath);
+      // 보관된 브리프 내용(텍스트=localStorage, 이미지=IndexedDB)도 함께 정리해
+      // 폴더 삭제 후 고아 데이터가 남지 않게 한다.
+      cascadeDeleteBriefMatchEntries(folderPath);
+      void cascadeDeleteBriefMatchImages(folderPath);
       setUserFolderPaths(getUserFolderPaths());
       setItems((current) => current.map((item) => result.items.find((updated) => updated.id === item.id) ?? item));
       // 선택 집합에서 삭제된 폴더(및 자손)를 제거하고, 앵커가 영향받으면 남은 첫 폴더로.
@@ -6606,6 +6659,7 @@ const LibraryPage = () => {
         // 보관된 브리프 내용도 새 경로로 따라가게 — 브리프 매치 폴더를 옮겨도
         // 최초 등록한 브리프/이미지/PDF 가 보존된다(요구사항 3).
         cascadeRenameBriefMatchEntries(oldPath, newPath);
+        void cascadeRenameBriefMatchImages(oldPath, newPath);
         setUserFolderPaths(getUserFolderPaths());
         setItems((current) =>
           current.map((item) => result.items.find((updated) => updated.id === item.id) ?? item),
@@ -6687,6 +6741,7 @@ const LibraryPage = () => {
           renameFolderAiSettings(oldPath, newPath);
           cascadeRenameCanvasLayout(oldPath, newPath);
           cascadeRenameBriefMatchEntries(oldPath, newPath);
+          void cascadeRenameBriefMatchImages(oldPath, newPath);
           updatedItems.push(...result.items);
           moves.push({ oldTag: folderTag(oldPath), newTag: folderTag(newPath) });
         } catch (err) {
@@ -6766,13 +6821,18 @@ const LibraryPage = () => {
       const oldPath = normalizeFolderPath(target.sourceRow.tag);
       const leaf = oldPath.split("/").pop() ?? oldPath;
       const newPath = target.newParentPath ? normalizeFolderPath(`${target.newParentPath}/${leaf}`) : leaf;
-      // 이미지는 이미 플라이아웃에서 다운스케일됨. 원본 경로에 먼저 저장.
+      // 이미지는 이미 플라이아웃에서 다운스케일됨. 텍스트/PDF 는 localStorage,
+      // 이미지는 IndexedDB 에 원본 경로로 먼저 저장한 뒤, 이동 cascade 가
+      // 두 저장소 모두 새 경로로 옮긴다.
       setBriefMatchEntry(oldPath, {
         briefText: content.briefText,
-        images: content.images.length > 0 ? content.images : undefined,
         pdfText: content.pdfText,
         createdAt: new Date().toISOString(),
+        imageCount: content.images.length > 0 ? content.images.length : undefined,
       });
+      if (content.images.length > 0) {
+        await setBriefMatchImages(oldPath, content.images);
+      }
       await moveFolderTo(target.sourceRow, target.newParentPath);
       // 드래그로 추가한 라이브러리 레퍼런스를 새 폴더 멤버로 편입.
       const memberIds = Array.from(new Set([...briefAnchorIds, ...briefImageIds]));
@@ -6842,6 +6902,7 @@ const LibraryPage = () => {
         cascadeDuplicateCanvasLayout(oldPath, result.newPath);
         // 보관된 브리프 내용도 사본 트리로 복사(원본 유지).
         cascadeDuplicateBriefMatchEntries(oldPath, result.newPath);
+        void cascadeDuplicateBriefMatchImages(oldPath, result.newPath);
 
         // 새로 생성된 ref 들을 items 상태에 합쳐 그리드에 즉시 반영.
         setItems((current) => {
@@ -8189,6 +8250,7 @@ const LibraryPage = () => {
                 && !selected.deleted_at,
               )}
               briefMatchEntry={briefMatchEntry}
+              briefMatchImages={briefMatchImages}
               onCreateProjectFromBrief={
                 briefMatchFolderPath
                   ? () => handleCreateProjectFromBriefMatch(briefMatchFolderPath)
